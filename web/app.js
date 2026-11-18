@@ -1,4 +1,4 @@
-import { Mesh } from "./rtc.js";
+import { Mesh, randomId } from "./rtc.js";
 import { Background, BACKGROUNDS } from "./bg.js";
 import { Board, COLORS, SIZES, TOOLS } from "./board.js";
 import { Recorder } from "./rec.js";
@@ -106,6 +106,10 @@ window.addEventListener("popstate", route);
 
 $("start").onclick = () => {
   const code = newCode();
+  // who starts the call is its host (mute, remove, lock): a secret only this device keeps
+  try {
+    localStorage.setItem(`juntos.host.${code}`, randomId() + randomId());
+  } catch {}
   history.pushState({}, "", `/r/${code}`);
   route();
 };
@@ -279,8 +283,20 @@ function enterCall(name) {
   $("roomCode").textContent = S.code;
   buildBar();
   buildGrid();
-  S.mesh = new Mesh({ room: S.code, name, signalUrl: SIGNAL });
+  S.isHost = false;
+  S.locked = false;
+  S.waiting = false;
+  S.knocks = new Map();
+  paintKnocks();
+  S.mesh = new Mesh({
+    room: S.code,
+    name,
+    signalUrl: SIGNAL,
+    key: localStorage.getItem(`juntos.host.${S.code}`),
+    knock: !!localStorage.getItem(`juntos.out.${S.code}`),
+  });
   const mesh = S.mesh;
+  mesh.addEventListener("host", (e) => onHost(e.detail));
   mesh.setTracks(S.mic ? S.micTrack : S.micTrack, videoOut());
   if (S.micTrack) S.micTrack.enabled = S.mic;
   mesh.addEventListener("peer", (e) => renderPeer(e.detail.id));
@@ -335,7 +351,8 @@ function paintNet() {
   if (!navigator.onLine || S.net === "lost") {
     text = t("No connection. Reconnecting…");
     cls = "bad";
-  } else if (!S.joined) text = t("Connecting…");
+  } else if (S.waiting) text = t("Asking to join. Someone in the call will let you in.");
+  else if (!S.joined) text = t("Connecting…");
   else if (!S.mesh.peers.size) text = t("Waiting for others. Invite them with the link.");
   el.hidden = !text;
   el.textContent = text;
@@ -923,18 +940,143 @@ $("bgFile").onchange = async (e) => {
   renderBackgrounds();
 };
 
+// ---------- host controls: the person who started the call can lock it, let people in, mute, remove ----------
+function onHost(m) {
+  if (m.t === "room") {
+    S.isHost = m.host;
+    S.locked = m.locked;
+    S.waiting = false;
+    localStorage.removeItem(`juntos.out.${S.code}`);
+    paintNet();
+  } else if (m.t === "waiting") {
+    S.waiting = true;
+    paintNet();
+  } else if (m.t === "denied") {
+    leave(t("Nobody let you in this time."));
+  } else if (m.t === "removed") {
+    localStorage.setItem(`juntos.out.${S.code}`, "1");
+    leave(t("{name} removed you from the call", { name: m.by || t("Someone") }));
+  } else if (m.t === "knock") {
+    S.knocks.set(m.id, m.name);
+    paintKnocks();
+  } else if (m.t === "knock-gone") {
+    S.knocks.delete(m.id);
+    paintKnocks();
+  } else if (m.t === "lock") {
+    S.locked = m.on;
+    toast(m.on ? t("{name} locked the call. New people ask to join.", { name: m.by }) : t("{name} unlocked the call", { name: m.by }));
+  } else if (m.t === "mute") {
+    if (S.mic) setMic(false);
+    toast(t("{name} muted you", { name: m.by || t("Someone") }));
+  }
+  renderPeople();
+}
+
+// someone asks to join a locked call: a card for the host to let them in
+function paintKnocks() {
+  let box = $("knocks");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "knocks";
+    box.className = "knocks";
+    $("call").append(box);
+  }
+  box.innerHTML = "";
+  for (const [id, name] of S.knocks || []) {
+    const card = document.createElement("div");
+    card.className = "knock";
+    const who = document.createElement("span");
+    who.textContent = t("{name} wants to join", { name: name || t("Someone") });
+    const yes = document.createElement("button");
+    yes.className = "primary";
+    yes.textContent = t("Let in");
+    yes.onclick = () => S.mesh.host({ t: "admit", id });
+    const no = document.createElement("button");
+    no.className = "chip";
+    no.textContent = t("Deny");
+    no.onclick = () => S.mesh.host({ t: "deny", id });
+    card.append(who, yes, no);
+    box.append(card);
+  }
+  box.hidden = !box.children.length;
+}
+
+// a button that asks once before doing something hard to undo
+function sureButton(label, sure, act) {
+  const b = document.createElement("button");
+  b.className = "chip";
+  b.textContent = label;
+  b.onclick = () => {
+    if (!b.classList.contains("sure")) {
+      b.classList.add("sure");
+      b.textContent = sure;
+      setTimeout(() => {
+        b.classList.remove("sure");
+        b.textContent = label;
+      }, 3000);
+      return;
+    }
+    act();
+  };
+  return b;
+}
+
 // people
 function renderPeople() {
   const ul = $("peopleList");
   if (!ul || !S.mesh) return;
   ul.innerHTML = "";
-  const add = (name, extra) => {
+  if (S.isHost) {
     const li = document.createElement("li");
-    li.textContent = name + (extra ? ` ${extra}` : "");
+    li.className = "hostRow";
+    const muteAll = document.createElement("button");
+    muteAll.className = "chip";
+    muteAll.textContent = t("Mute everyone");
+    muteAll.onclick = () => {
+      S.mesh.host({ t: "mute", id: "*" });
+      toast(t("Everyone else is muted. They can unmute themselves."));
+    };
+    const lock = document.createElement("button");
+    lock.className = "chip" + (S.locked ? " on" : "");
+    lock.id = "lockBtn";
+    lock.textContent = S.locked ? t("Unlock the call") : t("Lock the call");
+    lock.title = t("When locked, new people ask to join and you let them in.");
+    lock.onclick = () => S.mesh.host({ t: "lock", on: !S.locked });
+    li.append(muteAll, lock);
+    ul.append(li);
+  }
+  if (S.locked) {
+    const li = document.createElement("li");
+    li.className = "lockNote";
+    li.textContent = t("🔒 Locked: new people ask to join.");
+    ul.append(li);
+  }
+  const add = (name, extra, id, host) => {
+    const li = document.createElement("li");
+    li.className = "person";
+    const nm = document.createElement("span");
+    nm.className = "pName";
+    nm.textContent = name + (extra ? ` ${extra}` : "");
+    li.append(nm);
+    if (host) {
+      const tag = document.createElement("span");
+      tag.className = "hostTag";
+      tag.textContent = t("Host");
+      li.append(tag);
+    }
+    if (id && S.isHost) {
+      const mute = document.createElement("button");
+      mute.className = "chip";
+      mute.textContent = t("Mute");
+      mute.onclick = () => S.mesh.host({ t: "mute", id });
+      li.append(mute);
+      if (!host) li.append(sureButton(t("Remove"), t("Remove?"), () => S.mesh.host({ t: "remove", id })));
+    }
     ul.append(li);
   };
-  add(`${localStorage.getItem("name")} ${t("(you)")}`, S.hands.has("me") ? "✋" : "");
-  for (const p of S.mesh.peers.values()) add(p.name || t("Joining…"), (S.hands.has(p.id) ? "✋ " : "") + (p.state === "connected" ? "" : t("· connecting")));
+  add(`${localStorage.getItem("name")} ${t("(you)")}`, S.hands.has("me") ? "✋" : "", null, S.isHost);
+  for (const p of S.mesh.peers.values())
+    add(p.name || t("Joining…"), (S.hands.has(p.id) ? "✋ " : "") + (p.state === "connected" ? "" : t("· connecting")), p.id, S.mesh.hosts.has(p.id));
   $("bPeople")?.querySelector("span") && ($("bPeople").querySelector("span").textContent = t("People ({n})", { n: S.mesh.peers.size + 1 }));
 }
 
@@ -1306,8 +1448,13 @@ $("invite").onclick = async () => {
   }
 };
 
-async function leave() {
+async function leave(why) {
+  // why: set when the call ended you (removed, not let in); a click passes an event
+  $("endedMsg").textContent = typeof why === "string" ? why : "";
+  $("endedTitle").textContent = typeof why === "string" ? t("You're out of the call") : t("You left the call");
   if (S.recorder) await toggleRec();
+  S.knocks?.clear();
+  paintKnocks();
   S.mesh?.leave();
   S.mesh = null;
   closePanel();

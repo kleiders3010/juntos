@@ -14,8 +14,11 @@ export function randomId() {
 }
 
 export class Mesh extends EventTarget {
-  constructor({ room, name, signalUrl }) {
+  constructor({ room, name, signalUrl, key, knock }) {
     super();
+    this.key = key || ""; // only the person who started the call has it: host controls
+    this.knock = !!knock; // sent out of this call before: ask to come back in
+    this.hosts = new Set(); // ids of the hosts among the others
     this.room = room;
     this.name = name;
     this.signalUrl = signalUrl;
@@ -36,7 +39,7 @@ export class Mesh extends EventTarget {
     ws.onopen = () => {
       this.tries = 0;
       this.emit("signal-open");
-      this.sendSignal({ t: "hello", id: this.id, name: this.name });
+      this.sendSignal({ t: "hello", id: this.id, name: this.name, ...(this.key ? { key: this.key, claim: true } : {}), ...(this.knock ? { knock: true } : {}) });
     };
     ws.onmessage = (e) => this.onSignal(JSON.parse(e.data));
     ws.onclose = () => {
@@ -60,10 +63,16 @@ export class Mesh extends EventTarget {
 
   onSignal(m) {
     if (m.t === "peers") {
+      for (const p of m.peers) if (p.host) this.hosts.add(p.id);
       for (const p of m.peers) if (!this.peers.has(p.id)) this.call(p.id, p.name);
       this.emit("joined", { count: m.peers.length });
     } else if (m.t === "join") {
+      if (m.host) this.hosts.add(m.id);
       this.emit("someone-joining", { id: m.id, name: m.name });
+    } else if (["room", "lock", "knock", "knock-gone", "waiting", "denied", "removed", "mute"].includes(m.t)) {
+      // host controls: who may come in, mute, remove (the server checks who is the host)
+      if (m.t === "denied" || m.t === "removed") this.closed = true;
+      this.emit("host", m);
     } else if (m.t === "leave") {
       this.drop(m.id);
     } else if (m.t === "name") {
@@ -276,6 +285,11 @@ export class Mesh extends EventTarget {
   sendTo(id, msg) {
     const p = this.peers.get(id);
     if (p && p.dc.readyState === "open") p.dc.send(JSON.stringify(msg));
+  }
+
+  // host commands: { t: "lock", on } / { t: "admit" | "deny" | "remove", id } / { t: "mute", id | "*" }
+  host(cmd) {
+    this.sendSignal(cmd);
   }
 
   leave() {

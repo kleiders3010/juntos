@@ -4,6 +4,13 @@
 
 const MAX_PEOPLE = 12; // a direct mesh beyond this asks too much of phones
 const MAX_MSG = 64 * 1024;
+const ROOM_KEEP = 31 * 24 * 3600 * 1000; // a room's host and lock are forgotten a month after its last use
+const HOST_CMDS = new Set(["lock", "admit", "deny", "remove", "mute"]);
+
+async function sha(text) {
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("juntos-host|" + text));
+  return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 export default {
   async fetch(req, env) {
@@ -55,16 +62,35 @@ export class Room {
     this.state = state;
   }
 
-  // Budget object only: drop the per-network counts of past days.
+  // Budget object: drop the per-network counts of past days. A room: forget its host and lock a
+  // month after it was last used.
   async alarm() {
+    if (await this.state.storage.get("seen")) {
+      if (this.peers(true).length) return this.state.storage.setAlarm(Date.now() + ROOM_KEEP);
+      return this.state.storage.deleteAll();
+    }
     const today = "ip:" + new Date().toISOString().slice(0, 10);
     const old = [...(await this.state.storage.list({ prefix: "ip:" })).keys()].filter((k) => !k.startsWith(today));
     if (old.length) await this.state.storage.delete(old.slice(0, 128));
     if (old.length > 128) await this.state.storage.setAlarm(Date.now() + 1000);
   }
 
-  peers() {
-    return this.state.getWebSockets().map((ws) => ({ ws, a: ws.deserializeAttachment() || {} })).filter((p) => p.a.id);
+  // people in the call (and, with waiting = true, also those asking to join)
+  peers(waiting) {
+    return this.state.getWebSockets().map((ws) => ({ ws, a: ws.deserializeAttachment() || {} })).filter((p) => p.a.id && (waiting || !p.a.wait));
+  }
+
+  hosts() {
+    return this.peers().filter((p) => p.a.host);
+  }
+
+  // let someone in: they get everyone already here, everyone hears about them
+  admit(ws, a) {
+    const others = this.peers().filter((p) => p.ws !== ws);
+    ws.serializeAttachment({ id: a.id, name: a.name, host: !!a.host });
+    this.send(ws, { t: "peers", peers: others.map((p) => ({ id: p.a.id, name: p.a.name, host: !!p.a.host })) });
+    this.send(ws, { t: "room", locked: !!this.locked, host: !!a.host });
+    for (const p of others) this.send(p.ws, { t: "join", id: a.id, name: a.name, host: !!a.host });
   }
 
   async fetch(req) {
@@ -106,15 +132,33 @@ export class Room {
       const id = String(msg.id || "").slice(0, 40);
       const name = String(msg.name || "").slice(0, 60);
       if (!/^[A-Za-z0-9_-]{6,40}$/.test(id)) return ws.close(1008, "bad id");
-      const others = this.peers();
-      if (others.length >= MAX_PEOPLE) {
+      if (this.peers().length >= MAX_PEOPLE) {
         this.send(ws, { t: "full", max: MAX_PEOPLE });
         return ws.close(1008, "full");
       }
-      ws.serializeAttachment({ id, name });
-      this.send(ws, { t: "peers", peers: others.map((p) => ({ id: p.a.id, name: p.a.name })) });
-      for (const p of others) this.send(p.ws, { t: "join", id, name });
-      return;
+      // The person who started the call holds a secret key (kept on their device); the room keeps
+      // only its hash. The first hello that carries a key and asks to claim an unclaimed room claims it.
+      const st = this.state.storage;
+      let hostHash = await st.get("host");
+      let host = false;
+      const key = typeof msg.key === "string" ? msg.key.slice(0, 80) : "";
+      if (key.length >= 16) {
+        const h = await sha(key);
+        if (!hostHash && msg.claim) await st.put("host", (hostHash = h));
+        host = h === hostHash;
+      }
+      if (this.locked === undefined) this.locked = !!(await st.get("locked"));
+      await st.put("seen", Date.now());
+      await st.setAlarm(Date.now() + ROOM_KEEP);
+      const hosts = this.hosts();
+      // locked (or sent out earlier): ask to join, a host decides. With no host here nobody could answer, so come in.
+      if (!host && (this.locked || msg.knock) && hosts.length) {
+        ws.serializeAttachment({ id, name, wait: true });
+        this.send(ws, { t: "waiting" });
+        for (const p of hosts) this.send(p.ws, { t: "knock", id, name });
+        return;
+      }
+      return this.admit(ws, { id, name, host });
     }
     if (!me.id) return;
     if (msg.t === "signal" && typeof msg.to === "string") {
@@ -122,10 +166,38 @@ export class Room {
       if (target) this.send(target.ws, { t: "signal", from: me.id, data: msg.data });
       return;
     }
+    if (me.wait) return;
+    if (me.host && HOST_CMDS.has(msg.t)) return this.hostCmd(me, msg);
     if (msg.t === "name") {
       const name = String(msg.name || "").slice(0, 60);
       ws.serializeAttachment({ ...me, name });
       for (const p of this.peers()) if (p.ws !== ws) this.send(p.ws, { t: "name", id: me.id, name });
+    }
+  }
+
+  async hostCmd(me, msg) {
+    const all = this.peers(true);
+    const target = all.find((p) => p.a.id === msg.id);
+    if (msg.t === "lock") {
+      this.locked = !!msg.on;
+      await this.state.storage.put("locked", this.locked);
+      for (const p of this.peers()) this.send(p.ws, { t: "lock", on: this.locked, by: me.name });
+      if (!this.locked) for (const p of all) if (p.a.wait) this.admit(p.ws, p.a);
+    } else if (msg.t === "admit" && target?.a.wait) {
+      this.admit(target.ws, target.a);
+      for (const p of this.hosts()) this.send(p.ws, { t: "knock-gone", id: target.a.id });
+    } else if (msg.t === "deny" && target?.a.wait) {
+      this.send(target.ws, { t: "denied" });
+      target.ws.serializeAttachment({});
+      target.ws.close(4001, "denied");
+      for (const p of this.hosts()) this.send(p.ws, { t: "knock-gone", id: target.a.id });
+    } else if (msg.t === "remove" && target && !target.a.wait && !target.a.host) {
+      this.send(target.ws, { t: "removed", by: me.name });
+      target.ws.serializeAttachment({});
+      target.ws.close(4002, "removed");
+      for (const p of this.peers()) this.send(p.ws, { t: "leave", id: target.a.id });
+    } else if (msg.t === "mute") {
+      for (const p of this.peers()) if (p.a.id !== me.id && (msg.id === "*" || p.a.id === msg.id)) this.send(p.ws, { t: "mute", by: me.name });
     }
   }
 
@@ -140,6 +212,13 @@ export class Room {
   left(ws) {
     const me = ws.deserializeAttachment() || {};
     if (!me.id) return;
+    ws.serializeAttachment({});
+    if (me.wait) {
+      for (const p of this.hosts()) this.send(p.ws, { t: "knock-gone", id: me.id });
+      return;
+    }
     for (const p of this.peers()) if (p.ws !== ws) this.send(p.ws, { t: "leave", id: me.id });
+    // the last host left: nobody can answer anyone asking to join, so they come in
+    if (me.host && !this.hosts().length) for (const p of this.peers(true)) if (p.a.wait) this.admit(p.ws, p.a);
   }
 }
