@@ -3,6 +3,9 @@
 Video calls in the browser, on phones (iPhone and Android) and computers. No account, no time limit, nothing to
 install, open source.
 
+**Use it:** https://meet.jurisgames.com · **Android app:** [Juntos.apk](https://github.com/kleiders3010/juntos/releases/latest)
+(Google Play listing in review) · [Privacy](https://meet.jurisgames.com/privacy)
+
 - **Start a call** and send the link. People type their name and join.
 - Background blur or a picture behind you (runs on your own device).
 - Chat, a shared whiteboard, screen sharing, raise a hand, reactions.
