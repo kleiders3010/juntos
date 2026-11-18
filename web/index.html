@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f2937">
+<title>Juntos · free video calls</title>
+<meta name="description" content="Free video calls for everyone. No account, no time limit, nothing to install. Open source.">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/img/icon-192.png">
+<link rel="apple-touch-icon" href="/img/icon-192.png">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<!-- Start / join -->
+<section id="home" class="page">
+  <div class="home">
+    <img src="/img/icon-192.png" alt="" class="logo">
+    <h1>Juntos</h1>
+    <p class="lead">Free video calls for everyone.<br>No account, no time limit.</p>
+    <button id="start" class="primary big">Start a call</button>
+    <form id="joinForm" class="join">
+      <input id="joinCode" placeholder="Enter a code or link" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="secondary">Join</button>
+    </form>
+    <p class="small">Open source · <a href="https://github.com/kleiders3010/juntos">github.com/kleiders3010/juntos</a></p>
+  </div>
+</section>
+
+<!-- Check camera and mic before going in -->
+<section id="lobby" class="page" hidden>
+  <div class="lobby">
+    <div class="preview">
+      <video id="previewVideo" autoplay playsinline muted></video>
+      <div id="previewOff" class="off" hidden>Camera is off</div>
+      <div class="previewBar">
+        <button id="pMic" class="round" title="Microphone"></button>
+        <button id="pCam" class="round" title="Camera"></button>
+        <button id="pBg" class="round" title="Background"></button>
+      </div>
+    </div>
+    <div class="lobbySide">
+      <h2>Ready to join?</h2>
+      <input id="name" placeholder="Your name" maxlength="60" autocomplete="name">
+      <button id="enter" class="primary big">Join now</button>
+      <p id="lobbyMsg" class="small"></p>
+    </div>
+  </div>
+</section>
+
+<!-- The call -->
+<section id="call" class="page" hidden>
+  <header class="top">
+    <span id="roomCode" class="code"></span>
+    <button id="invite" class="chip">Invite people</button>
+    <span id="recDot" class="rec" hidden>● Recording</span>
+  </header>
+  <main class="stage">
+    <div id="grid" class="grid"></div>
+    <aside id="panel" class="panel" hidden>
+      <div class="panelHead"><h3 id="panelTitle"></h3><button id="panelClose" class="icon" title="Close">✕</button></div>
+      <div id="chatPane" class="pane">
+        <div id="chatLog" class="chatLog"></div>
+        <form id="chatForm" class="chatForm"><input id="chatText" placeholder="Send a message" autocomplete="off"><button class="primary">Send</button></form>
+      </div>
+      <div id="boardPane" class="pane">
+        <div class="boardTools" id="boardTools"></div>
+        <canvas id="boardCanvas" class="boardCanvas"></canvas>
+      </div>
+      <div id="bgPane" class="pane"><div id="bgChoices" class="bgChoices"></div></div>
+      <div id="peoplePane" class="pane"><ul id="peopleList" class="people"></ul></div>
+    </aside>
+  </main>
+  <nav class="bar" id="bar"></nav>
+  <div id="reactions" class="reactions" hidden></div>
+</section>
+
+<section id="ended" class="page" hidden>
+  <div class="home">
+    <h1>You left the call</h1>
+    <button id="rejoin" class="primary big">Rejoin</button>
+    <button id="homeBtn" class="secondary">Back to start</button>
+  </div>
+</section>
+
+<div id="toasts" class="toasts"></div>
+<input id="bgFile" type="file" accept="image/*" hidden>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

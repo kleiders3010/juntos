@@ -1,0 +1,14 @@
+# Juntos signaling (Cloudflare Worker + one Durable Object per room). Free plan: SQLite-backed Durable Objects.
+name = "juntos-signal"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = false
+routes = [{ pattern = "signal.jurisgames.com", custom_domain = true }]
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
