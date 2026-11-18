@@ -27,6 +27,8 @@ export class Mesh extends EventTarget {
     this.audioTrack = null;
     this.videoTrack = null;
     this.closed = false;
+    // who gets my sound and picture (breakout rooms: only the people in my room); everyone by default
+    this.route = () => true;
   }
 
   emit(type, detail) {
@@ -200,8 +202,8 @@ export class Mesh extends EventTarget {
     p.offerer = true;
     p.audio = p.pc.addTransceiver("audio", { direction: "sendrecv" });
     p.video = p.pc.addTransceiver("video", { direction: "sendrecv" });
-    if (this.audioTrack) p.audio.sender.replaceTrack(this.audioTrack);
-    if (this.videoTrack) p.video.sender.replaceTrack(this.videoTrack);
+    if (this.audioTrack && this.route(id)) p.audio.sender.replaceTrack(this.audioTrack);
+    if (this.videoTrack && this.route(id)) p.video.sender.replaceTrack(this.videoTrack);
     this.tune(p);
   }
 
@@ -224,8 +226,8 @@ export class Mesh extends EventTarget {
         p.audio = ts.find((t) => t.receiver.track.kind === "audio");
         p.video = ts.find((t) => t.receiver.track.kind === "video");
         for (const t of ts) t.direction = "sendrecv";
-        if (p.audio && this.audioTrack) await p.audio.sender.replaceTrack(this.audioTrack);
-        if (p.video && this.videoTrack) await p.video.sender.replaceTrack(this.videoTrack);
+        if (p.audio && this.audioTrack && this.route(from)) await p.audio.sender.replaceTrack(this.audioTrack);
+        if (p.video && this.videoTrack && this.route(from)) await p.video.sender.replaceTrack(this.videoTrack);
         await p.pc.setLocalDescription();
         this.sendSignal({ t: "signal", to: from, data: { sdp: p.pc.localDescription, name: this.name } });
         this.tune(p);
@@ -241,7 +243,8 @@ export class Mesh extends EventTarget {
 
   // Each extra person shares the same upload: lower the video bitrate as the call grows.
   tune(p) {
-    const n = Math.max(1, this.peers.size);
+    // only the people I send to count (in a breakout room, the room)
+    const n = Math.max(1, [...this.peers.keys()].filter((id) => this.route(id)).length);
     const kbps = n <= 2 ? 1500 : n <= 4 ? 800 : n <= 7 ? 450 : 250;
     const s = p.video && p.video.sender;
     if (!s || !s.getParameters) return;
@@ -267,9 +270,16 @@ export class Mesh extends EventTarget {
     this.audioTrack = audio || null;
     this.videoTrack = video || null;
     for (const p of this.peers.values()) {
-      if (p.audio) await p.audio.sender.replaceTrack(this.audioTrack).catch(() => {});
-      if (p.video) await p.video.sender.replaceTrack(this.videoTrack).catch(() => {});
+      const to = this.route(p.id);
+      if (p.audio) await p.audio.sender.replaceTrack(to ? this.audioTrack : null).catch(() => {});
+      if (p.video) await p.video.sender.replaceTrack(to ? this.videoTrack : null).catch(() => {});
     }
+    this.retune();
+  }
+
+  // the rooms changed: send my sound and picture again only to whom route() allows
+  reroute() {
+    return this.setTracks(this.audioTrack, this.videoTrack);
   }
 
   setName(name) {
@@ -280,6 +290,12 @@ export class Mesh extends EventTarget {
   broadcast(msg) {
     const s = JSON.stringify(msg);
     for (const p of this.peers.values()) if (p.dc.readyState === "open") p.dc.send(s);
+  }
+
+  // only to the people in my room (chat, captions, hands, reactions in a breakout room)
+  roomcast(msg) {
+    const s = JSON.stringify(msg);
+    for (const p of this.peers.values()) if (p.dc.readyState === "open" && this.route(p.id)) p.dc.send(s);
   }
 
   sendTo(id, msg) {

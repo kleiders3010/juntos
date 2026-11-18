@@ -4,6 +4,7 @@ import { Board, COLORS, SIZES, TOOLS } from "./board.js";
 import { Recorder } from "./rec.js";
 import { t, translatePage } from "./i18n.js";
 import { Activities } from "./act.js";
+import { Breakout } from "./breakout.js";
 
 translatePage();
 const t2 = t; // the translator, where "t" is a tile
@@ -42,6 +43,7 @@ const ICON = {
   hand: "M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.08 0-2.1-.43-2.85-1.19L1 14.83s1.26-1.23 1.3-1.25c.22-.19.49-.29.79-.29.22 0 .42.06.6.16.04.01 4.31 2.46 4.31 2.46V4c0-.83.67-1.5 1.5-1.5S11 3.17 11 4v7h1V1.5c0-.83.67-1.5 1.5-1.5S15 .67 15 1.5V11h1V2.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5V11h1V5.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5z",
   undo: "M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z",
   poll: "M10 20h4V4h-4v16zm-6 0h4v-8H4v8zM16 9v11h4V9h-4z",
+  rooms: "M6 13c-2.2 0-4 1.8-4 4s1.8 4 4 4 4-1.8 4-4-1.8-4-4-4zm6-10C9.8 3 8 4.8 8 7s1.8 4 4 4 4-1.8 4-4-1.8-4-4-4zm6 10c-2.2 0-4 1.8-4 4s1.8 4 4 4 4-1.8 4-4-1.8-4-4-4z",
   layout: "M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z",
   cc: "M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z",
   pip: "M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z",
@@ -372,12 +374,16 @@ function enterCall(name) {
     // catch the newcomer up: board, chat, how I am
     mesh.sendTo(e.detail.id, { ...myState(), hand: S.hands.has("me") });
     if (S.board && S.board.items.length) mesh.sendTo(e.detail.id, S.board.snapshot());
-    if (S.chat.length) mesh.sendTo(e.detail.id, { k: "history", chat: S.chat.slice(-200) });
+    const mainChat = S.chat.filter((c) => !c.room); // a breakout room's chat stays in the room
+    if (mainChat.length) mesh.sendTo(e.detail.id, { k: "history", chat: mainChat.slice(-200) });
     if (S.recorder) mesh.sendTo(e.detail.id, { k: "rec", on: true });
     if (S.capsOn) mesh.sendTo(e.detail.id, { k: "capwant", on: true });
     if (S.act.any()) mesh.sendTo(e.detail.id, S.act.snapshotFor(e.detail.id));
+    S.br.greet(e.detail.id);
   });
   mesh.addEventListener("message", (e) => onMessage(e.detail.from, e.detail.msg));
+  S.br.reset();
+  mesh.route = (id) => S.br.same(id);
   mesh.connect();
   capReset();
   S.act.reset(S.code);
@@ -406,7 +412,11 @@ $("netState").onclick = () => $("invite").click();
 function onMessage(from, m) {
   const p = S.mesh.peers.get(from);
   const who = (p && p.name) || t("Someone");
-  if (m.k === "chat") {
+  // chat, hands, reactions and captions from someone in another breakout room aren't for me
+  if (["chat", "hand", "react", "cap"].includes(m.k) && !S.br.same(from)) return;
+  if (S.br.receive(from, m)) {
+    // breakout rooms
+  } else if (m.k === "chat") {
     addChat({ from, name: who, text: String(m.text).slice(0, 2000), at: Date.now() });
   } else if (m.k === "history") {
     for (const c of m.chat || []) if (!S.chat.some((x) => x.at === c.at && x.text === c.text)) S.chat.push(c);
@@ -488,7 +498,7 @@ function volFor(name) {
 
 function applyVolume(tile, p) {
   const v = tile.querySelector("video");
-  const pct = volFor(p.name);
+  const pct = tile.classList.contains("away") ? 0 : volFor(p.name); // in another breakout room: not heard
   const tr = p.stream.getAudioTracks()[0];
   if (pct > 100 && tr) {
     const ctx = (S.out ||= new (window.AudioContext || window.webkitAudioContext)());
@@ -626,6 +636,7 @@ function renderPeer(id) {
   let tile = document.querySelector(`.tile[data-id="${id}"]`);
   if (!tile) {
     tile = makeTile(id, p.name || "Joining…");
+    tile.classList.toggle("away", !S.br.same(id));
     $("grid").appendChild(tile);
     layout();
   }
@@ -687,7 +698,7 @@ S.speakerAt = 0;
 setInterval(() => {
   const g = $("grid");
   if (!g || !["spotlight", "sidebar"].includes(g.dataset.mode)) return;
-  const others = [...g.children].filter((x) => x.dataset.id !== "me");
+  const others = [...g.children].filter((x) => x.dataset.id !== "me" && !x.classList.contains("away"));
   const best = others.reduce((a, x) => ((x.talk || 0) > (a?.talk || 0) ? x : a), null);
   const cur = S.speaker?.isConnected ? S.speaker : null;
   if (best && best !== cur && (best.talk || 0) >= 600 && (cur?.talk || 0) < 300 && Date.now() - S.speakerAt > 2000) {
@@ -700,7 +711,7 @@ setInterval(() => {
 function layout() {
   const g = $("grid");
   const v = S.view;
-  const tiles = [...g.children];
+  const tiles = [...g.children].filter((x) => !x.classList.contains("away")); // people in other breakout rooms aren't shown
   const me = g.querySelector('.tile[data-id="me"]');
   const alone = tiles.length <= 1;
   const screen = tiles.find((x) => x.classList.contains("screen") && x.dataset.id !== "me");
@@ -865,6 +876,9 @@ function buildBar() {
   extra.push(button("bBg", "bg", "Background", () => openPanel("bg")));
   extra.push(button("bDev", "gear", "Devices", openDevices));
   extra.push(button("bPeople", "people", "People", () => openPanel("people")));
+  const rooms = button("bBreak", "rooms", "Breakout rooms", () => openPanel("br"));
+  rooms.hidden = !S.isHost; // only the host makes rooms (shown once the call says who the host is)
+  extra.push(rooms);
   extra.push(button("bAct", "poll", "Polls and Q&A", () => openPanel("act")));
   extra.push(button("bLayout", "layout", "Layout", layoutSheet));
   extra.push(button("bCaps", "cc", "Captions", captionsSheet));
@@ -919,9 +933,9 @@ function openPanel(which) {
   if (S.panel === which) return closePanel();
   S.panel = which;
   $("panel").hidden = false;
-  $("panelTitle").textContent = t({ chat: "Chat", board: "Board", bg: "Background", people: "People", act: "Polls and Q&A" }[which]);
-  for (const p of ["chat", "board", "bg", "people", "act"]) $(`${p}Pane`).hidden = p !== which;
-  $({ chat: "bChat", board: "bBoard", bg: "bBg", people: "bPeople", act: "bAct" }[which])?.classList.remove("badge");
+  $("panelTitle").textContent = t({ chat: "Chat", board: "Board", bg: "Background", people: "People", act: "Polls and Q&A", br: "Breakout rooms" }[which]);
+  for (const p of ["chat", "board", "bg", "people", "act", "br"]) $(`${p}Pane`).hidden = p !== which;
+  $({ chat: "bChat", board: "bBoard", bg: "bBg", people: "bPeople", act: "bAct", br: "bBreak" }[which])?.classList.remove("badge");
   $("bChat2")?.classList.remove("badge");
   if (which === "chat") {
     renderChat();
@@ -935,6 +949,7 @@ function openPanel(which) {
   if (which === "bg") renderBackgrounds();
   if (which === "people") renderPeople();
   if (which === "act") S.act.render();
+  if (which === "br") S.br.render();
 }
 
 function closePanel() {
@@ -947,6 +962,7 @@ $("boardMax").onclick = () => setBoardBig(!S.boardBig);
 
 // chat
 function addChat(c) {
+  c.room = S.br?.here || 0;
   S.chat.push(c);
   S.recorder?.event({ kind: "chat", name: c.from === "me" ? localStorage.getItem("name") || "" : c.name, text: c.text });
   renderChat();
@@ -960,6 +976,7 @@ function renderChat() {
   const log = $("chatLog");
   log.innerHTML = "";
   for (const c of S.chat) {
+    if ((c.room || 0) !== (S.br?.here || 0)) continue; // each breakout room has its own chat
     const d = document.createElement("div");
     d.className = "msg" + (c.from === "me" ? " mine" : "");
     const who = document.createElement("b");
@@ -979,7 +996,7 @@ $("chatForm").onsubmit = (e) => {
   if (!text) return;
   $("chatText").value = "";
   const c = { from: "me", name: localStorage.getItem("name"), text, at: Date.now() };
-  S.mesh.broadcast({ k: "chat", text });
+  S.mesh.roomcast({ k: "chat", text });
   addChat(c);
 };
 
@@ -1155,6 +1172,8 @@ function onHost(m) {
   if (m.t === "room") {
     S.isHost = m.host;
     S.act.render();
+    if ($("bBreak")) $("bBreak").hidden = !S.isHost;
+    S.br.render();
     S.locked = m.locked;
     S.waiting = false;
     localStorage.removeItem(`juntos.out.${S.code}`);
@@ -1287,8 +1306,14 @@ function renderPeople() {
   };
   add(`${localStorage.getItem("name")} ${t("(you)")}`, S.hands.has("me") ? "✋" : "", null, S.isHost);
   for (const p of S.mesh.peers.values())
-    add(p.name || t("Joining…"), (S.hands.has(p.id) ? "✋ " : "") + (p.state === "connected" ? "" : t("· connecting")), p.id, S.mesh.hosts.has(p.id));
+    add(
+      p.name || t("Joining…"),
+      (S.hands.has(p.id) ? "✋ " : "") + (p.state === "connected" ? "" : t("· connecting")) + (S.br.roomOf(p.id) ? ` · ${S.br.room(S.br.roomOf(p.id))}` : ""),
+      p.id,
+      S.mesh.hosts.has(p.id),
+    );
   $("bPeople")?.querySelector("span") && ($("bPeople").querySelector("span").textContent = t("People ({n})", { n: S.mesh.peers.size + 1 }));
+  S.br.refresh();
 }
 
 // hand and reactions
@@ -1303,7 +1328,7 @@ function setHand(id, on, who, quiet) {
 function toggleHand() {
   const on = !S.hands.has("me");
   setHand("me", on);
-  S.mesh.broadcast({ k: "hand", on });
+  S.mesh.roomcast({ k: "hand", on });
   return on;
 }
 function openReactions() {
@@ -1324,7 +1349,7 @@ function openReactions() {
     b.textContent = e;
     b.onclick = () => {
       react("me", e);
-      S.mesh.broadcast({ k: "react", e });
+      S.mesh.roomcast({ k: "react", e });
       box.hidden = true;
     };
     box.append(b);
@@ -1552,7 +1577,7 @@ function capStart() {
 function capSend(text, final) {
   text = text.slice(0, 500);
   const m = { k: "cap", text, final };
-  for (const id of S.capWant) S.mesh?.sendTo(id, m);
+  for (const id of S.capWant) if (S.br.same(id)) S.mesh?.sendTo(id, m);
   if (S.capsOn) showCap("me", t("You"), text, final);
 }
 
@@ -1623,7 +1648,7 @@ function pipSupported() {
 }
 // who is shown: a shared screen, then who's talking, then the others by how much they talk; me last, small
 function pipTiles() {
-  const all = [...($("grid")?.children || [])];
+  const all = [...($("grid")?.children || [])].filter((x) => !x.classList.contains("away"));
   const me = all.find((x) => x.dataset.id === "me");
   const others = all.filter((x) => x !== me);
   const rank = (x) => (x.classList.contains("screen") ? 1e9 : 0) + (x === S.speaker ? 1e8 : 0) + (x.classList.contains("camoff") ? 0 : 1e4) + (x.talk || 0);
@@ -2280,7 +2305,7 @@ function recordSheet() {
 function startRec(opts) {
   if (S.recorder) return;
   S.recorder = new Recorder(() =>
-    [...document.querySelectorAll(".tile")].map((t) => ({
+    [...document.querySelectorAll("#grid .tile:not(.away)")].map((t) => ({
       id: t.dataset.id,
       video: t.querySelector("video"),
       name: t.dataset.id === "me" ? localStorage.getItem("name") || "" : t.querySelector(".nm").textContent, // no "(you)" in the file
@@ -2322,6 +2347,8 @@ async function leave(why) {
   paintKnocks();
   S.mesh?.leave();
   S.mesh = null;
+  S.br.reset();
+  S.chat = S.chat.filter((c) => !c.room);
   closePip();
   capSync();
   const save = $("endedCaps");
@@ -2403,6 +2430,38 @@ S.act = new Activities({
   },
 });
 S.act.mount($("actPane"));
+
+// breakout rooms (breakout.js): the host's panel lives in #brPane, the bar and invitation at the top of the call
+function brMoved() {
+  for (const tile of document.querySelectorAll("#grid .tile[data-id]")) {
+    const id = tile.dataset.id;
+    if (id === "me") continue;
+    const away = !S.br.same(id);
+    if (tile.classList.contains("away") === away) continue;
+    tile.classList.toggle("away", away);
+    const p = S.mesh?.peers.get(id);
+    if (p) applyVolume(tile, p);
+    // together again: how I am (a hand raised in the room meanwhile)
+    if (!away) S.mesh?.sendTo(id, { ...myState(), hand: S.hands.has("me") });
+  }
+  S.mesh?.reroute();
+  layout();
+  renderChat();
+  renderPeople();
+}
+S.br = new Breakout({
+  t,
+  mesh: () => S.mesh,
+  amHost: () => !!S.isHost,
+  notify: toast,
+  onMove: brMoved,
+  onEnd: () => {
+    S.chat = S.chat.filter((c) => !c.room); // room chat is deleted when the rooms end, like Meet
+    renderChat();
+  },
+  call: $("call"),
+});
+S.br.mount($("brPane"));
 window.__S = S;
 route();
 
