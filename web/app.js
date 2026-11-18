@@ -416,6 +416,8 @@ async function askPass(msg) {
   }
   box.hidden = true;
   if (localStorage.getItem(`juntos.host.${S.code}`)) return;
+  // the link already carries the passcode: no need to ask the server (each ask counts against its free daily requests)
+  if (box.value) return (box.hidden = false);
   try {
     const r = await (await fetch(`${SIGNAL.replace(/^ws/, "http")}/info/${S.code}`, { cache: "no-store" })).json();
     box.hidden = !r.pass;

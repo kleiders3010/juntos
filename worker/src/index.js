@@ -126,7 +126,9 @@ export class Room {
   // let someone in: they get everyone already here, everyone hears about them
   admit(ws, a) {
     const others = this.peers().filter((p) => p.ws !== ws && p.a.id !== a.id); // an old link of theirs isn't someone else
-    if (this.in && !this.in[a.id]) {
+    // remembered only while the call is locked (the only time it matters); locking remembers everyone already in.
+    // Each write counts against the free plan's 100,000 rows written a day, so a join writes nothing it needn't.
+    if (this.in && !this.in[a.id] && this.locked) {
       this.in[a.id] = 1;
       const ids = Object.keys(this.in);
       if (ids.length > MAX_IN) delete this.in[ids[0]];
@@ -214,7 +216,7 @@ export class Room {
         if (msg.opts.lock) await st.put("locked", (this.locked = true));
         if (PASS_RE.test(msg.opts.pass || "")) await st.put("pass", await passHash(room, msg.opts.pass));
       }
-      if (host) await st.put("opened", true);
+      if (host && !(await st.get("opened"))) await st.put("opened", true);
       // a passcode: everyone but the host types it (or has it in the link)
       const passH = await st.get("pass");
       if (passH && !host) {
@@ -237,8 +239,11 @@ export class Room {
         this.tries.delete(net);
       }
       this.hasPass = !!passH;
-      await st.put("seen", Date.now());
-      await st.setAlarm(Date.now() + ROOM_KEEP);
+      // "last used" moves at most once a day (the room is forgotten a month after it)
+      if (Date.now() - ((await st.get("seen")) || 0) > 24 * 3600 * 1000) {
+        await st.put("seen", Date.now());
+        await st.setAlarm(Date.now() + ROOM_KEEP);
+      }
       await this.loadPerms();
       const co = !host && !!this.cos[id];
       const hosts = this.hosts();
@@ -274,6 +279,12 @@ export class Room {
     if (msg.t === "lock") {
       this.locked = !!msg.on;
       await this.state.storage.put("locked", this.locked);
+      if (this.locked && this.in) {
+        for (const p of this.peers()) this.in[p.a.id] = 1;
+        const ids = Object.keys(this.in);
+        for (const id of ids.slice(0, Math.max(0, ids.length - MAX_IN))) delete this.in[id];
+        await this.state.storage.put("in", this.in);
+      }
       for (const p of this.peers()) this.send(p.ws, { t: "lock", on: this.locked, by: me.name });
       if (!this.locked) for (const p of all) if (p.a.wait) this.admit(p.ws, p.a);
     } else if (msg.t === "admit-all") {
