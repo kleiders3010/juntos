@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { defragment } from "./mp4fix.js";
 // Recording on this device: every video tile drawn into one picture, every voice mixed into one
 // sound track, saved as a file when it stops. Nothing is uploaded; no time limit.
 
@@ -67,7 +68,9 @@ export class Recorder {
     this.ticker.onmessage = draw;
     draw();
     const stream = new MediaStream([...canvas.captureStream(25).getVideoTracks(), ...dest.stream.getAudioTracks()]);
-    const types = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
+    // MP4 (H.264 + AAC) first: WhatsApp and most phones refuse WebM. WebM only where MP4 can't be recorded (Firefox).
+    const types = ["video/mp4;codecs=avc1.42E01F,mp4a.40.2", "video/mp4;codecs=avc1,mp4a.40.2", "video/mp4",
+      "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"];
     this.mime = types.find((t) => MediaRecorder.isTypeSupported(t)) || "";
     this.chunks = [];
     this.rec = new MediaRecorder(stream, this.mime ? { mimeType: this.mime, videoBitsPerSecond: 2_500_000 } : undefined);
@@ -78,12 +81,17 @@ export class Recorder {
 
   stop() {
     return new Promise((done) => {
-      this.rec.onstop = () => {
+      this.rec.onstop = async () => {
         this.running = false;
         this.ticker.terminate();
         this.audio.close();
         const type = this.rec.mimeType || this.mime || "video/webm";
-        const blob = new Blob(this.chunks, { type });
+        let blob = new Blob(this.chunks, { type });
+        if (type.includes("mp4")) {
+          // browsers write MP4 in pieces with no overall length; phones and WhatsApp want one plain file
+          const plain = defragment(new Uint8Array(await blob.arrayBuffer()));
+          if (plain) blob = new Blob([plain], { type: "video/mp4" });
+        }
         const ext = type.includes("mp4") ? "mp4" : "webm";
         const d = new Date(this.startedAt), p2 = (n) => String(n).padStart(2, "0");
         // local time, as the person sees it on their clock
