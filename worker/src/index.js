@@ -4,7 +4,12 @@
 // the lock, a hash of the passcode (if the host set one), the permissions, and by random per-visit ids (no names)
 // the co-hosts, speaking choices and who was let in; forgotten a month after the room was last used.
 
-const MAX_PEOPLE = 16; // tested: big_test.py 16 people (everyone hears everyone, video cap 9); a direct mesh past this asks too much of phones
+// Up to MESH_MAX people everyone links to everyone (big_test.py: 16 people, everyone hears everyone). Past that a
+// direct link to everyone asks too much of phones, so the call becomes a tree (tree_test.py): each person links to
+// one parent and a few children, and sound, pictures and messages are passed along it, device to device.
+const MESH_MAX = 16;
+const MAX_PEOPLE = 200;
+const MAX_KIDS = 6; // the most children a device may say it can feed
 const MAX_MSG = 64 * 1024;
 const ROOM_KEEP = 31 * 24 * 3600 * 1000; // a room's host and lock are forgotten a month after its last use
 const HOST_CMDS = new Set(["lock", "admit", "admit-all", "deny", "remove", "pass", "talk", "perm", "cohost"]);
@@ -134,13 +139,67 @@ export class Room {
       if (ids.length > MAX_IN) delete this.in[ids[0]];
       this.state.storage.put("in", this.in);
     }
-    ws.serializeAttachment({ id: a.id, name: a.name, host: !!a.host, co: !!a.co });
-    this.send(ws, { t: "peers", peers: others.map((p) => ({ id: p.a.id, name: p.a.name, host: !!(p.a.host || p.a.co), role: this.role(p.a) })) });
+    ws.serializeAttachment({ id: a.id, name: a.name, host: !!a.host, co: !!a.co, cap: a.cap || 2, pub: a.pub || "" });
+    const me = { ws, a: ws.deserializeAttachment() };
+    const big = others.some((p) => p.a.tree) || others.length + 1 > MESH_MAX;
+    this.send(ws, { t: "peers", big, peers: others.map((p) => ({ id: p.a.id, name: p.a.name, host: !!(p.a.host || p.a.co), role: this.role(p.a), pub: p.a.pub || "" })) });
     this.send(ws, { t: "room", locked: !!this.locked, host: !!(a.host || a.co), owner: !!a.host, pass: !!this.hasPass });
     this.send(ws, this.permMsg());
-    for (const p of others) this.send(p.ws, { t: "join", id: a.id, name: a.name, host: !!(a.host || a.co), role: this.role(a) });
+    for (const p of others) this.send(p.ws, { t: "join", id: a.id, name: a.name, host: !!(a.host || a.co), role: this.role(a), pub: a.pub || "" });
+    if (big) {
+      const all = [...others, me];
+      const changed = new Set([me]);
+      if (!others.some((p) => p.a.tree)) {
+        // the call just grew past a mesh: everyone goes into the tree, the devices that can feed most nearest the top
+        all.sort((x, y) => (y.a.cap || 2) - (x.a.cap || 2));
+        for (const p of all) this.setA(p, { tree: true, parent: null });
+        for (const p of all.slice(1)) this.attach(all, p);
+        all.forEach((p) => changed.add(p));
+      } else {
+        const parent = this.attach(all, me);
+        if (parent) changed.add(parent);
+      }
+      this.sendTree(all, changed);
+    }
     // a co-host coming back hears who is waiting
     if (a.co) for (const p of this.peers(true)) if (p.a.wait) this.send(ws, { t: "knock", id: p.a.id, name: p.a.name });
+  }
+
+  setA(p, patch) {
+    p.a = { ...p.a, ...patch };
+    p.ws.serializeAttachment(p.a);
+  }
+
+  // hang p under the person nearest the top who still has room for a child (p's own branch hangs from p and
+  // isn't reachable from the top, so it's never chosen); returns the new parent, or null if p is the top
+  attach(all, p) {
+    const kids = (id) => all.filter((q) => q !== p && q.a.tree && q.a.parent === id);
+    const root = all.find((q) => q !== p && q.a.tree && !q.a.parent);
+    if (!root) {
+      this.setA(p, { tree: true, parent: null });
+      return null;
+    }
+    const queue = [root];
+    for (let i = 0; i < queue.length; i++) {
+      const q = queue[i];
+      const k = kids(q.a.id);
+      if (k.length < (q.a.cap || 2)) {
+        this.setA(p, { tree: true, parent: q.a.id });
+        return q;
+      }
+      queue.push(...k);
+    }
+    this.setA(p, { tree: true, parent: root.a.id });
+    return root;
+  }
+
+  // each person's links: their parent and their children
+  sendTree(all, who) {
+    for (const p of who) {
+      if (!p || !all.includes(p)) continue;
+      const kids = all.filter((q) => q.a.tree && q.a.parent === p.a.id).map((q) => q.a.id);
+      this.send(p.ws, { t: "tree", parent: p.a.parent || null, kids });
+    }
   }
 
   async fetch(req) {
@@ -189,6 +248,9 @@ export class Room {
       if (me.id) return;
       const id = String(msg.id || "").slice(0, 40);
       const name = String(msg.name || "").slice(0, 60);
+      // how many children this device says it can feed in a big call, and its public key (relayed messages are signed)
+      const cap = Math.max(1, Math.min(MAX_KIDS, Math.floor(Number(msg.cap)) || 2));
+      const pub = typeof msg.pub === "string" && /^[A-Za-z0-9_-]{40,120}$/.test(msg.pub) ? msg.pub : "";
       if (!/^[A-Za-z0-9_-]{6,40}$/.test(id)) return ws.close(1008, "bad id");
       for (const p of this.peers(true))
         if (p.a.id === id && p.ws !== ws) {
@@ -254,12 +316,12 @@ export class Room {
       // someone already let in whose link to the server dropped comes straight back (ids are random per visit)
       const back = !!this.in[id] && !msg.knock;
       if (!host && !co && !back && (this.locked || msg.knock) && hosts.length) {
-        ws.serializeAttachment({ id, name, wait: true });
+        ws.serializeAttachment({ id, name, wait: true, cap, pub });
         this.send(ws, { t: "waiting" });
         for (const p of hosts) this.send(p.ws, { t: "knock", id, name });
         return;
       }
-      return this.admit(ws, { id, name, host, co });
+      return this.admit(ws, { id, name, host, co, cap, pub });
     }
     if (!me.id) return;
     if (msg.t === "signal" && typeof msg.to === "string") {
@@ -374,6 +436,16 @@ export class Room {
       return;
     }
     for (const p of this.peers()) if (p.ws !== ws) this.send(p.ws, { t: "leave", id: me.id });
+    if (me.tree) {
+      // the tree closes over the gap: the children of who left hang on elsewhere (each with its own branch)
+      const all = this.peers().filter((p) => p.ws !== ws && p.a.tree);
+      const orphans = all.filter((p) => p.a.parent === me.id).sort((x, y) => (y.a.cap || 2) - (x.a.cap || 2));
+      const changed = new Set(orphans);
+      if (me.parent) changed.add(all.find((p) => p.a.id === me.parent));
+      if (!me.parent && orphans.length) this.setA(orphans.shift(), { parent: null });
+      for (const o of orphans) changed.add(this.attach(all, o));
+      this.sendTree(all, changed);
+    }
     // the last host left: nobody can answer anyone asking to join, so they come in
     if ((me.host || me.co) && !this.hosts().length) for (const p of this.peers(true)) if (p.a.wait) this.admit(p.ws, p.a);
   }
