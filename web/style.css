@@ -278,6 +278,9 @@ body.boardBig .grid .tile .label { font-size: 12px; padding: 1px 6px; }
 .captions .capLine { margin: 2px 0; }
 .captions .capLine b { color: #fde68a; margin-right: 8px; font-weight: 700; }
 .captions .capLine.note span { color: #d1d5db; font-style: italic; }
+.captions .capLine.cont b { display: none; }
+.captions .capLine.cont:first-child b { display: inline; }
+.captions .capLine + .capLine:not(.cont) { margin-top: 8px; }
 .captions.normal { font-size: 18px; }
 .captions.huge { font-size: 34px; }
 @media (max-width: 640px) { .captions { margin: 6px 6px 0; padding: 8px 12px; font-size: 20px; } .captions.normal { font-size: 16px; } .captions.huge { font-size: 28px; } }

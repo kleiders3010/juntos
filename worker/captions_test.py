@@ -99,6 +99,34 @@ with sync_playwright() as p:
     o.wait_for_function("[...document.querySelectorAll('#captions .capLine')].some(l => l.dataset.id === 'me' && l.textContent.includes('fine thanks'))", timeout=5000)
     check(True, "Beto sees his own words too")
 
+    # a dialogue, not one running stream: a long turn breaks into lines, the name shows where the speaker changes
+    o.wait_for_timeout(1800)  # a pause ends Beto's line
+    LONG = "so the plan for this week is to finish the kitchen and then paint the hall before the family comes on Saturday"
+    lines_js = "[...document.querySelectorAll('#captions .capLine')].map(l => [l.dataset.id, getComputedStyle(l.firstChild).display !== 'none', l.lastChild.textContent])"
+    a.evaluate(f"__say('{LONG}', true)")
+    a.evaluate("__say('and then we rest', true)")
+    o.wait_for_function("document.querySelector('#captions').textContent.includes('we rest')", timeout=5000)
+    ls = o.evaluate(lines_js)
+    long_i = next(i for i, x in enumerate(ls) if x[2] == LONG)
+    check(ls[long_i][1] and ls[long_i + 1][2] == "and then we rest" and not ls[long_i + 1][1],
+          "a long turn breaks into lines; the name isn't repeated on the next line of the same turn")
+    a.evaluate("__say('one more thing', true)")
+    o.wait_for_timeout(1800)
+    a.evaluate("__say('bye', true)")
+    o.wait_for_function("document.querySelector('#captions').textContent.includes('bye')", timeout=5000)
+    ls = o.evaluate(lines_js)
+    check(["one more thing" in x[2] and "bye" not in x[2] for x in ls].count(True) == 1 and ls[-1][2] == "bye", "a pause starts a new line")
+    o.evaluate("__say('see you', true)")
+    o.wait_for_function("document.querySelector('#captions').textContent.includes('see you')", timeout=5000)
+    ls = o.evaluate(lines_js)
+    check(ls[-1][0] == "me" and ls[-1][1] and len(ls) <= 4, "another speaker gets a line with their name; a few lines on screen")
+    o.wait_for_timeout(1800)
+    a.evaluate("__say('half a sen', false)")
+    o.wait_for_function("document.querySelector('#captions').textContent.includes('half a sen')", timeout=5000)
+    ls = o.evaluate(lines_js)
+    check(ls[-1][2] == "half a sen" and ls[-1][1], "words in progress after someone else spoke start a new line with the name")
+    a.evaluate("__say('half a sentence', true)")
+
     # text size
     o.click("#bCaps")
     o.click('.capSheet [data-v="huge"]')
@@ -112,8 +140,9 @@ with sync_playwright() as p:
         o.click('button[name="capSave"]')
     path = d.value.path()
     text = open(path, encoding="utf-8").read()
-    check(d.value.suggested_filename.endswith(".txt") and "Ana: hello everyone" in text and "Ana: how are you" in text and "Beto: fine thanks" in text and "hello every\r" not in text,
-          "the .txt has every finished sentence with names, not the words in progress")
+    check(d.value.suggested_filename.endswith(".txt") and "Ana\nhello everyone how are you\n" in text and "Beto\nfine thanks\n" in text
+          and f"Ana\n{LONG}\nand then we rest one more thing\nbye\n\n" in text and "hello every\n" not in text and "half a sen\n" not in text,
+          "the .txt reads like a script: each turn under the name, a line per caption line, not the words in progress")
     o.click(".capSheet .primary")
 
     # Carla can't make captions

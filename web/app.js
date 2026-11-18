@@ -2103,8 +2103,14 @@ S.capShare = localStorage.getItem("juntos.capshare") !== "off";
 S.capSize = localStorage.getItem("juntos.capsize") || "large";
 S.capLang = localStorage.getItem("juntos.caplang") || "";
 S.capWant = new Set(); // who in the call wants captions (peer ids)
-S.capLines = new Map(); // speaker id -> { el, done, timer }
-S.transcript = []; // { at, name, text }
+S.capLines = new Map(); // speaker id -> the line they're saying now: { el, done, note, entry, timer, pause }
+S.transcript = []; // { at, name, text }: one per caption line
+// Captions read like a dialogue: each speaker's turn starts its own line with their name, and a long turn is broken
+// into lines (a sentence ending, a pause or a length), never one running stream.
+const CAP_LINE = 90; // characters: a finished phrase reaching this ends the line
+const CAP_PAUSE = 1500; // ms of quiet after a finished phrase ends the line
+const CAP_SHOWN = 4; // lines on screen
+const CAP_GONE = 9000; // ms a line stays after it ends
 let capRec = null;
 let capOn = false;
 let capFails = 0;
@@ -2309,37 +2315,66 @@ function capWanted(from, on, who) {
   capSync();
 }
 
-function showCap(id, name, text, final, note) {
+// a new caption line; the same person going on doesn't repeat the name (CSS shows it again once it's the top line)
+function capNewLine(id, name, note) {
   const box = $("captions");
-  let L = S.capLines.get(id);
-  if (!L) {
-    const el = document.createElement("div");
-    el.className = "capLine";
-    el.dataset.id = id;
-    el.innerHTML = "<b></b><span></span>";
-    box.append(el);
-    L = { el, done: "", timer: 0 };
-    S.capLines.set(id, L);
-    while (box.children.length > 3) {
-      const old = box.firstElementChild;
-      S.capLines.delete(old.dataset.id);
-      old.remove();
-    }
+  const el = document.createElement("div");
+  el.className = "capLine live";
+  el.dataset.id = id;
+  el.innerHTML = "<b></b><span></span>";
+  el.firstChild.textContent = name;
+  const prev = box.lastElementChild;
+  if (!note && prev && prev.dataset.id === id && !prev.classList.contains("note")) el.classList.add("cont");
+  if (note) el.classList.add("note");
+  box.append(el);
+  // too many: the oldest finished line goes first, then the oldest still being said
+  while (box.children.length > CAP_SHOWN) {
+    const old = [...box.children].find((x) => !x.classList.contains("live")) || box.firstElementChild;
+    if (S.capLines.get(old.dataset.id)?.el === old) S.capLines.delete(old.dataset.id);
+    old.remove();
   }
-  L.el.classList.toggle("note", !!note);
+  return el;
+}
+
+function capEndLine(id, L) {
+  clearTimeout(L.pause);
+  if (S.capLines.get(id) === L) S.capLines.delete(id);
+  L.el.classList.remove("live");
+  clearTimeout(L.timer);
+  L.timer = setTimeout(() => L.el.remove(), CAP_GONE);
+}
+
+function showCap(id, name, text, final, note) {
+  let L = S.capLines.get(id);
+  if (L && (note || L.note || !L.el.isConnected)) {
+    capEndLine(id, L);
+    L = null;
+  }
+  if (!L) {
+    L = { el: capNewLine(id, name, note), done: "", note: !!note, entry: null, timer: 0, pause: 0 };
+    S.capLines.set(id, L);
+  }
   L.el.firstChild.textContent = name;
+  clearTimeout(L.pause);
   if (final) {
     L.done = `${L.done} ${text}`.trim().slice(-400);
-    if (!note) S.transcript.push({ at: Date.now(), name: id === "me" ? localStorage.getItem("name") || name : name, text });
+    if (!note) {
+      if (!L.entry) S.transcript.push((L.entry = { at: Date.now(), name: id === "me" ? localStorage.getItem("name") || name : name, text: "" }));
+      L.entry.text = L.done;
+    }
   }
   let s = final ? L.done : `${L.done} ${text}`.trim();
-  if (s.length > 160) s = "… " + s.slice(-160).replace(/^\S*\s/, "");
+  if (s.length > 2 * CAP_LINE) s = "… " + s.slice(-2 * CAP_LINE).replace(/^\S*\s/, ""); // one breath with no pause
   L.el.lastChild.textContent = s;
   clearTimeout(L.timer);
   L.timer = setTimeout(() => {
     L.el.remove();
     if (S.capLines.get(id) === L) S.capLines.delete(id);
-  }, 8000);
+  }, 8000); // they went quiet in the middle of a phrase
+  if (final) {
+    if (note || L.done.length >= CAP_LINE || /[.?!…。？！]$/.test(L.done)) capEndLine(id, L);
+    else L.pause = setTimeout(() => capEndLine(id, L), CAP_PAUSE);
+  }
 }
 
 function setCaps(on, keep) {
@@ -2493,10 +2528,17 @@ function closePip() {
 function saveTranscript() {
   const pad = (n) => String(n).padStart(2, "0");
   const d = new Date();
-  const lines = S.transcript.map((x) => {
-    const a = new Date(x.at);
-    return `[${pad(a.getHours())}:${pad(a.getMinutes())}] ${x.name}: ${x.text}`;
-  });
+  const lines = [];
+  let last = null;
+  for (const x of S.transcript) {
+    if (!last || last.name !== x.name || x.at - last.at > 60000) {
+      const a = new Date(x.at);
+      if (last) lines.push("");
+      lines.push(`[${pad(a.getHours())}:${pad(a.getMinutes())}] ${x.name}`);
+    }
+    lines.push(x.text);
+    last = x;
+  }
   const head = `Juntos ${S.code || ""}, ${d.toLocaleDateString()}`;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([`${head}\r\n\r\n${lines.join("\r\n")}\r\n`], { type: "text/plain;charset=utf-8" }));
