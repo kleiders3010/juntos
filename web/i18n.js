@@ -79,6 +79,10 @@ const DICT = {
     "{name} started recording": "{name} empezó a grabar",
     "{name} stopped recording": "{name} dejó de grabar",
     "Joining…": "Entrando…",
+    "This browser can't make video calls. Open the link in Safari or Chrome.":
+      "Este navegador no puede hacer videollamadas. Abrí el enlace en Safari o Chrome.",
+    "This browser can't use your camera or microphone. Open the link in Safari or Chrome.":
+      "Este navegador no puede usar tu cámara ni tu micrófono. Abrí el enlace en Safari o Chrome.",
     "· connecting": "· conectando",
   },
 };

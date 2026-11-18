@@ -105,6 +105,13 @@ $("joinForm").onsubmit = (e) => {
 
 // ---------- camera and mic ----------
 async function getMedia() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    // Some in-app browsers (inside chat apps) can't use the camera at all: you can still watch and listen.
+    S.mic = false;
+    S.cam = false;
+    $("lobbyMsg").textContent = t("This browser can't use your camera or microphone. Open the link in Safari or Chrome.");
+    return false;
+  }
   try {
     const s = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -235,6 +242,10 @@ $("enter").onclick = async () => {
     return;
   }
   localStorage.setItem("name", name);
+  if (typeof RTCPeerConnection === "undefined") {
+    $("lobbyMsg").textContent = t("This browser can't make video calls. Open the link in Safari or Chrome.");
+    return;
+  }
   // Joining before the camera and mic are ready would send nothing to the others.
   $("enter").disabled = true;
   await (S.mediaReady ||= getMedia());
@@ -409,7 +420,7 @@ function buildBar() {
   bar.append(button("bMic", "mic", "Mic", () => setMic(!S.mic)));
   bar.append(button("bCam", "cam", "Camera", () => setCam(!S.cam)));
   const extra = [];
-  if (navigator.mediaDevices.getDisplayMedia && !isPhone) extra.push(button("bScreen", "screen", "Share screen", toggleScreen));
+  if (navigator.mediaDevices?.getDisplayMedia && !isPhone) extra.push(button("bScreen", "screen", "Share screen", toggleScreen));
   extra.push(button("bChat", "chat", "Chat", () => openPanel("chat")));
   extra.push(button("bBoard", "board", "Board", () => openPanel("board")));
   extra.push(button("bBg", "bg", "Background", () => openPanel("bg")));
