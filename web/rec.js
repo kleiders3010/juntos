@@ -1,3 +1,4 @@
+import { t } from "./i18n.js";
 // Recording on this device: every video tile drawn into one picture, every voice mixed into one
 // sound track, saved as a file when it stops. Nothing is uploaded; no time limit.
 
@@ -84,10 +85,12 @@ export class Recorder {
         const type = this.rec.mimeType || this.mime || "video/webm";
         const blob = new Blob(this.chunks, { type });
         const ext = type.includes("mp4") ? "mp4" : "webm";
-        const stamp = new Date(this.startedAt).toISOString().slice(0, 16).replace("T", " ").replace(":", "h");
+        const d = new Date(this.startedAt), p2 = (n) => String(n).padStart(2, "0");
+        // local time, as the person sees it on their clock
+        const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}h${p2(d.getMinutes())}`;
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = `Meeting ${stamp}.${ext}`;
+        a.download = `${t("Meeting")} ${stamp}.${ext}`;
         document.body.appendChild(a);
         a.click();
         a.remove();

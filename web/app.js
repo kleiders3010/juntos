@@ -2,6 +2,9 @@ import { Mesh } from "./rtc.js";
 import { Background, BACKGROUNDS } from "./bg.js";
 import { Board, COLORS } from "./board.js";
 import { Recorder } from "./rec.js";
+import { t, translatePage } from "./i18n.js";
+
+translatePage();
 
 // ---------- small helpers ----------
 const $ = (id) => document.getElementById(id);
@@ -95,7 +98,7 @@ $("start").onclick = () => {
 $("joinForm").onsubmit = (e) => {
   e.preventDefault();
   const code = codeFrom($("joinCode").value);
-  if (!code) return toast("That code doesn't look right");
+  if (!code) return toast(t("That code doesn't look right"));
   history.pushState({}, "", `/r/${code}`);
   route();
 };
@@ -118,12 +121,12 @@ async function getMedia() {
       S.camStream = s;
       S.micTrack = s.getAudioTracks()[0];
       S.cam = false;
-      $("lobbyMsg").textContent = "No camera found. You can still talk.";
+      $("lobbyMsg").textContent = t("No camera found. You can still talk.");
       return true;
     } catch (_) {
       S.mic = false;
       S.cam = false;
-      $("lobbyMsg").textContent = "Camera and microphone are blocked. Allow them in your browser to be seen and heard.";
+      $("lobbyMsg").textContent = t("Camera and microphone are blocked. Allow them in your browser to be seen and heard.");
       return false;
     }
   }
@@ -146,7 +149,7 @@ async function applyBackground(mode) {
     try {
       await S.bg.set(mode);
     } catch (e) {
-      toast("Backgrounds don't work on this device");
+      toast(t("Backgrounds don't work on this device"));
       S.bgMode = "none";
     }
   }
@@ -198,7 +201,7 @@ function paintToggles() {
     if (!el) continue;
     el.innerHTML = svg(on ? a : b) + (el.dataset.label ? `<span>${el.dataset.label}</span>` : "");
     el.classList.toggle("danger", !on);
-    el.title = on ? "Turn off" : "Turn on";
+    el.title = on ? t("Turn off") : t("Turn on");
   }
   const meTile = document.querySelector('.tile[data-id="me"]');
   if (meTile) meTile.classList.toggle("muted", !S.mic);
@@ -221,14 +224,14 @@ $("pBg").onclick = () => {
   const order = ["none", "blur", "blur-strong", ...BACKGROUNDS.filter((b) => b.src).map((b) => b.id)];
   const next = order[(order.indexOf(S.bgMode) + 1) % order.length];
   applyBackground(next);
-  toast(`Background: ${(BACKGROUNDS.find((b) => b.id === next) || { label: next }).label}`);
+  toast(t("Background: {name}", { name: t((BACKGROUNDS.find((b) => b.id === next) || { label: next }).label) }));
 };
 $("name").addEventListener("keydown", (e) => e.key === "Enter" && $("enter").click());
 $("enter").onclick = async () => {
   const name = $("name").value.trim();
   if (!name) {
     $("name").focus();
-    $("lobbyMsg").textContent = "Type your name so people know who you are.";
+    $("lobbyMsg").textContent = t("Type your name so people know who you are.");
     return;
   }
   localStorage.setItem("name", name);
@@ -254,13 +257,13 @@ function enterCall(name) {
     document.querySelector(`.tile[data-id="${e.detail.id}"]`)?.remove();
     S.hands.delete(e.detail.id);
     layout();
-    if (e.detail.name) toast(`${e.detail.name} left`);
+    if (e.detail.name) toast(t("{name} left", { name: e.detail.name }));
     renderPeople();
   });
-  mesh.addEventListener("someone-joining", (e) => toast(`${e.detail.name || "Someone"} joined`));
-  mesh.addEventListener("full", (e) => toast(`This call is full (${e.detail.max} people)`));
+  mesh.addEventListener("someone-joining", (e) => toast(t("{name} joined", { name: e.detail.name || t("Someone") })));
+  mesh.addEventListener("full", (e) => toast(t("This call is full ({max} people)", { max: e.detail.max })));
   mesh.addEventListener("joined", (e) => {
-    if (e.detail.count === 0) toast("You're the first one here. Invite people with the link.");
+    if (e.detail.count === 0) toast(t("You're the first one here. Invite people with the link."));
   });
   mesh.addEventListener("channel-open", (e) => {
     // catch the newcomer up: board, chat, how I am
@@ -276,7 +279,7 @@ function enterCall(name) {
 
 function onMessage(from, m) {
   const p = S.mesh.peers.get(from);
-  const who = (p && p.name) || "Someone";
+  const who = (p && p.name) || t("Someone");
   if (m.k === "chat") {
     addChat({ from, name: who, text: String(m.text).slice(0, 2000), at: Date.now() });
   } else if (m.k === "history") {
@@ -296,7 +299,7 @@ function onMessage(from, m) {
     react(from, m.e);
   } else if (m.k === "rec") {
     $("recDot").hidden = !m.on && !S.recorder;
-    toast(m.on ? `${who} started recording` : `${who} stopped recording`);
+    toast(t(m.on ? "{name} started recording" : "{name} stopped recording", { name: who }));
   } else if (["stroke", "clear", "board"].includes(m.k)) {
     ensureBoard().receive(m);
     if (m.k === "stroke" && S.panel !== "board") badge("bBoard");
@@ -309,7 +312,7 @@ function onMessage(from, m) {
 function buildGrid() {
   const grid = $("grid");
   grid.innerHTML = "";
-  grid.appendChild(makeTile("me", `${localStorage.getItem("name")} (you)`));
+  grid.appendChild(makeTile("me", `${localStorage.getItem("name")} ${t("(you)")}`));
   const v = grid.querySelector('.tile[data-id="me"] video');
   v.muted = true;
   refreshLocalVideo();
@@ -392,6 +395,7 @@ function button(id, icon, label, onclick, cls = "") {
   const b = document.createElement("button");
   b.id = id;
   b.className = `round ${cls}`;
+  label = t(label);
   b.dataset.label = label;
   b.innerHTML = svg(icon) + `<span>${label}</span>`;
   b.title = label;
@@ -412,7 +416,7 @@ function buildBar() {
   extra.push(button("bPeople", "people", "People", () => openPanel("people")));
   if (Recorder.supported()) extra.push(button("bRec", "rec", "Record", toggleRec));
   const react = button("bReact", "more", "React", openReactions);
-  react.innerHTML = `<b class="emoji">✋</b><span>Hand / react</span>`;
+  react.innerHTML = `<b class="emoji">✋</b><span>${t("Hand / react")}</span>`;
   extra.push(react);
   if (isPhone) {
     bar.append(button("bChat2", "chat", "Chat", () => openPanel("chat")));
@@ -458,7 +462,7 @@ function openPanel(which) {
   if (S.panel === which) return closePanel();
   S.panel = which;
   $("panel").hidden = false;
-  $("panelTitle").textContent = { chat: "Chat", board: "Board", bg: "Background", people: "People" }[which];
+  $("panelTitle").textContent = t({ chat: "Chat", board: "Board", bg: "Background", people: "People" }[which]);
   for (const p of ["chat", "board", "bg", "people"]) $(`${p}Pane`).hidden = p !== which;
   $({ chat: "bChat", board: "bBoard", bg: "bBg", people: "bPeople" }[which])?.classList.remove("badge");
   $("bChat2")?.classList.remove("badge");
@@ -494,7 +498,7 @@ function renderChat() {
     const d = document.createElement("div");
     d.className = "msg" + (c.from === "me" ? " mine" : "");
     const who = document.createElement("b");
-    who.textContent = c.from === "me" ? "You" : c.name;
+    who.textContent = c.from === "me" ? t("You") : c.name;
     const tm = document.createElement("time");
     tm.textContent = new Date(c.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const tx = document.createElement("p");
@@ -523,7 +527,7 @@ function ensureBoard() {
       const b = document.createElement("button");
       b.className = "swatch";
       b.style.background = c;
-      b.title = c === "#ffffff" ? "Eraser" : "Pen";
+      b.title = c === "#ffffff" ? t("Eraser") : t("Pen");
       b.onclick = () => {
         S.board.color = c;
         S.board.erase = c === "#ffffff";
@@ -534,7 +538,7 @@ function ensureBoard() {
     tools.firstChild.classList.add("on");
     const clear = document.createElement("button");
     clear.className = "chip";
-    clear.textContent = "Clear";
+    clear.textContent = t("Clear");
     clear.onclick = () => S.board.clear();
     tools.append(clear);
   }
@@ -546,15 +550,15 @@ function renderBackgrounds() {
   const box = $("bgChoices");
   box.innerHTML = "";
   if (!S.camTrack) {
-    box.textContent = "Turn on your camera to pick a background.";
+    box.textContent = t("Turn on your camera to pick a background.");
     return;
   }
   for (const b of BACKGROUNDS) {
     const el = document.createElement("button");
     el.className = "bgChoice" + (S.bgMode === b.id ? " on" : "");
     if (b.src) el.style.backgroundImage = `url(${b.src})`;
-    el.textContent = b.src ? "" : b.label;
-    el.title = b.label;
+    el.textContent = b.src ? "" : t(b.label);
+    el.title = t(b.label);
     el.onclick = async () => {
       await applyBackground(b.id);
       renderBackgrounds();
@@ -563,7 +567,7 @@ function renderBackgrounds() {
   }
   const up = document.createElement("button");
   up.className = "bgChoice";
-  up.textContent = "Your picture…";
+  up.textContent = t("Your picture…");
   up.onclick = () => $("bgFile").click();
   box.append(up);
 }
@@ -588,9 +592,9 @@ function renderPeople() {
     li.textContent = name + (extra ? ` ${extra}` : "");
     ul.append(li);
   };
-  add(`${localStorage.getItem("name")} (you)`, S.hands.has("me") ? "✋" : "");
-  for (const p of S.mesh.peers.values()) add(p.name || "Joining…", (S.hands.has(p.id) ? "✋ " : "") + (p.state === "connected" ? "" : "· connecting"));
-  $("bPeople")?.querySelector("span") && ($("bPeople").querySelector("span").textContent = `People (${S.mesh.peers.size + 1})`);
+  add(`${localStorage.getItem("name")} ${t("(you)")}`, S.hands.has("me") ? "✋" : "");
+  for (const p of S.mesh.peers.values()) add(p.name || t("Joining…"), (S.hands.has(p.id) ? "✋ " : "") + (p.state === "connected" ? "" : t("· connecting")));
+  $("bPeople")?.querySelector("span") && ($("bPeople").querySelector("span").textContent = t("People ({n})", { n: S.mesh.peers.size + 1 }));
 }
 
 // hand and reactions
@@ -599,7 +603,7 @@ function setHand(id, on, who, quiet) {
   else S.hands.delete(id);
   const tile = document.querySelector(`.tile[data-id="${id}"]`);
   if (tile) tile.querySelector(".hand").hidden = !on;
-  if (on && !quiet && id !== "me") toast(`${who} raised a hand`);
+  if (on && !quiet && id !== "me") toast(t("{name} raised a hand", { name: who }));
   renderPeople();
 }
 function openReactions() {
@@ -608,7 +612,7 @@ function openReactions() {
   box.innerHTML = "";
   const hand = document.createElement("button");
   hand.className = "chip";
-  hand.textContent = S.hands.has("me") ? "Lower hand" : "✋ Raise hand";
+  hand.textContent = S.hands.has("me") ? t("Lower hand") : t("✋ Raise hand");
   hand.onclick = () => {
     const on = !S.hands.has("me");
     setHand("me", on);
@@ -650,7 +654,7 @@ async function toggleScreen() {
     $("bScreen")?.classList.add("on");
     refreshLocalVideo();
     await S.mesh.setTracks(S.mic ? S.micTrack : S.micTrack, S.screen);
-    toast("You're sharing your screen");
+    toast(t("You're sharing your screen"));
   } catch (_) {}
 }
 async function stopScreen() {
@@ -676,7 +680,7 @@ async function flipCamera() {
     refreshLocalVideo();
     await S.mesh.setTracks(S.micTrack, videoOut());
   } catch (_) {
-    toast("Couldn't switch camera");
+    toast(t("Couldn't switch camera"));
   }
 }
 
@@ -688,7 +692,7 @@ async function toggleRec() {
     $("bRec").classList.remove("on");
     $("recDot").hidden = true;
     S.mesh.broadcast({ k: "rec", on: false });
-    toast("Recording saved to your downloads");
+    toast(t("Recording saved to your downloads"));
     return;
   }
   S.recorder = new Recorder(() =>
@@ -702,7 +706,7 @@ async function toggleRec() {
   $("bRec").classList.add("on");
   $("recDot").hidden = false;
   S.mesh.broadcast({ k: "rec", on: true });
-  toast("Recording. Everyone in the call can see that.");
+  toast(t("Recording. Everyone in the call can see that."));
 }
 
 // invite
@@ -710,15 +714,15 @@ $("invite").onclick = async () => {
   const url = `${location.origin}/r/${S.code}`;
   if (navigator.share && isPhone) {
     try {
-      await navigator.share({ title: "Join my call", text: "Join my call on Juntos", url });
+      await navigator.share({ title: t("Join my call"), text: t("Join my call on Juntos"), url });
       return;
     } catch (_) {}
   }
   try {
     await navigator.clipboard.writeText(url);
-    toast("Link copied. Send it to anyone.");
+    toast(t("Link copied. Send it to anyone."));
   } catch (_) {
-    prompt("Copy this link:", url);
+    prompt(t("Copy this link:"), url);
   }
 };
 
