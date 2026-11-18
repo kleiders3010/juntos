@@ -1,0 +1,10 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.jurisgames.juntos",
+    "sha256_cert_fingerprints": [
+      "BF:5E:00:28:A7:C8:6F:41:1A:81:F3:25:04:0F:2B:FE:9B:DD:B5:C9:EA:AF:74:35:9A:13:93:8E:36:54:EA:E5"
+    ]
+  }
+}]
