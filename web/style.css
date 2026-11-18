@@ -87,12 +87,33 @@ a { color: #93c5fd; }
 @media (hover: hover) { .fsBtn { opacity: 0; transition: opacity .15s; } .tile:hover .fsBtn, .tile.spot .fsBtn { opacity: .9; } }
 .tile.tapToPlay::before { content: "Tap to hear"; position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.5); z-index: 2; }
 /* one person full screen, the rest small in a column on the right */
-.grid.hasSpot { display: block; position: relative; }
-.grid.hasSpot .tile.spot { position: absolute; inset: 0; height: 100%; aspect-ratio: auto; }
+.grid { position: relative; }
+.grid[data-mode="tiled"].hasSpot { display: block; position: relative; }
+.grid[data-mode="tiled"].hasSpot .tile.spot { position: absolute; inset: 0; height: 100%; aspect-ratio: auto; }
 .tile.spot video { object-fit: contain; }
-.grid.hasSpot .tile:not(.spot) { position: absolute; right: 8px; width: 168px; height: 104px; aspect-ratio: auto; z-index: 4; bottom: calc(8px + var(--i, 0) * 112px); box-shadow: 0 2px 10px rgba(0,0,0,.5); }
-.grid.hasSpot .tile:not(.spot) .fsBtn { width: 30px; height: 30px; opacity: .9; }
-.grid.hasSpot .tile:not(.spot) .label { font-size: 12px; padding: 1px 6px; }
+.grid[data-mode="tiled"].hasSpot .tile:not(.spot) { position: absolute; right: 8px; width: 168px; height: 104px; aspect-ratio: auto; z-index: 4; bottom: calc(8px + var(--i, 0) * 112px); box-shadow: 0 2px 10px rgba(0,0,0,.5); }
+.grid[data-mode="tiled"].hasSpot .tile:not(.spot) .fsBtn { width: 30px; height: 30px; opacity: .9; }
+.grid[data-mode="tiled"].hasSpot .tile:not(.spot) .label {
+}
+/* layouts: spotlight (one big), sidebar (one big, the others in a column / a row), own picture small or hidden */
+.tile.off { display: none !important; }
+.grid[data-mode="spotlight"], .grid[data-mode="sidebar"] { display: block; }
+.grid[data-mode="spotlight"] .tile.main, .grid[data-mode="sidebar"] .tile.main { position: absolute; inset: 0; width: auto; height: auto; aspect-ratio: auto; max-height: none; margin: 0; }
+.grid .tile.main video { object-fit: contain; }
+.grid[data-mode="sidebar"] .tile.main { right: calc(var(--tw) + 10px); }
+.grid[data-mode="sidebar"].tall .tile.main { right: 0; bottom: calc(var(--th) + 8px); }
+.grid[data-mode="sidebar"] .tile:not(.main):not(.floatMe) { position: absolute; right: 0; top: calc(var(--i, 0) * (var(--th) + 8px)); width: var(--tw); height: var(--th); aspect-ratio: auto; margin: 0; }
+.grid[data-mode="sidebar"].tall .tile:not(.main):not(.floatMe) { top: auto; bottom: 0; right: auto; left: calc(var(--i, 0) * (var(--tw) + 6px)); }
+.grid[data-mode="sidebar"] .tile:not(.main) .label { font-size: 12px; padding: 1px 6px; }
+.grid[data-mode="sidebar"] .tile:not(.main) .volBtn { display: none; }
+.grid .tile.floatMe { position: absolute; right: 12px; bottom: 12px; width: 200px; height: 113px; aspect-ratio: auto; margin: 0; z-index: 5; box-shadow: 0 2px 12px rgba(0,0,0,.55); }
+.grid[data-mode="sidebar"]:not(.tall) .tile.floatMe { right: calc(var(--tw) + 22px); }
+.grid[data-mode="sidebar"].tall .tile.floatMe { bottom: calc(var(--th) + 20px); }
+.grid .tile.floatMe .label { font-size: 12px; padding: 1px 6px; }
+.seg.three { grid-template-columns: 1fr 1fr 1fr; }
+.seg button small:empty { display: none; }
+@media (max-width: 640px) { .grid .tile.floatMe { width: 90px; height: 120px; } }
+.grid[data-mode="tiled"].hasSpot .tile:not(.spot) .label { font-size: 12px; padding: 1px 6px; }
 .float { position: absolute; bottom: 40px; left: 50%; font-size: 44px; animation: up 2.6s ease-out forwards; pointer-events: none; }
 @keyframes up { from { transform: translate(-50%, 0); opacity: 1; } to { transform: translate(-50%, -160px); opacity: 0; } }
 

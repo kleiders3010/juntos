@@ -40,6 +40,7 @@ const ICON = {
   eraser: "M16.24 3.56l4.95 4.94a2 2 0 0 1 0 2.83L12 20.53A5 5 0 0 1 8.46 22H4.5l-2.12-2.12a2 2 0 0 1 0-2.83L13.4 3.56a2 2 0 0 1 2.84 0zM4.22 15.58l3.54 3.53a3 3 0 0 0 4.24 0l3.53-3.53-4.95-4.95-6.36 6.36z",
   hand: "M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.08 0-2.1-.43-2.85-1.19L1 14.83s1.26-1.23 1.3-1.25c.22-.19.49-.29.79-.29.22 0 .42.06.6.16.04.01 4.31 2.46 4.31 2.46V4c0-.83.67-1.5 1.5-1.5S11 3.17 11 4v7h1V1.5c0-.83.67-1.5 1.5-1.5S15 .67 15 1.5V11h1V2.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5V11h1V5.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5z",
   undo: "M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z",
+  layout: "M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z",
   fullExit: "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z",
 };
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
@@ -375,6 +376,7 @@ function onMessage(from, m) {
       tile.classList.toggle("muted", !m.mic);
       tile.classList.toggle("camoff", !m.cam);
       tile.classList.toggle("screen", !!m.screen);
+      layout();
     }
     if (m.hand !== undefined) setHand(from, m.hand, who, true);
   } else if (m.k === "hand") {
@@ -608,23 +610,177 @@ function watchVoice(tile, stream) {
       an.getByteTimeDomainData(buf);
       let sum = 0;
       for (const b of buf) sum += (b - 128) ** 2;
-      tile.classList.toggle("speaking", Math.sqrt(sum / buf.length) > 6);
+      const loud = Math.sqrt(sum / buf.length) > 6;
+      tile.classList.toggle("speaking", loud);
+      // a running measure of talking (for spotlight / sidebar): up while talking, slowly down after
+      tile.talk = Math.max(0, Math.min(3000, (tile.talk || 0) + (loud ? 150 : -75)));
       setTimeout(tick, 150);
     };
     tick();
   } catch (_) {}
 }
 
+// ---------- layouts (like Meet: auto, tiled, spotlight, sidebar), only for this device ----------
+// auto = everyone the same size, and a shared screen big with the people beside it.
+// Remembered: { layout, hideNoVideo, self: "grid" | "float" | "hide" }.
+const VIEW_DEFAULT = { layout: "auto", hideNoVideo: false, self: "grid" };
+S.view = { ...VIEW_DEFAULT, ...(JSON.parse(localStorage.getItem("juntos.view") || "null") || {}) };
+function saveView() {
+  localStorage.setItem("juntos.view", JSON.stringify(S.view));
+  layout();
+}
+
+// who leads spotlight / sidebar: someone pinned, a shared screen, else whoever talks (switching only
+// after a clear turn, so the picture doesn't jump at every "mm-hm")
+S.speaker = null;
+S.speakerAt = 0;
+setInterval(() => {
+  const g = $("grid");
+  if (!g || !["spotlight", "sidebar"].includes(g.dataset.mode)) return;
+  const others = [...g.children].filter((x) => x.dataset.id !== "me");
+  const best = others.reduce((a, x) => ((x.talk || 0) > (a?.talk || 0) ? x : a), null);
+  const cur = S.speaker?.isConnected ? S.speaker : null;
+  if (best && best !== cur && (best.talk || 0) >= 600 && (cur?.talk || 0) < 300 && Date.now() - S.speakerAt > 2000) {
+    S.speaker = best;
+    S.speakerAt = Date.now();
+    layout();
+  }
+}, 300);
+
 function layout() {
-  const n = $("grid").children.length;
+  const g = $("grid");
+  const v = S.view;
+  const tiles = [...g.children];
+  const me = g.querySelector('.tile[data-id="me"]');
+  const alone = tiles.length <= 1;
+  const screen = tiles.find((x) => x.classList.contains("screen") && x.dataset.id !== "me");
+  let mode = v.layout === "auto" ? (screen ? "sidebar" : "tiled") : v.layout;
+  if (document.body.classList.contains("boardBig") || alone) mode = "tiled";
+  let main = null;
+  if (mode !== "tiled") {
+    const spoken = S.speaker?.isConnected && S.speaker.parentNode === g ? S.speaker : null;
+    main = g.querySelector(".tile.spot") || screen || spoken || tiles.find((x) => x.dataset.id !== "me") || me;
+  }
+  g.dataset.mode = mode;
+  for (const x of tiles) {
+    const isMe = x === me;
+    const float = isMe && v.self === "float" && !alone && x !== main;
+    const off =
+      !alone &&
+      x !== main &&
+      ((isMe && v.self === "hide") ||
+        (!isMe && v.hideNoVideo && x.classList.contains("camoff") && !x.classList.contains("screen")) ||
+        (mode === "spotlight" && !float));
+    x.classList.toggle("off", off);
+    x.classList.toggle("main", x === main);
+    x.classList.toggle("floatMe", float && !off);
+  }
+  const shown = tiles.filter((x) => !x.classList.contains("off") && !x.classList.contains("floatMe"));
+  const n = mode === "tiled" ? shown.length : 1;
   const wide = innerWidth > innerHeight;
   const cols = n <= 1 ? 1 : n <= 2 ? (wide ? 2 : 1) : n <= 4 ? 2 : n <= 9 ? 3 : 4;
-  $("grid").style.setProperty("--cols", cols);
+  g.style.setProperty("--cols", cols);
+  // sidebar: the others in a column on the right (a row at the bottom on a tall screen), sized to fit
+  const thumbs = shown.filter((x) => x !== main);
+  const k = Math.max(1, thumbs.length);
+  const W = g.clientWidth || innerWidth;
+  const H = g.clientHeight || innerHeight;
+  let th, tw;
+  if (wide) {
+    th = Math.max(48, Math.min(113, (H - 8 * (k - 1)) / k));
+    tw = Math.round(th * 16 / 9);
+  } else {
+    tw = Math.max(64, Math.min(120, (W - 6 * (k - 1)) / k));
+    th = Math.round(tw * 3 / 4);
+  }
+  g.style.setProperty("--tw", `${tw}px`);
+  g.style.setProperty("--th", `${th}px`);
+  g.classList.toggle("tall", !wide);
   let i = 0;
-  for (const tile of $("grid").children) if (!tile.classList.contains("spot")) tile.style.setProperty("--i", i++);
+  for (const tile of tiles) if (!tile.classList.contains("spot") && !tile.classList.contains("main")) tile.style.setProperty("--i", tile.classList.contains("off") || tile.classList.contains("floatMe") ? 0 : i++);
   let j = 0;
-  for (const tile of $("grid").children) tile.style.setProperty("--b", j++);
+  for (const tile of tiles) tile.style.setProperty("--b", j++);
 }
+
+function layoutSheet() {
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  const inner = document.createElement("div");
+  inner.className = "sheetInner devices recSheet layoutSheet";
+  const close = () => sheet.remove();
+  const h = document.createElement("h3");
+  h.textContent = t2("Layout");
+  inner.append(h);
+  const seg = (key, choices) => {
+    const box = document.createElement("div");
+    box.className = "seg";
+    box.dataset.key = key;
+    for (const [id, name, hint] of choices) {
+      const b = document.createElement("button");
+      b.dataset.v = id;
+      b.innerHTML = `<b></b><small></small>`;
+      b.firstChild.textContent = name;
+      b.lastChild.textContent = hint;
+      b.classList.toggle("on", S.view[key] === id);
+      b.onclick = () => {
+        S.view[key] = id;
+        for (const x of box.children) x.classList.toggle("on", x === b);
+        saveView();
+      };
+      box.append(b);
+    }
+    return box;
+  };
+  inner.append(
+    seg("layout", [
+      ["auto", t2("Auto"), t2("Everyone the same size; a shared screen big")],
+      ["tiled", t2("Tiled"), t2("Everyone the same size")],
+      ["spotlight", t2("Spotlight"), t2("Only who's talking (or a shared screen)")],
+      ["sidebar", t2("Sidebar"), t2("Who's talking big, the others beside")],
+    ]),
+  );
+  const p = document.createElement("p");
+  p.className = "small";
+  p.textContent = t2("Your own picture:");
+  inner.append(p);
+  const self = seg("self", [
+    ["grid", t2("With everyone"), ""],
+    ["float", t2("Small, in a corner"), ""],
+    ["hide", t2("Hidden"), t2("The others still see you")],
+  ]);
+  self.classList.add("three");
+  inner.append(self);
+  const l = document.createElement("label");
+  l.className = "check";
+  const c = document.createElement("input");
+  c.type = "checkbox";
+  c.name = "hideNoVideo";
+  c.checked = S.view.hideNoVideo;
+  c.onchange = () => {
+    S.view.hideNoVideo = c.checked;
+    saveView();
+  };
+  l.append(c, document.createTextNode(t2("Hide people with their camera off")));
+  inner.append(l);
+  const note = document.createElement("p");
+  note.className = "small";
+  note.textContent = t2("Only on this device. Pin someone with the button on their picture.");
+  inner.append(note);
+  const row = document.createElement("div");
+  row.className = "row2";
+  const done = document.createElement("button");
+  done.className = "primary";
+  done.textContent = t2("Done");
+  done.onclick = close;
+  row.append(done);
+  inner.append(row);
+  sheet.append(inner);
+  sheet.onclick = (e) => {
+    if (e.target === sheet) close(); // a block body: an onclick that returns false cancels the click
+  };
+  document.body.append(sheet);
+}
+
 addEventListener("resize", layout);
 document.addEventListener("click", (e) => {
   const t = e.target.closest(".tile.tapToPlay");
@@ -659,6 +815,7 @@ function buildBar() {
   extra.push(button("bBg", "bg", "Background", () => openPanel("bg")));
   extra.push(button("bDev", "gear", "Devices", openDevices));
   extra.push(button("bPeople", "people", "People", () => openPanel("people")));
+  extra.push(button("bLayout", "layout", "Layout", layoutSheet));
   if (Recorder.supported()) extra.push(button("bRec", "rec", "Record", toggleRec));
   const react = button("bReact", "more", "React", openReactions);
   react.innerHTML = `<b class="emoji">✋</b><span>${t("Hand / react")}</span>`;
@@ -898,8 +1055,7 @@ function setBoardBig(on) {
   $("boardMax").innerHTML = svg(on ? "fullExit" : "full");
   $("boardMax").title = t(on ? "Back to the side" : "Make the board big");
   if (on) for (const x of document.querySelectorAll(".tile.spot")) spotlight(x);
-  let i = 0;
-  for (const tile of $("grid").children) tile.style.setProperty("--b", i++);
+  layout(); // the big board puts everyone in the floating column, whatever the layout
   requestAnimationFrame(() => S.board?.resize());
 }
 
