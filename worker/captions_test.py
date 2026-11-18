@@ -153,6 +153,34 @@ with sync_playwright() as p:
     check(True, "a speech service that never answers: Eva's browser gives up and Beto is told")
     e.close()
 
+    # Never silently (Kleider, 2026-11-18: "There should be some kind of warning if your subtitles are unable to reach
+    # people for any reason rather than silently drop them"; Chrome on his phone sent none).
+    # Fay's phone can't listen while the call holds the mic ("audio-capture"): she sees why, Beto is told.
+    f = page("Fay", STUB.replace("start() { if (this.on) throw new Error(\"already started\"); this.on = true; __sr.push(this); }",
+                                 "start() { setTimeout(() => { this.onerror && this.onerror({ error: 'audio-capture' }); this.onend && this.onend(); }, 50); }"))
+    enter(f, "Fay", join)
+    o.wait_for_function("[...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Fay'))", timeout=30000)
+    check(f.evaluate("document.querySelector('#bCaps')?.classList.contains('warn')") is True, "Fay's captions button warns (it stays, not just a toast)")
+    f.click("#bCaps")
+    f.wait_for_selector(".capSheet")
+    check(f.is_visible(".capSheet .capWarn") and "call" in f.inner_text(".capSheet .capWarn"), "Fay's captions sheet says why: the device can't listen during the call")
+    f.click(".capSheet .primary")
+    f.close()
+
+    # Gus's browser listens but never makes text while he talks: after a while he is warned, and Beto told
+    g = page("Gus", STUB)
+    enter(g, "Gus", join)
+    g.wait_for_function("__sr.length === 1", timeout=10000)
+    g.evaluate("""() => { const ac = new AudioContext(), o = ac.createOscillator(), d = ac.createMediaStreamDestination(), gn = ac.createGain();
+      gn.gain.value = 0.3; o.connect(gn); gn.connect(d); o.start(); __S.micTrack = d.stream.getAudioTracks()[0]; }""")  # he keeps talking
+    check(g.wait_for_function("document.querySelector('#bCaps').classList.contains('warn')", timeout=25000) is not None, "talking with no text coming out: Gus is warned")
+    o.wait_for_function("[...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Gus'))", timeout=10000)
+    check(True, "and Beto is told Gus's captions aren't working")
+    g.evaluate("__say('now it works', true)")
+    g.wait_for_function("!document.querySelector('#bCaps').classList.contains('warn')", timeout=5000)
+    check(True, "the warning goes as soon as text comes out")
+    g.close()
+
     # Ana turns off captions of her voice
     a.click("#bCaps")
     a.uncheck('input[name="capShare"]')

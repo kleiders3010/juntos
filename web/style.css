@@ -464,3 +464,8 @@ body:has(#brBar:not([hidden])) .toasts { top: calc(var(--brH, 60px) + 24px); } /
 .people .passRow input { width: 9em; }
 .passLine { font-weight: 600; }
 #passcode { letter-spacing: .08em; }
+
+/* my captions can't reach anyone: a lasting mark on the button, the reason in the sheet */
+#bCaps.warn { box-shadow: 0 0 0 2px #f59e0b; }
+#bCaps.warn::after { content: "!"; position: absolute; top: -4px; right: -4px; width: 16px; height: 16px; border-radius: 50%; background: #f59e0b; color: #111; font: 700 11px/16px system-ui; text-align: center; }
+.capWarn { color: #fde68a; font-weight: 600; }

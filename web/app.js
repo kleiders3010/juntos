@@ -637,7 +637,7 @@ function onMessage(from, m) {
   } else if (m.k === "capwant") {
     capWanted(from, !!m.on, who);
   } else if (m.k === "capno") {
-    if (S.capsOn) showCap(from, who, m.why === "browser" ? t("(their browser can't make captions)") : t("(they turned off captions of their voice)"), true, true);
+    if (S.capsOn) showCap(from, who, m.why === "browser" ? t("(their browser can't make captions)") : m.why === "broken" ? t("(their captions aren't working on their device right now)") : t("(they turned off captions of their voice)"), true, true);
   } else if (m.k === "rec") {
     S.recBy ||= new Set();
     if (m.on) S.recBy.add(from);
@@ -925,6 +925,10 @@ function watchMe() {
       loud = Math.sqrt(sum / buf.length) > 6;
     }
     tile.classList.toggle("speaking", loud);
+    if (capOn && loud) {
+      capTalk += 150;
+      if (capTalk > 12000) capWarn("silent", false); // 12 s of talking and not one word of text
+    }
   }, 150);
 }
 
@@ -1874,18 +1878,43 @@ let capOn = false;
 let capFails = 0;
 let capToldMe = false;
 let capHeard = false; // this browser has turned speech into text at least once
+let capTalk = 0; // ms I've been talking, while captions listen, since the last text came out
 
-// this browser can't make captions after all: stop trying, and tell me and whoever wants mine
-function capGiveUp() {
-  SR = null;
-  capOn = false;
-  const r = capRec;
-  capRec = null;
-  try {
-    r?.abort();
-  } catch {}
-  toast(t("This browser can't turn your voice into text. Chrome, Edge or Firefox can."));
-  for (const id of S.capWant) S.mesh?.sendTo(id, { k: "capno", why: "browser" });
+// My captions can't reach anyone: never silently. A lasting warning on my captions button and in the captions
+// sheet says why, and whoever wants my captions is told. "stop": this browser can't do it at all (stop trying);
+// otherwise keep trying, and the warning goes away as soon as text comes out.
+const CAP_WHY = {
+  browser: "This browser can't turn your voice into text. Chrome, Edge or Firefox can.",
+  blocked: "This browser isn't allowed to turn your voice into text (check the microphone and speech permissions).",
+  mic: "This device can't listen for captions while it's in the call (phones often allow only one at a time).",
+  lang: "This browser can't make captions in the language you picked. Pick another under \"I speak\".",
+  silent: "You're talking but no captions come out of this browser, so the others don't get any.",
+};
+S.capBroken = "";
+function capWarn(why, stop) {
+  if (stop) {
+    SR = null;
+    capOn = false;
+    const r = capRec;
+    capRec = null;
+    try {
+      r?.abort();
+    } catch {}
+  }
+  if (S.capBroken !== why) {
+    S.capBroken = why;
+    toast(t(CAP_WHY[why]));
+    for (const id of S.capWant) S.mesh?.sendTo(id, { k: "capno", why: stop ? "browser" : "broken" });
+  }
+  paintCaps();
+}
+function capGiveUp(why = "browser") {
+  capWarn(why, true);
+}
+function capFixed() {
+  if (!S.capBroken) return;
+  S.capBroken = "";
+  paintCaps();
 }
 
 function capReset() {
@@ -1904,6 +1933,9 @@ function paintCaps() {
   box.className = `captions ${S.capSize}`;
   if (!S.capsOn) box.innerHTML = "";
   $("bCaps")?.classList.toggle("on", S.capsOn);
+  const warn = !!(S.capBroken && (S.capsOn || S.capWant.size)); // only matters while someone wants captions
+  $("bCaps")?.classList.toggle("warn", warn);
+  $("bCaps")?.setAttribute("title", warn ? t(CAP_WHY[S.capBroken]) : t("Captions"));
 }
 
 // listen to my own voice only while someone wants captions, my mic is on and I haven't turned it off
@@ -1912,6 +1944,7 @@ function capSync() {
   if (need === capOn) return;
   capOn = need;
   capFails = 0;
+  capTalk = 0;
   if (need) capStart();
   else if (capRec) {
     const r = capRec;
@@ -1932,6 +1965,8 @@ function capStart() {
   r.onresult = (e) => {
     capFails = 0;
     capHeard = true;
+    capTalk = 0;
+    capFixed();
     let fin = "";
     let now = "";
     for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -1942,10 +1977,13 @@ function capStart() {
     if (now.trim()) capSend(now.trim(), false);
   };
   r.onerror = (e) => {
-    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "language-not-supported") capGiveUp();
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") capGiveUp("blocked");
+    else if (e.error === "language-not-supported") capWarn("lang", false);
     else if (e.error !== "no-speech" && e.error !== "aborted") {
       capFails++;
-      if (e.error === "network" && capFails >= 3 && !capHeard) capGiveUp(); // the speech service never answers here
+      // keeps failing and has never made text here: say so (the call holding the mic on phones, a speech service
+      // that never answers, ...)
+      if (capFails >= 3 && !capHeard) capGiveUp(e.error === "audio-capture" ? "mic" : "browser");
     }
   };
   // the browser stops listening now and then (silence, a time limit): start again while still wanted
@@ -1973,6 +2011,7 @@ function capWanted(from, on, who) {
   if (on) {
     S.capWant.add(from);
     if (!SR || !S.capShare) S.mesh.sendTo(from, { k: "capno", why: SR ? "off" : "browser" });
+    else if (S.capBroken) S.mesh.sendTo(from, { k: "capno", why: "broken" });
     else if (!capToldMe) {
       capToldMe = true;
       toast(t("{name} turned on captions: your browser turns what you say into text", { name: who }));
@@ -2219,6 +2258,12 @@ function captionsSheet() {
   sl.className = "small";
   sl.textContent = t("Text size");
   inner.append(sl, size);
+  if (S.capBroken) {
+    const w = document.createElement("p");
+    w.className = "small capWarn";
+    w.textContent = t(CAP_WHY[S.capBroken]);
+    inner.append(w);
+  }
   if (SR) {
     const ll = document.createElement("p");
     ll.className = "small";
@@ -2252,7 +2297,7 @@ function captionsSheet() {
       if (!on) for (const id of S.capWant) S.mesh?.sendTo(id, { k: "capno", why: "off" });
       capSync();
     });
-  } else {
+  } else if (!S.capBroken) {
     const p = document.createElement("p");
     p.className = "small";
     p.textContent = IS_BRAVE
