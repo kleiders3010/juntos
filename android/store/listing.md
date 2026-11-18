@@ -7,7 +7,7 @@ Full:
 Juntos makes video calls simple. Tap "Start a call", send the link, and everyone joins: no account, no sign-up, no time limit.
 
 What you can do
-• Group video calls with up to 12 people
+• Group video calls with up to 16 people
 • Chat while you talk
 • A shared board to draw and explain things
 • Blur or replace your background
@@ -33,7 +33,7 @@ Full:
 Juntos hace que las videollamadas sean simples. Tocá "Iniciar una llamada", mandá el enlace y todos entran: sin cuenta, sin registrarse, sin límite de tiempo.
 
 Qué podés hacer
-• Videollamadas grupales de hasta 12 personas
+• Videollamadas grupales de hasta 16 personas
 • Chatear mientras hablan
 • Una pizarra compartida para dibujar y explicar
 • Desenfocar o cambiar tu fondo

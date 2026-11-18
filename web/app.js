@@ -332,6 +332,8 @@ function setMic(on) {
 }
 
 async function setCam(on) {
+  // a camera that stopped (unplugged, taken by another app) is opened again when turned back on
+  if (on && S.camTrack && S.camTrack.readyState === "ended" && !(await useCamera(camConstraints(localStorage.getItem("camId"))))) return;
   S.cam = on;
   if (S.camTrack) S.camTrack.enabled = on;
   refreshLocalVideo();
@@ -663,6 +665,7 @@ function buildGrid() {
   const v = grid.querySelector('.tile[data-id="me"] video');
   v.muted = true;
   watchMe();
+  watchDevices();
   refreshLocalVideo();
   paintToggles();
   layout();
@@ -950,6 +953,7 @@ function watchVoice(tile, stream) {
       for (const b of buf) sum += (b - 128) ** 2;
       const loud = Math.sqrt(sum / buf.length) > 6;
       tile.classList.toggle("speaking", loud);
+      if (loud) tile.spokeAt = Date.now(); // big calls show the video of who spoke last
       // a running measure of talking (for spotlight / sidebar): up while talking, slowly down after
       tile.talk = Math.max(0, Math.min(3000, (tile.talk || 0) + (loud ? 150 : -75)));
       setTimeout(tick, 150);
@@ -2473,6 +2477,30 @@ async function useMic(id) {
     toast(t("Couldn't switch microphone"));
     return false;
   }
+}
+
+// A microphone or camera can stop in the middle of a call (a headset unplugged, Bluetooth dropping, another app
+// taking it, the system ending it): nobody hears or sees me any more, while my buttons still say "on". Seen in a
+// big-call test, where every connection kept sending a microphone that had ended. The microphone is opened
+// again (the one picked in Devices, else any); a camera that stopped is turned off, with a note either way.
+function watchDevices() {
+  clearInterval(watchDevices.timer);
+  watchDevices.timer = setInterval(async () => {
+    if (!S.mesh || S.mesh.closed || watchDevices.busy) return;
+    watchDevices.busy = true;
+    try {
+      if (S.micTrack && S.micTrack.readyState === "ended") {
+        const ok = await useMic(localStorage.getItem("micId") || "");
+        toast(ok && S.micTrack?.readyState === "live" ? t("Your microphone stopped. It's back: {name}", { name: S.micTrack.label || t("Microphone") }) : t("Your microphone stopped working. Check it, or pick another in Devices"));
+      }
+      if (S.camTrack && S.camTrack.readyState === "ended" && S.cam) {
+        await setCam(false);
+        toast(t("Your camera stopped, so it's off now. Turn it on to try again"));
+      }
+    } finally {
+      watchDevices.busy = false;
+    }
+  }, 2000);
 }
 
 // where the others' voices come out (computers and Android; iPhones choose it in the system)

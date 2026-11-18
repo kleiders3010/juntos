@@ -1,0 +1,73 @@
+# A microphone or camera that stops in the middle of a call (unplugged, Bluetooth gone, another app took it) is
+# not left silently dead: the microphone is opened again and sent to everyone, a stopped camera is turned off with
+# a note, and turning it on opens it again. (Found by big_test.py: a microphone had ended and every connection
+# kept sending it, so nobody heard that person.)
+# Run: python device_test.py [base-url]
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
+from playwright.sync_api import sync_playwright
+
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+WS = BASE.replace("http", "ws", 1)
+ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
+SENT = "() => [...__S.mesh.peers.values()].map(p => p.audio && p.audio.sender.track ? p.audio.sender.track.readyState : 'none')"
+errors = []
+
+
+def check(ok, what):
+    print(("ok   " if ok else "FAIL ") + what, flush=True)
+    if not ok:
+        errors.append(what)
+
+
+with sync_playwright() as p:
+    b = p.chromium.launch(headless=True, channel="msedge", args=ARGS)
+
+    def page(name):
+        pg = b.new_context(locale="en-US", permissions=["camera", "microphone"]).new_page()
+        pg.on("pageerror", lambda e: errors.append(f"pageerror ({name}): {e}"))
+        return pg
+
+    a = page("Ana")
+    a.goto(f"{BASE}/?signal={WS}")
+    a.click("#start")
+    a.wait_for_selector("#lobby:not([hidden])")
+    a.fill("#name", "Ana")
+    a.click("#enter")
+    a.wait_for_selector("#call:not([hidden])")
+    o = page("Beto")
+    o.goto(f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}")
+    o.fill("#name", "Beto")
+    o.click("#enter")
+    o.wait_for_selector("#call:not([hidden])")
+    a.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.pc.connectionState === 'connected')", timeout=30000)
+
+    # the microphone stops by itself (what unplugging does to the track)
+    a.evaluate("__S.micTrack.stop()")
+    try:
+        a.wait_for_function("__S.micTrack && __S.micTrack.readyState === 'live'", timeout=6000)
+    except Exception:
+        pass
+    check(a.evaluate("__S.micTrack.readyState") == "live", "a microphone that stopped is opened again")  # pinned: MediaStreamTrack state name
+    check(all(x == "live" for x in a.evaluate(SENT)), f"and sent to everyone again ({a.evaluate(SENT)})")  # pinned: MediaStreamTrack state name
+    check(a.evaluate("[...document.querySelectorAll('#toasts .toast')].length") > 0, "with a note saying so")
+    check(a.evaluate("__S.mic"), "the microphone stays on (it was on)")
+
+    # the camera stops by itself
+    a.evaluate("__S.camTrack.stop()")
+    try:
+        a.wait_for_function("!__S.cam", timeout=6000)
+    except Exception:
+        pass
+    check(not a.evaluate("__S.cam"), "a camera that stopped is turned off")
+    a.click("#bCam")
+    try:
+        a.wait_for_function("__S.cam && __S.camTrack.readyState === 'live'", timeout=6000)
+    except Exception:
+        pass
+    check(a.evaluate("__S.cam && __S.camTrack.readyState === 'live'"), "turning it on opens it again")  # pinned: MediaStreamTrack state name
+    b.close()
+
+print("errors:", errors)
+print("OK" if not errors else "FAILED")
+sys.exit(1 if errors else 0)

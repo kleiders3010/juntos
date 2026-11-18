@@ -1,3 +1,4 @@
+import { VIDEO_CAP } from "./net.js";
 // Direct (mesh) WebRTC between everyone in a room. The signaling server only passes handshakes;
 // audio, video, chat and the board go device to device.
 //
@@ -50,6 +51,7 @@ export class Mesh extends EventTarget {
       if (this.closed) return;
       // The signaling link only matters for new handshakes; calls in progress go on.
       this.emit("signal-lost");
+      this.lost = (this.lost || 0) + 1;
       const wait = Math.min(15000, 1000 * 2 ** (this.tries = (this.tries || 0) + 1));
       setTimeout(() => !this.closed && this.reconnect(), wait);
     };
@@ -89,7 +91,20 @@ export class Mesh extends EventTarget {
     } else if (m.t === "full") {
       this.emit("full", { max: m.max });
     } else if (m.t === "signal") {
-      this.onPeerSignal(m.from, m.data);
+      // one person's handshake messages are handled in order (an answer or a candidate must not overtake
+      // the offer it belongs to); a failure is logged instead of silently leaving a half-made connection
+      const q = (this.queues ||= new Map());
+      // counts only, kept on this device (tests read them): which handshake messages came from whom
+      const c = ((this.sigIn ||= {})[m.from] ||= { offer: 0, answer: 0, ice: 0, done: 0 });
+      c[m.data && m.data.sdp ? m.data.sdp.type : "ice"]++;
+      // a step on a connection that was closed meanwhile never finishes (that's how the WebRTC spec has it):
+      // after a few seconds the next message goes ahead anyway, so it can't hold up everything from this person
+      const step = () => Promise.race([this.onPeerSignal(m.from, m.data), new Promise((r) => setTimeout(r, 4000))]);
+      const next = (q.get(m.from) || Promise.resolve()).then(step).catch((e) => {
+        console.warn("juntos: handshake", m.from, e && e.message);
+        this.emit("signal-error", { id: m.from, error: String((e && e.name) || e) });
+      });
+      q.set(m.from, next.then(() => c.done++));
     }
   }
 
@@ -99,12 +114,15 @@ export class Mesh extends EventTarget {
     // once a relay was needed in this call, new connections include it from the start
     const pc = new RTCPeerConnection({ iceServers: this.relayList ? [...ICE, ...this.relayList] : ICE });
     const dc = pc.createDataChannel("juntos", { negotiated: true, id: 0 });
-    p = { id, pc, dc, name: name || "", stream: new MediaStream(), audio: null, video: null, state: "connecting" };
+    // cid: this connection's own id; rcid: the id of their end of it. Every handshake message carries both, so
+    // a late answer or candidate meant for an older connection between the same two people is dropped instead
+    // of being applied to the new one (which left connections stuck half-made in big calls).
+    p = { id, pc, dc, name: name || "", stream: new MediaStream(), audio: null, video: null, state: "connecting", cid: randomId(), rcid: null };
     this.peers.set(id, p);
     // No direct connection within a few seconds (mobile networks often block it): try the relay now
     // instead of waiting the half minute a browser takes to give up.
     p.timer = setTimeout(() => p.state !== "connected" && this.viaRelay(p), 6000);
-    pc.onicecandidate = (e) => e.candidate && this.sendSignal({ t: "signal", to: id, data: { ice: e.candidate } });
+    pc.onicecandidate = (e) => e.candidate && this.sendSignal({ t: "signal", to: id, data: { ice: e.candidate, cid: p.cid, for: p.rcid } });
     pc.ontrack = (e) => {
       if (!p.stream.getTracks().includes(e.track)) p.stream.addTrack(e.track);
       this.emit("peer", { id });
@@ -133,7 +151,7 @@ export class Mesh extends EventTarget {
       if (!p.offerer) return;
       await pc.setLocalDescription();
       // the first offer of a connection says so: the other side drops any old, broken one it still holds
-      this.sendSignal({ t: "signal", to: id, data: { sdp: pc.localDescription, name: this.name, fresh: !p.offered } });
+      this.sendSignal({ t: "signal", to: id, data: { sdp: pc.localDescription, name: this.name, fresh: !p.offered, cid: p.cid, for: p.rcid } });
       p.offered = true;
     };
     dc.onopen = () => this.emit("channel-open", { id });
@@ -176,6 +194,16 @@ export class Mesh extends EventTarget {
 
   giveUp(p) {
     if (this.peers.get(p.id) !== p || p.state === "connected") return;
+    // A connection can also stick half-way (one side's checks done, the other's not; seen in big calls
+    // with many joining at once): before showing "Try again", the side that called starts a brand-new
+    // connection by itself, twice at most. The other side drops its stuck one when the fresh offer arrives.
+    const tries = p.autoRetries || 0;
+    if (p.offerer && tries < 2 && !this.closed) {
+      this.retry(p.id);
+      const q = this.peers.get(p.id);
+      if (q) q.autoRetries = tries + 1;
+      return;
+    }
     p.gaveUp = true;
     p.relaying = false;
     this.emit("peer", { id: p.id });
@@ -213,7 +241,9 @@ export class Mesh extends EventTarget {
 
   async onPeerSignal(from, data) {
     let p = this.peers.get(from);
-    if (data.sdp && data.sdp.type === "offer" && data.fresh && p) {
+    // an offer from another connection of theirs than the one we hold is a new connection too
+    const other = !!(p && data.cid && p.rcid && data.cid !== p.rcid);
+    if (data.sdp && data.sdp.type === "offer" && (data.fresh || other) && p) {
       // A new connection from them while we still hold an old one: theirs replaces ours (their side of
       // it is gone). Only if both of us are setting up a first connection at the same moment does the
       // lower id win.
@@ -221,8 +251,13 @@ export class Mesh extends EventTarget {
       this.forget(p);
       p = null;
     }
+    if (data.sdp && data.sdp.type === "answer") {
+      // an answer only belongs to the offer this connection is waiting on
+      if (!p || (data.for && data.for !== p.cid) || p.pc.signalingState !== "have-local-offer") return;
+    }
     if (data.sdp) {
       if (!p) p = this.peer(from, data.name);
+      if (data.cid) p.rcid = data.cid;
       if (data.name) p.name = data.name;
       await p.pc.setRemoteDescription(data.sdp);
       if (data.sdp.type === "offer") {
@@ -233,14 +268,15 @@ export class Mesh extends EventTarget {
         if (p.audio && this.audioTrack && this.route(from)) await p.audio.sender.replaceTrack(this.audioTrack);
         if (p.video && this.videoTrack && this.route(from)) await p.video.sender.replaceTrack(this.videoTrack);
         await p.pc.setLocalDescription();
-        this.sendSignal({ t: "signal", to: from, data: { sdp: p.pc.localDescription, name: this.name } });
+        this.sendSignal({ t: "signal", to: from, data: { sdp: p.pc.localDescription, name: this.name, cid: p.cid, for: p.rcid } });
         this.tune(p);
       }
-      for (const c of p.pending || []) await p.pc.addIceCandidate(c).catch(() => {});
+      for (const c of p.pending || []) if (!c.cid || c.cid === p.rcid) await p.pc.addIceCandidate(c.ice).catch(() => {});
       p.pending = null;
       this.emit("peer", { id: from });
     } else if (data.ice && p) {
-      if (!p.pc.remoteDescription) (p.pending ||= []).push(data.ice);
+      if ((data.for && data.for !== p.cid) || (data.cid && p.rcid && data.cid !== p.rcid)) return; // for an older connection
+      if (!p.pc.remoteDescription) (p.pending ||= []).push(data);
       else await p.pc.addIceCandidate(data.ice).catch(() => {});
     }
   }
@@ -252,7 +288,7 @@ export class Mesh extends EventTarget {
   tune(p) {
     // only the people I send to count (in a breakout room, the room)
     const n = Math.max(1, [...this.peers.keys()].filter((id) => this.route(id)).length);
-    let kbps = n <= 2 ? 1500 : n <= 4 ? 800 : n <= 7 ? 450 : 250;
+    let kbps = n <= 2 ? 1500 : n <= 4 ? 800 : n <= 7 ? 450 : n <= 12 ? 250 : 150;
     let h = 720;
     let fps = 30;
     const cap = this.cap;
@@ -261,7 +297,9 @@ export class Mesh extends EventTarget {
       h = Math.min(h, cap.h);
       fps = Math.min(fps, cap.fps);
     }
-    const want = p.want || "high";
+    // until the viewer says what they need: full picture in a small call; none in a big one, where most
+    // pictures are names (the video cap), so joining doesn't start a burst of full-size videos to everyone
+    const want = p.want || (n > VIDEO_CAP ? "off" : "high");
     if (want === "mid") {
       kbps = Math.min(kbps, 500);
       h = Math.min(h, 360);

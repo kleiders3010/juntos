@@ -17,6 +17,11 @@ export const QUALITIES = ["auto", "saver", "audio"];
 const SAVER_CAP = { kbps: 300, h: 360, fps: 24 };
 const WEAK_CAP = { kbps: 250, h: 360, fps: 15 };
 const VERY_WEAK_CAP = { kbps: 100, h: 180, fps: 10 };
+// Big calls: everyone is heard, but only this many others send me video at once: the pinned / big picture or a
+// shared screen first, then whoever spoke last (like Zoom's "active speakers" and Meet's tile limit). The others
+// show their name; tapping one makes it the big picture. Each video I get is one more stream to download and
+// decode, and on a direct (mesh) call one more upload for its sender, so this is what lets a call grow.
+export const VIDEO_CAP = 9;
 
 /** 1-4 bars from a round trip (ms), lost packets (%) and jitter (ms); 0 when not known yet. */
 export function barsFor(rtt, loss, jitter) {
@@ -236,6 +241,7 @@ export class Net {
     const tiles = [...g.querySelectorAll(".tile[data-id]")].filter((x) => x.dataset.id !== "me");
     const focus = few && !none ? this.focus(g, tiles) : null;
     const hidden = document.visibilityState === "hidden";
+    const plan = [];
     for (const tile of tiles) {
       const id = tile.dataset.id;
       let q;
@@ -258,10 +264,22 @@ export class Net {
         const big = Math.min(r.height, (r.width * 9) / 16);
         q = big >= 360 || tile.classList.contains("main") || tile.classList.contains("spot") ? "high" : big >= 160 ? "mid" : "low";
       }
+      plan.push({ tile, id, q, paused, why: none ? (pref === "audio" ? "Audio only" : "Video paused: weak connection") : "Video paused to save data. Tap to see it" });
+    }
+    // the video cap of big calls: the first VIDEO_CAP that would get video keep it, the rest show their name
+    const rank = (x) => (x.classList.contains("spot") || x.classList.contains("main") || x.classList.contains("screen") ? 1e15 : 0) + (x.spokeAt || 0);
+    const video = plan.filter((x) => x.q !== "off" && !x.tile.classList.contains("camoff")).sort((a, b) => rank(b.tile) - rank(a.tile));
+    for (const x of video.slice(VIDEO_CAP)) {
+      x.q = "off";
+      x.paused = true;
+      x.why = "Big call: showing who spoke last. Tap to see it";
+    }
+    for (const { tile, id, q, paused: pz, why } of plan) {
+      let paused = pz;
       const p = mesh.peers.get(id);
       if (!p || p.state !== "connected") paused = false; // "Connecting…" says enough
       tile.classList.toggle("paused", paused && !tile.classList.contains("camoff"));
-      if (paused) tile.dataset.paused = this.o.t(none ? (pref === "audio" ? "Audio only" : "Video paused: weak connection") : "Video paused to save data. Tap to see it");
+      if (paused) tile.dataset.paused = this.o.t(why);
       if (tile.wantSent !== q) {
         if (p && p.dc.readyState === "open") {
           mesh.sendTo(id, { k: "want", q });

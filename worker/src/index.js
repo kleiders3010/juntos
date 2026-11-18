@@ -3,7 +3,7 @@
 // The room keeps no history and no names once everyone has left; only a hash of the host's key,
 // the lock and a hash of the passcode (if the host set one), forgotten a month after the room was last used.
 
-const MAX_PEOPLE = 12; // a direct mesh beyond this asks too much of phones
+const MAX_PEOPLE = 16; // tested: big_test.py 16 people (everyone hears everyone, video cap 9); a direct mesh past this asks too much of phones
 const MAX_MSG = 64 * 1024;
 const ROOM_KEEP = 31 * 24 * 3600 * 1000; // a room's host and lock are forgotten a month after its last use
 const HOST_CMDS = new Set(["lock", "admit", "admit-all", "deny", "remove", "mute", "pass"]);
