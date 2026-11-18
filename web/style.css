@@ -451,3 +451,16 @@ body:has(#brBar:not([hidden])) .toasts { top: calc(var(--brH, 60px) + 24px); } /
 .qualityBox { display: flex; flex-direction: column; gap: 6px; }
 .qualityBox .seg button { padding: 10px; }
 .netPop { gap: 2px; }
+/* who can join a new call: ask to join, a passcode */
+.startOpts { width: min(340px, 100%); color: var(--muted); font-size: 14px; }
+.startOpts summary { cursor: pointer; text-align: center; padding: 4px; list-style-position: inside; }
+.startOpts[open] summary { color: var(--fg); }
+.startOpts .secure { text-align: left; padding: 6px 4px 0; }
+.secure .check { font-size: 15px; }
+.secure .passRow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.secure input[name="pass"] { width: 9.5em; font-size: 16px; letter-spacing: .08em; }
+.schedForm .secure { border-top: 1px solid #374151; padding-top: 8px; }
+.people .passRow { align-items: center; }
+.people .passRow input { width: 9em; }
+.passLine { font-weight: 600; }
+#passcode { letter-spacing: .08em; }

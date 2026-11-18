@@ -1,12 +1,20 @@
 // Juntos signaling: one Durable Object per room relays WebRTC handshakes between the people in it.
 // Media, chat and the board never pass through here: they go device to device (WebRTC).
-// The room keeps no history and no names once everyone has left; only a hash of the host's key and
-// the lock, forgotten a month after the room was last used.
+// The room keeps no history and no names once everyone has left; only a hash of the host's key,
+// the lock and a hash of the passcode (if the host set one), forgotten a month after the room was last used.
 
 const MAX_PEOPLE = 12; // a direct mesh beyond this asks too much of phones
 const MAX_MSG = 64 * 1024;
 const ROOM_KEEP = 31 * 24 * 3600 * 1000; // a room's host and lock are forgotten a month after its last use
-const HOST_CMDS = new Set(["lock", "admit", "deny", "remove", "mute"]);
+const HOST_CMDS = new Set(["lock", "admit", "admit-all", "deny", "remove", "mute", "pass"]);
+// A passcode, like Zoom's: 4 to 10 letters or numbers (case matters). Wrong tries are limited per network.
+const PASS_RE = /^[A-Za-z0-9]{4,10}$/;
+const PASS_TRIES = 5; // wrong passcodes in a row from one network ...
+const PASS_WAIT = 60 * 1000; // ... then it waits this long
+
+async function passHash(room, pass) {
+  return sha("pass|" + room + "|" + pass);
+}
 
 async function sha(text) {
   const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("juntos-host|" + text));
@@ -16,11 +24,16 @@ async function sha(text) {
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
-    const m = url.pathname.match(/^\/ws\/([a-z0-9-]{4,64})$/);
+    const m = url.pathname.match(/^\/(ws|info)\/([a-z0-9-]{4,64})$/);
     if (m) {
+      const room = env.ROOMS.get(env.ROOMS.idFromName(m[2]));
+      // the lobby asks whether a passcode is needed before joining (yes / no, nothing else)
+      if (m[1] === "info") return room.fetch("https://room/info");
       if (req.headers.get("Upgrade") !== "websocket") return new Response("expected a websocket", { status: 426 });
-      const id = env.ROOMS.idFromName(m[1]);
-      return env.ROOMS.get(id).fetch(req);
+      const h = new Headers(req.headers);
+      h.set("x-room", m[2]);
+      h.set("x-ip-key", await ipKey(req));
+      return room.fetch(new Request(req, { headers: h }));
     }
     if (url.pathname === "/health") return new Response("ok");
     if (url.pathname === "/turn") return turn(req, env);
@@ -90,7 +103,7 @@ export class Room {
     const others = this.peers().filter((p) => p.ws !== ws);
     ws.serializeAttachment({ id: a.id, name: a.name, host: !!a.host });
     this.send(ws, { t: "peers", peers: others.map((p) => ({ id: p.a.id, name: p.a.name, host: !!p.a.host })) });
-    this.send(ws, { t: "room", locked: !!this.locked, host: !!a.host });
+    this.send(ws, { t: "room", locked: !!this.locked, host: !!a.host, pass: !!this.hasPass });
     for (const p of others) this.send(p.ws, { t: "join", id: a.id, name: a.name, host: !!a.host });
   }
 
@@ -108,8 +121,13 @@ export class Room {
       await this.state.storage.setAlarm(Date.now() + 26 * 3600 * 1000);
       return Response.json({ granted: true, used: used + 1 });
     }
+    if (new URL(req.url).pathname === "/info") {
+      const pass = !!(await this.state.storage.get("pass"));
+      return Response.json({ pass }, { headers: { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" } });
+    }
     const pair = new WebSocketPair();
-    this.state.acceptWebSocket(pair[1]);
+    // the room's name (for the passcode hash) and a daily hash of the network (for the wrong-passcode limit)
+    this.state.acceptWebSocket(pair[1], [req.headers.get("x-room") || "", req.headers.get("x-ip-key") || "ip:none"]);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -149,6 +167,35 @@ export class Room {
         host = h === hostHash;
       }
       if (this.locked === undefined) this.locked = !!(await st.get("locked"));
+      const [room, net] = this.state.getTags(ws);
+      // the host's choices when starting the call (people ask to join, a passcode), only the first time
+      if (host && msg.claim && msg.opts && !(await st.get("opened"))) {
+        if (msg.opts.lock) await st.put("locked", (this.locked = true));
+        if (PASS_RE.test(msg.opts.pass || "")) await st.put("pass", await passHash(room, msg.opts.pass));
+      }
+      if (host) await st.put("opened", true);
+      // a passcode: everyone but the host types it (or has it in the link)
+      const passH = await st.get("pass");
+      if (passH && !host) {
+        this.tries ||= new Map();
+        const tr = this.tries.get(net) || { n: 0, until: 0 };
+        if (tr.until > Date.now()) {
+          this.send(ws, { t: "passcode", wait: Math.ceil((tr.until - Date.now()) / 1000) });
+          return ws.close(4003, "passcode");
+        }
+        const given = typeof msg.pass === "string" ? msg.pass.trim().slice(0, 10) : "";
+        if (!given || (await passHash(room, given)) !== passH) {
+          if (given) {
+            tr.n++;
+            if (tr.n >= PASS_TRIES) Object.assign(tr, { n: 0, until: Date.now() + PASS_WAIT });
+            this.tries.set(net, tr);
+          }
+          this.send(ws, { t: "passcode", wrong: !!given, wait: tr.until > Date.now() ? Math.ceil(PASS_WAIT / 1000) : 0 });
+          return ws.close(4003, "passcode");
+        }
+        this.tries.delete(net);
+      }
+      this.hasPass = !!passH;
       await st.put("seen", Date.now());
       await st.setAlarm(Date.now() + ROOM_KEEP);
       const hosts = this.hosts();
@@ -168,7 +215,7 @@ export class Room {
       return;
     }
     if (me.wait) return;
-    if (me.host && HOST_CMDS.has(msg.t)) return this.hostCmd(me, msg);
+    if (me.host && HOST_CMDS.has(msg.t)) return this.hostCmd(me, msg, ws);
     if (msg.t === "name") {
       const name = String(msg.name || "").slice(0, 60);
       ws.serializeAttachment({ ...me, name });
@@ -176,7 +223,7 @@ export class Room {
     }
   }
 
-  async hostCmd(me, msg) {
+  async hostCmd(me, msg, ws) {
     const all = this.peers(true);
     const target = all.find((p) => p.a.id === msg.id);
     if (msg.t === "lock") {
@@ -184,6 +231,21 @@ export class Room {
       await this.state.storage.put("locked", this.locked);
       for (const p of this.peers()) this.send(p.ws, { t: "lock", on: this.locked, by: me.name });
       if (!this.locked) for (const p of all) if (p.a.wait) this.admit(p.ws, p.a);
+    } else if (msg.t === "admit-all") {
+      // Zoom's "Admit all": everyone waiting right now
+      const waiting = all.filter((p) => p.a.wait);
+      for (const p of waiting) this.admit(p.ws, p.a);
+      for (const h of this.hosts()) for (const p of waiting) this.send(h.ws, { t: "knock-gone", id: p.a.id });
+    } else if (msg.t === "pass") {
+      // set, change or remove the passcode. Only its hash is kept; the people already in the call get the new
+      // one so their reconnects and invitations keep working.
+      const pass = typeof msg.pass === "string" ? msg.pass.trim() : "";
+      if (pass && !PASS_RE.test(pass)) return;
+      const [room] = this.state.getTags(ws);
+      if (pass) await this.state.storage.put("pass", await passHash(room, pass));
+      else await this.state.storage.delete("pass");
+      this.hasPass = !!pass;
+      for (const p of this.peers()) this.send(p.ws, { t: "pass", on: !!pass, pass, by: me.name });
     } else if (msg.t === "admit" && target?.a.wait) {
       this.admit(target.ws, target.a);
       for (const p of this.hosts()) this.send(p.ws, { t: "knock-gone", id: target.a.id });

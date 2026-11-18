@@ -7,7 +7,7 @@ import { Activities } from "./act.js";
 import { Breakout } from "./breakout.js";
 import { Notes } from "./notes.js";
 import { Annotate } from "./annotate.js";
-import { scheduleSheet, inviteSheet, paintUpcoming } from "./schedule.js";
+import { scheduleSheet, inviteSheet, paintUpcoming, securityFields, keepSecurity, passOf, callUrl, newPass, PASS_RE } from "./schedule.js";
 import { Net } from "./net.js";
 
 translatePage();
@@ -111,6 +111,14 @@ function route() {
   const m = location.pathname.match(/^\/r\/([a-z0-9-]{4,64})$/);
   if (m) {
     S.code = m[1];
+    // a link with the passcode in it (".../r/code#p=123456"): keep it, and take it off the address bar
+    const hp = location.hash.match(/^#p=([A-Za-z0-9]{4,10})$/);
+    if (hp) {
+      try {
+        localStorage.setItem(`juntos.pass.${S.code}`, hp[1]);
+      } catch {}
+      history.replaceState(history.state, "", `/r/${S.code}${location.search}`);
+    }
     openLobby();
   } else {
     show("home");
@@ -119,17 +127,41 @@ function route() {
 }
 window.addEventListener("popstate", route);
 
+// who can join a new call: everyone with the link (default), people ask to join, a passcode
+const startSec = securityFields(t);
+$("startOpts").append(startSec.box);
+const paintStartOpts = () => {
+  const v = { ask: startSec.box.querySelector('[name="ask"]').checked, pass: startSec.box.querySelector('[name="usePass"]').checked };
+  $("startOpts").querySelector("summary").textContent =
+    v.ask && v.pass ? t("Who can join: passcode, and they ask") : v.ask ? t("Who can join: people ask, you let them in") : v.pass ? t("Who can join: people with the passcode") : t("Who can join: anyone with the link");
+};
+startSec.box.addEventListener("change", paintStartOpts);
+paintStartOpts();
+if (startSec.box.querySelector('[name="ask"]').checked || startSec.box.querySelector('[name="usePass"]').checked) $("startOpts").open = true;
 $("start").onclick = () => {
+  const sec = startSec.value();
+  if (!sec) return ($("startOpts").open = true);
   const code = newCode();
   // who starts the call is its host (mute, remove, lock): a secret only this device keeps
   try {
     localStorage.setItem(`juntos.host.${code}`, randomId() + randomId());
   } catch {}
+  keepSecurity(code, sec);
   history.pushState({}, "", `/r/${code}`);
   route();
 };
 // planned calls: "Schedule for later" and the list of calls planned on this device
-const schedOpts = () => ({ t, toast, isPhone, newCode, hostKey: () => randomId() + randomId(), changed: () => paintUpcoming($("upcoming"), schedOpts()) });
+const schedOpts = () => ({ t, toast, isPhone, newCode, hostKey: () => randomId() + randomId(), claim: claimRoom, changed: () => paintUpcoming($("upcoming"), schedOpts()) });
+// A planned call with a passcode or "ask to join": its host claims the room right away (so the passcode holds before
+// the host arrives), then hangs up. Nobody else is in a room made a second ago.
+function claimRoom(code, key, opts) {
+  try {
+    const ws = new WebSocket(`${SIGNAL}/ws/${code}`);
+    ws.onopen = () => ws.send(JSON.stringify({ t: "hello", id: randomId(), name: "", key, claim: true, opts }));
+    ws.onmessage = (e) => JSON.parse(e.data).t === "room" && ws.close();
+    setTimeout(() => ws.close(), 15000);
+  } catch {}
+}
 $("schedule").onclick = () => scheduleSheet(schedOpts());
 $("joinForm").onsubmit = (e) => {
   e.preventDefault();
@@ -259,6 +291,7 @@ function paintToggles() {
 async function openLobby() {
   show("lobby");
   $("name").value = localStorage.getItem("name") || "";
+  askPass();
   $("pBg").innerHTML = svg("bg");
   $("pDev").innerHTML = svg("gear");
   if (!S.camStream) await (S.mediaReady ||= getMedia());
@@ -267,6 +300,41 @@ async function openLobby() {
   if (S.bgMode !== "none" && S.camTrack) applyBackground(S.bgMode);
   ($("name").value ? $("enter") : $("name")).focus();
   lobbyMeter();
+}
+// The lobby asks for the passcode only when the call has one (the host never types it). The answer is yes / no.
+async function askPass(msg) {
+  const box = $("passcode");
+  box.value = passOf(S.code);
+  if (msg) {
+    box.hidden = false;
+    $("lobbyMsg").textContent = msg;
+    return box.focus();
+  }
+  box.hidden = true;
+  if (localStorage.getItem(`juntos.host.${S.code}`)) return;
+  try {
+    const r = await (await fetch(`${SIGNAL.replace(/^ws/, "http")}/info/${S.code}`, { cache: "no-store" })).json();
+    box.hidden = !r.pass;
+    if (r.pass && !box.value) $("lobbyMsg").textContent = t("This call has a passcode. Type it to join.");
+  } catch {}
+}
+// the passcode wasn't right (or is missing): back to the lobby to type it
+function passRefused(m) {
+  S.netq.stop();
+  S.mesh?.leave();
+  S.mesh = null;
+  S.knocks?.clear();
+  paintKnocks();
+  closePanel();
+  callNotice(false);
+  try {
+    if (m.wrong) localStorage.removeItem(`juntos.pass.${S.code}`);
+  } catch {}
+  show("lobby");
+  $("enter").disabled = false;
+  lobbyMeter();
+  askPass(m.wait ? t("Too many wrong tries. Wait {n} seconds and try again.", { n: m.wait }) : m.wrong ? t("That passcode isn't right. Check it and try again.") : t("This call has a passcode. Type it to join."));
+  if (m.wrong) $("passcode").select();
 }
 // the microphone's level in the lobby, so you see it hears you before you go in
 function lobbyMeter() {
@@ -316,6 +384,17 @@ $("enter").onclick = async () => {
     return;
   }
   localStorage.setItem("name", name);
+  if (!$("passcode").hidden) {
+    const pass = $("passcode").value.trim();
+    if (!PASS_RE.test(pass)) {
+      $("passcode").focus();
+      $("lobbyMsg").textContent = t("Type the passcode: 4 to 10 letters or numbers.");
+      return;
+    }
+    try {
+      localStorage.setItem(`juntos.pass.${S.code}`, pass);
+    } catch {}
+  }
   if (typeof RTCPeerConnection === "undefined") {
     $("lobbyMsg").textContent = t("This browser can't make video calls. Open the link in Safari or Chrome.");
     return;
@@ -336,6 +415,7 @@ function enterCall(name) {
   buildGrid();
   S.isHost = false;
   S.locked = false;
+  S.hasPass = false;
   S.waiting = false;
   S.knocks = new Map();
   paintKnocks();
@@ -346,6 +426,14 @@ function enterCall(name) {
     signalUrl: SIGNAL,
     key: localStorage.getItem(`juntos.host.${S.code}`),
     knock: !!localStorage.getItem(`juntos.out.${S.code}`),
+    pass: passOf(S.code),
+    opts: (() => {
+      try {
+        return JSON.parse(localStorage.getItem(`juntos.start.${S.code}`) || "null");
+      } catch {
+        return null;
+      }
+    })(),
   });
   const mesh = S.mesh;
   mesh.addEventListener("host", (e) => onHost(e.detail));
@@ -1236,12 +1324,22 @@ function onHost(m) {
     S.br.render();
     S.notes.render();
     S.locked = m.locked;
+    S.hasPass = !!m.pass;
     S.waiting = false;
     localStorage.removeItem(`juntos.out.${S.code}`);
     paintNet();
   } else if (m.t === "waiting") {
     S.waiting = true;
     paintNet();
+  } else if (m.t === "passcode") {
+    return passRefused(m);
+  } else if (m.t === "pass") {
+    S.hasPass = m.on;
+    try {
+      if (m.pass) localStorage.setItem(`juntos.pass.${S.code}`, m.pass);
+      else localStorage.removeItem(`juntos.pass.${S.code}`);
+    } catch {}
+    toast(m.on ? t("{name} set a passcode for new people", { name: m.by }) : t("{name} removed the passcode", { name: m.by }));
   } else if (m.t === "denied") {
     leave(t("Nobody let you in this time."));
   } else if (m.t === "removed") {
@@ -1273,6 +1371,20 @@ function paintKnocks() {
     $("call").append(box);
   }
   box.innerHTML = "";
+  // like Zoom's waiting room: with several people waiting, let them all in at once
+  if ((S.knocks?.size || 0) > 1) {
+    const card = document.createElement("div");
+    card.className = "knock knockAll";
+    const who = document.createElement("span");
+    who.textContent = t("{n} people want to join", { n: S.knocks.size });
+    const all = document.createElement("button");
+    all.className = "primary";
+    all.name = "admitAll";
+    all.textContent = t("Let everyone in");
+    all.onclick = () => S.mesh.host({ t: "admit-all" });
+    card.append(who, all);
+    box.append(card);
+  }
   for (const [id, name] of S.knocks || []) {
     const card = document.createElement("div");
     card.className = "knock";
@@ -1290,6 +1402,48 @@ function paintKnocks() {
     box.append(card);
   }
   box.hidden = !box.children.length;
+}
+
+// The host's passcode row in People: add one, change it, remove it. New people need it; who is in stays.
+function passRow() {
+  const li = document.createElement("li");
+  li.className = "hostRow passRow";
+  const pass = passOf(S.code);
+  const label = document.createElement("span");
+  label.className = "small";
+  const btn = (text, name, act) => {
+    const b = document.createElement("button");
+    b.className = "chip";
+    b.name = name;
+    b.textContent = text;
+    b.onclick = act;
+    return b;
+  };
+  const edit = (start) => {
+    li.innerHTML = "";
+    const input = document.createElement("input");
+    input.name = "newPass";
+    input.value = start;
+    input.maxLength = 10;
+    input.autocomplete = "off";
+    input.title = t("4 to 10 letters or numbers");
+    const save = btn(t("Save"), "savePass", () => {
+      const v = input.value.trim();
+      if (!PASS_RE.test(v)) return toast(t("Type the passcode: 4 to 10 letters or numbers."));
+      S.mesh.host({ t: "pass", pass: v });
+    });
+    save.classList.add("on");
+    input.onkeydown = (e) => e.key === "Enter" && save.click();
+    li.append(input, save, btn(t("Cancel"), "cancelPass", () => renderPeople()));
+    input.select();
+  };
+  if (S.hasPass) {
+    label.textContent = pass ? t("🔑 Passcode: {pass}", { pass }) : t("🔑 Passcode on");
+    li.append(label, btn(t("Change"), "changePass", () => edit(newPass())), btn(t("Remove"), "removePass", () => S.mesh.host({ t: "pass", pass: "" })));
+  } else {
+    li.append(btn(t("Add a passcode"), "addPass", () => edit(newPass())));
+  }
+  return li;
 }
 
 // a button that asks once before doing something hard to undo
@@ -1335,11 +1489,18 @@ function renderPeople() {
     lock.onclick = () => S.mesh.host({ t: "lock", on: !S.locked });
     li.append(muteAll, lock);
     ul.append(li);
+    ul.append(passRow());
   }
   if (S.locked) {
     const li = document.createElement("li");
     li.className = "lockNote";
     li.textContent = t("🔒 Locked: new people ask to join.");
+    ul.append(li);
+  }
+  if (S.hasPass && !S.isHost) {
+    const li = document.createElement("li");
+    li.className = "lockNote";
+    li.textContent = t("🔑 New people need the passcode (it is in the invite link).");
     ul.append(li);
   }
   const add = (name, extra, id, host) => {
@@ -2385,7 +2546,7 @@ function startRec(opts) {
 }
 
 // invite
-$("invite").onclick = () => inviteSheet(`${location.origin}/r/${S.code}`, { t, toast, isPhone, locked: S.locked });
+$("invite").onclick = () => inviteSheet(S.hasPass ? callUrl(S.code) : `${location.origin}/r/${S.code}`, { t, toast, isPhone, locked: S.locked, pass: S.hasPass ? passOf(S.code) : "" });
 
 async function leave(why) {
   // why: set when the call ended you (removed, not let in); a click passes an event

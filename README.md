@@ -12,7 +12,8 @@ install, open source.
 - Background blur or a picture behind you (runs on your own device).
 - Chat, screen sharing, raise a hand, reactions.
 - Layouts, like Meet's: Auto, Tiled, Spotlight (only who's talking) and Sidebar (who's talking big, the others beside); pin someone; hide people with their camera off; your own picture with everyone, small in a corner or hidden. Remembered on your device.
-- Whoever starts the call is its host: mute one person or everyone, remove someone, lock the call so newcomers ask to join and the host lets them in. If the host leaves, whoever is waiting comes in.
+- Whoever starts the call is its host: mute one person or everyone, remove someone, lock the call so newcomers ask to join and the host lets them in (one by one, or everyone waiting at once). If the host leaves, whoever is waiting comes in.
+- Who can join, like Zoom's passcode and waiting room: when starting or scheduling a call, choose "people ask to join" and / or a passcode (4 to 10 letters or numbers, a 6-digit one is ready). The invite link carries the passcode (after "#", never sent to a server), so people with the link just join; others type it. The host can change or remove it during the call. Only a one-way hash of it is kept, and wrong guesses wait a minute after 5 tries.
 - A shared whiteboard with no edges: pen in three sizes, rectangles, circles, arrows, text, an eraser and undo; move and zoom your own view (pinch or Ctrl + scroll to zoom; two fingers, scrolling or the hand to move); make it big with everyone small floating over it.
 - Sound: check your microphone and speaker before joining (a live level, a test sound, record a few seconds and hear them back); background noise reduction (on, can be turned off); a note when you talk with the microphone off; hold Space to talk while muted.
 - Live captions, for people who can't hear: big white-on-black text with the speaker's name, three sizes, remembered. Each person's own browser turns their own voice into text (Chrome, Edge, Safari; Firefox users can still read the others) and only while someone has captions on and the microphone is on. Save everything said as a .txt, also after leaving.
@@ -27,7 +28,7 @@ install, open source.
 
 ## How it works
 Audio, video, chat and the board go directly between the people in the call (WebRTC). A tiny Cloudflare Worker
-(`worker/`) only introduces people to each other when they join a room. Per room it keeps only a hash of the host's key and whether the call is locked, deleted a month after the room was last used.
+(`worker/`) only introduces people to each other when they join a room. Per room it keeps only a hash of the host's key, whether the call is locked and a hash of its passcode if it has one, deleted a month after the room was last used.
 
 ## Run locally
     cd worker && npx wrangler dev --port 8787

@@ -19,6 +19,7 @@
     <h1>Juntos</h1>
     <p class="lead">Free video calls for everyone.<br>No account, no time limit.</p>
     <button id="start" class="primary big">Start a call</button>
+    <details id="startOpts" class="startOpts"><summary>Who can join</summary></details>
     <button id="schedule" class="secondary">Schedule for later</button>
     <form id="joinForm" class="join">
       <input id="joinCode" placeholder="Enter a code or link" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -46,6 +47,7 @@
     <div class="lobbySide">
       <h2>Ready to join?</h2>
       <input id="name" placeholder="Your name" maxlength="60" autocomplete="name">
+      <input id="passcode" placeholder="Passcode" maxlength="10" autocomplete="off" autocapitalize="off" spellcheck="false" hidden>
       <button id="enter" class="primary big">Join now</button>
       <div class="lobbyMic"><span>Microphone</span><div id="pMeter" class="meter"><i></i></div><button id="pCheck" class="chip">Check sound</button></div>
       <p id="lobbyMsg" class="small"></p>

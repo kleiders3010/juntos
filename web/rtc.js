@@ -14,8 +14,10 @@ export function randomId() {
 }
 
 export class Mesh extends EventTarget {
-  constructor({ room, name, signalUrl, key, knock }) {
+  constructor({ room, name, signalUrl, key, knock, pass, opts }) {
     super();
+    this.pass = pass || ""; // the call's passcode, if it has one (typed, or from the link)
+    this.opts = opts || null; // the host's choices when starting the call: { lock, pass }
     this.key = key || ""; // only the person who started the call has it: host controls
     this.knock = !!knock; // sent out of this call before: ask to come back in
     this.hosts = new Set(); // ids of the hosts among the others
@@ -41,7 +43,7 @@ export class Mesh extends EventTarget {
     ws.onopen = () => {
       this.tries = 0;
       this.emit("signal-open");
-      this.sendSignal({ t: "hello", id: this.id, name: this.name, ...(this.key ? { key: this.key, claim: true } : {}), ...(this.knock ? { knock: true } : {}) });
+      this.sendSignal({ t: "hello", id: this.id, name: this.name, ...(this.key ? { key: this.key, claim: true, ...(this.opts ? { opts: this.opts } : {}) } : {}), ...(this.knock ? { knock: true } : {}), ...(this.pass ? { pass: this.pass } : {}) });
     };
     ws.onmessage = (e) => this.onSignal(JSON.parse(e.data));
     ws.onclose = () => {
@@ -71,9 +73,10 @@ export class Mesh extends EventTarget {
     } else if (m.t === "join") {
       if (m.host) this.hosts.add(m.id);
       this.emit("someone-joining", { id: m.id, name: m.name });
-    } else if (["room", "lock", "knock", "knock-gone", "waiting", "denied", "removed", "mute"].includes(m.t)) {
-      // host controls: who may come in, mute, remove (the server checks who is the host)
-      if (m.t === "denied" || m.t === "removed") this.closed = true;
+    } else if (["room", "lock", "knock", "knock-gone", "waiting", "denied", "removed", "mute", "passcode", "pass"].includes(m.t)) {
+      // host controls: who may come in, mute, remove, the passcode (the server checks who is the host)
+      if (m.t === "denied" || m.t === "removed" || m.t === "passcode") this.closed = true;
+      if (m.t === "pass") this.pass = m.pass || "";
       this.emit("host", m);
     } else if (m.t === "leave") {
       this.drop(m.id);
@@ -357,7 +360,8 @@ export class Mesh extends EventTarget {
     if (p && p.dc.readyState === "open") p.dc.send(JSON.stringify(msg));
   }
 
-  // host commands: { t: "lock", on } / { t: "admit" | "deny" | "remove", id } / { t: "mute", id | "*" }
+  // host commands: { t: "lock", on } / { t: "admit" | "deny" | "remove", id } / { t: "admit-all" } / { t: "mute", id | "*" } /
+  // { t: "pass", pass } (empty: no passcode)
   host(cmd) {
     this.sendSignal(cmd);
   }

@@ -76,8 +76,80 @@ export function when(ms, dur, t, short = false) {
 export function invitation(c, url, t) {
   const lines = [c.title || t("Juntos call"), when(nextStart(c) ?? c.start, c.dur, t)];
   if (c.rep) lines.push(t(REPEATS.find((r) => r[0] === c.rep)[1]));
-  lines.push("", `${t("Join")}: ${url}`, t("No account or app needed."));
+  lines.push("", `${t("Join")}: ${url}`);
+  if (passOf(c.code)) lines.push(`${t("Passcode")}: ${passOf(c.code)}`);
+  lines.push(t("No account or app needed."));
   return lines.join("\n");
+}
+
+// ---- who may come in: like Zoom's passcode and waiting room (and Meet with "Quick access" off) ----
+export const PASS_RE = /^[A-Za-z0-9]{4,10}$/;
+export function passOf(code) {
+  try {
+    return localStorage.getItem(`juntos.pass.${code}`) || "";
+  } catch {
+    return "";
+  }
+}
+// The link to a call. With a passcode it carries it after "#", like Zoom's one-click join link: the part after
+// "#" never reaches any server, the page reads it and fills the passcode in.
+export function callUrl(code) {
+  const p = passOf(code);
+  return `${location.origin}/r/${code}` + (p ? `#p=${encodeURIComponent(p)}` : "");
+}
+export function newPass() {
+  const a = new Uint32Array(1);
+  crypto.getRandomValues(a);
+  return String(a[0] % 1000000).padStart(6, "0");
+}
+
+/** The options for a new call: people ask to join (you let them in), a passcode. The choice is remembered. */
+export function securityFields(t) {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem("juntos.secure") || "{}");
+  } catch {}
+  const ask = el("input", { type: "checkbox", name: "ask", checked: !!saved.ask });
+  const usePass = el("input", { type: "checkbox", name: "usePass", checked: !!saved.pass });
+  const pass = el("input", { name: "pass", value: newPass(), maxLength: 10, autocomplete: "off", spellcheck: false, autocapitalize: "off", pattern: "[A-Za-z0-9]{4,10}", title: t("4 to 10 letters or numbers") });
+  const sync = () => {
+    pass.hidden = !usePass.checked;
+    pass.required = usePass.checked;
+  };
+  usePass.onchange = () => {
+    sync();
+    if (usePass.checked) pass.select();
+  };
+  sync();
+  const box = el(
+    "div",
+    { className: "secure" },
+    el("label", { className: "check" }, ask, el("span", { textContent: t("People ask to join, you let them in") })),
+    el("div", { className: "passRow" }, el("label", { className: "check" }, usePass, el("span", { textContent: t("Passcode") })), pass),
+  );
+  return {
+    box,
+    pass,
+    // { ask, pass } or null when the passcode isn't valid (the field says why)
+    value() {
+      const v = { ask: ask.checked, pass: usePass.checked ? pass.value.trim() : "" };
+      if (usePass.checked && !PASS_RE.test(v.pass)) {
+        pass.reportValidity();
+        return null;
+      }
+      try {
+        localStorage.setItem("juntos.secure", JSON.stringify({ ask: v.ask, pass: usePass.checked }));
+      } catch {}
+      return v;
+    },
+  };
+}
+// A new call's options, kept on this device: they apply when its host first opens it (or when it is planned)
+export function keepSecurity(code, v) {
+  try {
+    if (v.ask || v.pass) localStorage.setItem(`juntos.start.${code}`, JSON.stringify({ lock: !!v.ask, pass: v.pass || "" }));
+    if (v.pass) localStorage.setItem(`juntos.pass.${code}`, v.pass);
+  } catch {}
 }
 
 // ---- calendars ----
@@ -273,6 +345,7 @@ export function inviteSheet(url, o) {
   const [s, inner] = sheet("inviteSheet schedSheet");
   const who = o.locked ? "The call is locked: people with the link ask to join." : "Anyone with the link can join.";
   inner.append(el("h3", { textContent: o.t("Invite people") }), el("p", { className: "small", textContent: o.t(who) }));
+  if (o.pass) inner.append(el("p", { className: "small passLine", textContent: o.t("Passcode: {pass}. It is in the link, so people with the link don't type it.", { pass: o.pass }) }));
   linkBlock(inner, url, { ...o, share: { title: o.t("Join my call"), text: o.t("Join my call on Juntos"), url } });
   const done = el("button", { className: "ghost", name: "done", textContent: o.t("Done") });
   done.onclick = () => s.remove();
@@ -303,6 +376,8 @@ export function scheduleSheet(o) {
     el("div", { className: "schedWhen" }, lab(t("How long"), dur), lab(t("Repeats"), rep)),
     el("p", { className: "small", textContent: t("Times are in your time zone ({tz}). The link works any time, before or after.", { tz: tz().replace(/_/g, " ") }) }),
   );
+  const sec = securityFields(t);
+  form.append(sec.box);
   const cancel = el("button", { type: "button", className: "ghost", textContent: t("Cancel") });
   cancel.onclick = () => s.remove();
   form.append(el("div", { className: "row2" }, cancel, el("button", { className: "primary", name: "create", textContent: t("Create link") })));
@@ -311,10 +386,16 @@ export function scheduleSheet(o) {
     const [y, mo, d] = date.value.split("-").map(Number);
     const [h, mi] = time.value.split(":").map(Number);
     if (!y || Number.isNaN(h)) return;
+    const v = sec.value();
+    if (!v) return;
     const code = o.newCode();
+    const key = o.hostKey();
     try {
-      localStorage.setItem(`juntos.host.${code}`, o.hostKey()); // whoever plans the call is its host on this device
+      localStorage.setItem(`juntos.host.${code}`, key); // whoever plans the call is its host on this device
     } catch {}
+    keepSecurity(code, v);
+    // a passcode or asking to join must hold before the host arrives: the room is claimed with them now
+    if (v.ask || v.pass) o.claim?.(code, key, { lock: v.ask, pass: v.pass });
     const c = { code, title: title.value.trim(), start: new Date(y, mo - 1, d, h, mi).getTime(), dur: Number(dur.value), rep: rep.value };
     store([...load().filter((x) => x.code !== c.code), c]);
     s.remove();
@@ -328,7 +409,7 @@ export function scheduleSheet(o) {
 /** A planned call: when, the link, the invitation, calendars, the QR code. */
 export function plannedSheet(c, o) {
   const { t } = o;
-  const url = `${location.origin}/r/${c.code}`;
+  const url = callUrl(c.code);
   const [s, inner] = sheet("schedSheet plannedSheet");
   inner.append(el("h3", { textContent: c.title || t("Juntos call") }));
   const rep = REPEATS.find((r) => r[0] === c.rep);
