@@ -429,3 +429,25 @@ body:has(#brBar:not([hidden])) .toasts { top: calc(var(--brH, 60px) + 24px); } /
 .upDel { width: 36px; height: 36px; border-radius: 50%; font-size: 20px; color: var(--muted); }
 .upDel:hover { background: #374151; }
 .schedWhen > * { min-width: 0; }
+
+/* connection bars on each picture, paused pictures (data saver), the weak-connection line */
+.tile .bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; padding: 0 2px; margin: 0; background: none; border: 0; cursor: pointer; flex: none; }
+.tile .bars[hidden] { display: none; }
+.tile .bars i { width: 3px; border-radius: 1px; background: rgba(255, 255, 255, .35); }
+.tile .bars i:nth-child(1) { height: 25%; }
+.tile .bars i:nth-child(2) { height: 50%; }
+.tile .bars i:nth-child(3) { height: 75%; }
+.tile .bars i:nth-child(4) { height: 100%; }
+.tile .bars[data-b="1"] i:nth-child(-n+1), .tile .bars[data-b="2"] i:nth-child(-n+2), .tile .bars[data-b="3"] i:nth-child(-n+3), .tile .bars[data-b="4"] i { background: #fff; }
+.tile .bars[data-b="2"] i:nth-child(-n+2) { background: #facc15; }
+.tile .bars[data-b="1"] i:nth-child(1) { background: #f87171; }
+.netPop p { margin: 2px 0; font-size: 13px; }
+.netPop p:first-child { font-weight: 600; }
+.tile.paused video { visibility: hidden; }
+.tile.paused .avatar { display: flex; }
+.tile.paused { cursor: pointer; }
+.tile.paused::after { content: attr(data-paused); position: absolute; left: 0; right: 0; top: 10px; text-align: center; font-size: 12px; color: var(--muted); padding: 0 8px; pointer-events: none; }
+.netState.warn { color: #fde68a; font-weight: 600; }
+.qualityBox { display: flex; flex-direction: column; gap: 6px; }
+.qualityBox .seg button { padding: 10px; }
+.netPop { gap: 2px; }

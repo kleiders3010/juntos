@@ -8,6 +8,7 @@ import { Breakout } from "./breakout.js";
 import { Notes } from "./notes.js";
 import { Annotate } from "./annotate.js";
 import { scheduleSheet, inviteSheet, paintUpcoming } from "./schedule.js";
+import { Net } from "./net.js";
 
 translatePage();
 const t2 = t; // the translator, where "t" is a tile
@@ -102,6 +103,8 @@ const S = {
   panel: null,
   facing: "user",
 };
+// how good each connection is, the bars, data saver / audio only, stepping down on a weak connection
+S.netq = new Net({ mesh: () => S.mesh, t, grid: () => $("grid"), keepVideo: () => !!S.recorder || !!S.pip, changed: () => paintNet() });
 
 // ---------- routing ----------
 function route() {
@@ -352,6 +355,7 @@ function enterCall(name) {
   mesh.addEventListener("left", (e) => {
     document.querySelector(`.tile[data-id="${e.detail.id}"]`)?.remove();
     S.hands.delete(e.detail.id);
+    S.netq.left(e.detail.id);
     if (!document.querySelector(".tile.spot")) $("grid").classList.remove("hasSpot");
     if (S.recBy?.delete(e.detail.id)) paintRec();
     if (S.capWant.delete(e.detail.id)) capSync();
@@ -391,6 +395,7 @@ function enterCall(name) {
     S.br.greet(e.detail.id);
     S.notes.greet(e.detail.id);
     S.an.greet(e.detail.id);
+    S.netq.greet(e.detail.id);
   });
   mesh.addEventListener("message", (e) => onMessage(e.detail.from, e.detail.msg));
   S.br.reset();
@@ -400,6 +405,7 @@ function enterCall(name) {
   S.act.reset(S.code);
   S.notes.reset(S.code);
   callControls();
+  S.netq.start();
   window.addEventListener("beforeunload", () => mesh.leave());
 }
 
@@ -415,6 +421,10 @@ function paintNet() {
   } else if (S.waiting) text = t("Asking to join. Someone in the call will let you in.");
   else if (!S.joined) text = t("Connecting…");
   else if (!S.mesh.peers.size) text = t("Waiting for others. Invite them with the link.");
+  else if (S.netq.note()) {
+    text = S.netq.note();
+    cls = "warn";
+  }
   el.hidden = !text;
   el.textContent = text;
   el.className = `netState ${cls}`;
@@ -424,6 +434,7 @@ $("netState").onclick = () => $("invite").click();
 function onMessage(from, m) {
   const p = S.mesh.peers.get(from);
   const who = (p && p.name) || t("Someone");
+  if (S.netq.receive(from, m)) return; // what they need from my picture, how their connection is
   // chat, hands, reactions and captions from someone in another breakout room aren't for me
   if (["chat", "hand", "react", "cap", "ana", "and", "anc", "ano", "anp", "ans"].includes(m.k) && !S.br.same(from)) return;
   if (S.br.receive(from, m)) {
@@ -486,7 +497,7 @@ function makeTile(id, name) {
   const t = document.createElement("div");
   t.className = "tile";
   t.dataset.id = id;
-  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Full screen")}">${svg("full")}</button>${id === "me" ? "" : `<button class="volBtn" title="${t2("Volume")}"></button>`}`;
+  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span><button class="bars" hidden><i></i><i></i><i></i><i></i></button></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Full screen")}">${svg("full")}</button>${id === "me" ? "" : `<button class="volBtn" title="${t2("Volume")}"></button>`}`;
   t.querySelector(".nm").textContent = name;
   t.querySelector(".avatar").textContent = (name || "?").trim().charAt(0).toUpperCase();
   t.querySelector(".fsBtn").onclick = (e) => {
@@ -494,6 +505,12 @@ function makeTile(id, name) {
     spotlight(t);
   };
   t.ondblclick = () => spotlight(t);
+  // a picture paused to save data: tapping it makes it the big one, which is then shown
+  t.onclick = () => t.classList.contains("paused") && !t.classList.contains("spot") && spotlight(t);
+  t.querySelector(".bars").onclick = (e) => {
+    e.stopPropagation();
+    netPop(t);
+  };
   const vb = t.querySelector(".volBtn");
   if (vb)
     vb.onclick = (e) => {
@@ -501,6 +518,29 @@ function makeTile(id, name) {
       openVolume(t);
     };
   return t;
+}
+
+// the details behind the connection bars
+function netPop(tile) {
+  const had = tile.querySelector(".netPop");
+  document.querySelector(".netPop")?.remove();
+  if (had) return;
+  const pop = document.createElement("div");
+  pop.className = "netPop volPop";
+  for (const line of S.netq.details(tile.dataset.id)) {
+    const p = document.createElement("p");
+    p.textContent = line;
+    pop.append(p);
+  }
+  pop.onclick = (e) => e.stopPropagation();
+  pop.ondblclick = (e) => e.stopPropagation();
+  tile.append(pop);
+  const away = (e) => {
+    if (pop.contains(e.target) || e.target.closest?.(".bars")) return;
+    pop.remove();
+    document.removeEventListener("pointerdown", away, true);
+  };
+  setTimeout(() => document.addEventListener("pointerdown", away, true));
 }
 
 // ---------- how loud each person is (only on this device) ----------
@@ -778,6 +818,7 @@ function layout() {
   for (const tile of tiles) if (!tile.classList.contains("spot") && !tile.classList.contains("main")) tile.style.setProperty("--i", tile.classList.contains("off") || tile.classList.contains("floatMe") ? 0 : i++);
   let j = 0;
   for (const tile of tiles) tile.style.setProperty("--b", j++);
+  S.netq?.wants();
 }
 
 function layoutSheet() {
@@ -2120,6 +2161,7 @@ async function openDevices() {
     startMeter();
   };
   inner.append(noise);
+  inner.append(S.netq.section());
   const tests = document.createElement("div");
   tests.className = "devTests";
   const testBtn = (name, label, run) => {
@@ -2329,7 +2371,7 @@ function startRec(opts) {
       id: t.dataset.id,
       video: t.querySelector("video"),
       name: t.dataset.id === "me" ? localStorage.getItem("name") || "" : t.querySelector(".nm").textContent, // no "(you)" in the file
-      camoff: t.classList.contains("camoff"),
+      camoff: t.classList.contains("camoff") || t.classList.contains("paused"), // paused to save data: the name, not a frozen picture
       screen: t.dataset.id === "me" ? !!S.screen : t.classList.contains("screen"),
       hand: S.hands.has(t.dataset.id),
       overlay: S.an.overlay(t.dataset.id), // drawings on a shared screen
@@ -2352,6 +2394,7 @@ async function leave(why) {
   if (S.recorder) await toggleRec();
   S.knocks?.clear();
   paintKnocks();
+  S.netq.stop();
   S.mesh?.leave();
   S.mesh = null;
   S.br.reset();

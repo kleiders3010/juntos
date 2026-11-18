@@ -116,6 +116,7 @@ export class Mesh extends EventTarget {
         clearTimeout(p.giveUpTimer);
         p.gaveUp = false;
         p.relaying = false;
+        this.tune(p); // the encodings exist now
       } else if (p.state === "failed") {
         if (p.relayTried) this.giveUp(p);
         else this.viaRelay(p);
@@ -241,17 +242,70 @@ export class Mesh extends EventTarget {
     }
   }
 
-  // Each extra person shares the same upload: lower the video bitrate as the call grows.
+  // What my picture costs on each connection. Each extra person shares the same upload, so the bitrate
+  // falls as the call grows; on top of that each viewer asks for what their tile needs ("want": high for
+  // the big picture, low for a small tile, off when they don't show it), and my own cap (data saver, a weak
+  // connection) holds for everyone. Sound always goes first: the network sends it ahead of video.
   tune(p) {
     // only the people I send to count (in a breakout room, the room)
     const n = Math.max(1, [...this.peers.keys()].filter((id) => this.route(id)).length);
-    const kbps = n <= 2 ? 1500 : n <= 4 ? 800 : n <= 7 ? 450 : 250;
+    let kbps = n <= 2 ? 1500 : n <= 4 ? 800 : n <= 7 ? 450 : 250;
+    let h = 720;
+    let fps = 30;
+    const cap = this.cap;
+    if (cap) {
+      kbps = Math.min(kbps, cap.kbps);
+      h = Math.min(h, cap.h);
+      fps = Math.min(fps, cap.fps);
+    }
+    const want = p.want || "high";
+    if (want === "mid") {
+      kbps = Math.min(kbps, 500);
+      h = Math.min(h, 360);
+    }
+    if (want === "low") {
+      kbps = Math.min(kbps, 200);
+      h = Math.min(h, 180);
+      fps = Math.min(fps, 15);
+    }
+    const a = p.audio && p.audio.sender;
+    if (a && a.getParameters) {
+      const ap = a.getParameters();
+      if (ap.encodings && ap.encodings.length) {
+        ap.encodings[0].priority = "high";
+        ap.encodings[0].networkPriority = "high";
+        a.setParameters(ap).catch(() => {});
+      }
+    }
     const s = p.video && p.video.sender;
     if (!s || !s.getParameters) return;
     const params = s.getParameters();
     if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-    params.encodings[0].maxBitrate = kbps * 1000;
+    const e = params.encodings[0];
+    const src = (this.videoTrack && this.videoTrack.getSettings && this.videoTrack.getSettings().height) || 720;
+    e.active = want !== "off";
+    e.maxBitrate = kbps * 1000;
+    e.scaleResolutionDownBy = Math.max(1, src / h);
+    e.maxFramerate = fps;
+    e.priority = "low";
+    e.networkPriority = "low";
+    p.sent = { want, kbps, h: Math.round(src / e.scaleResolutionDownBy), fps };
     s.setParameters(params).catch(() => {});
+  }
+
+  /** A viewer told me what they need from my picture: "high" | "mid" | "low" | "off". */
+  setWant(id, want) {
+    const p = this.peers.get(id);
+    if (!p || !["high", "mid", "low", "off"].includes(want) || p.want === want) return;
+    p.want = want;
+    this.tune(p);
+  }
+
+  /** My own limit for every connection ({ kbps, h, fps }, or null for none). */
+  setCap(cap) {
+    const same = JSON.stringify(cap || null) === JSON.stringify(this.cap || null);
+    this.cap = cap || null;
+    if (!same) this.retune();
   }
 
   retune() {
