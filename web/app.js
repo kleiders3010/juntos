@@ -3,6 +3,7 @@ import { Background, BACKGROUNDS } from "./bg.js";
 import { Board, COLORS, SIZES, TOOLS } from "./board.js";
 import { Recorder } from "./rec.js";
 import { t, translatePage } from "./i18n.js";
+import { Activities } from "./act.js";
 
 translatePage();
 const t2 = t; // the translator, where "t" is a tile
@@ -40,6 +41,7 @@ const ICON = {
   eraser: "M16.24 3.56l4.95 4.94a2 2 0 0 1 0 2.83L12 20.53A5 5 0 0 1 8.46 22H4.5l-2.12-2.12a2 2 0 0 1 0-2.83L13.4 3.56a2 2 0 0 1 2.84 0zM4.22 15.58l3.54 3.53a3 3 0 0 0 4.24 0l3.53-3.53-4.95-4.95-6.36 6.36z",
   hand: "M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.08 0-2.1-.43-2.85-1.19L1 14.83s1.26-1.23 1.3-1.25c.22-.19.49-.29.79-.29.22 0 .42.06.6.16.04.01 4.31 2.46 4.31 2.46V4c0-.83.67-1.5 1.5-1.5S11 3.17 11 4v7h1V1.5c0-.83.67-1.5 1.5-1.5S15 .67 15 1.5V11h1V2.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5V11h1V5.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5z",
   undo: "M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z",
+  poll: "M10 20h4V4h-4v16zm-6 0h4v-8H4v8zM16 9v11h4V9h-4z",
   layout: "M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z",
   cc: "M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z",
   pip: "M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z",
@@ -373,10 +375,12 @@ function enterCall(name) {
     if (S.chat.length) mesh.sendTo(e.detail.id, { k: "history", chat: S.chat.slice(-200) });
     if (S.recorder) mesh.sendTo(e.detail.id, { k: "rec", on: true });
     if (S.capsOn) mesh.sendTo(e.detail.id, { k: "capwant", on: true });
+    if (S.act.any()) mesh.sendTo(e.detail.id, S.act.snapshotFor(e.detail.id));
   });
   mesh.addEventListener("message", (e) => onMessage(e.detail.from, e.detail.msg));
   mesh.connect();
   capReset();
+  S.act.reset(S.code);
   callControls();
   window.addEventListener("beforeunload", () => mesh.leave());
 }
@@ -432,6 +436,8 @@ function onMessage(from, m) {
     if (m.on) S.recBy.add(from);
     else S.recBy.delete(from);
     paintRec();
+  } else if (S.act.receive(from, m)) {
+    // polls and Q&A
   } else if (["bitem", "bdel", "bclear", "bstate"].includes(m.k)) {
     ensureBoard().receive(m);
     if (m.k === "bitem" && S.panel !== "board") badge("bBoard");
@@ -859,6 +865,7 @@ function buildBar() {
   extra.push(button("bBg", "bg", "Background", () => openPanel("bg")));
   extra.push(button("bDev", "gear", "Devices", openDevices));
   extra.push(button("bPeople", "people", "People", () => openPanel("people")));
+  extra.push(button("bAct", "poll", "Polls and Q&A", () => openPanel("act")));
   extra.push(button("bLayout", "layout", "Layout", layoutSheet));
   extra.push(button("bCaps", "cc", "Captions", captionsSheet));
   if (pipSupported()) extra.push(button("bPip", "pip", "Small window", openPip));
@@ -912,9 +919,9 @@ function openPanel(which) {
   if (S.panel === which) return closePanel();
   S.panel = which;
   $("panel").hidden = false;
-  $("panelTitle").textContent = t({ chat: "Chat", board: "Board", bg: "Background", people: "People" }[which]);
-  for (const p of ["chat", "board", "bg", "people"]) $(`${p}Pane`).hidden = p !== which;
-  $({ chat: "bChat", board: "bBoard", bg: "bBg", people: "bPeople" }[which])?.classList.remove("badge");
+  $("panelTitle").textContent = t({ chat: "Chat", board: "Board", bg: "Background", people: "People", act: "Polls and Q&A" }[which]);
+  for (const p of ["chat", "board", "bg", "people", "act"]) $(`${p}Pane`).hidden = p !== which;
+  $({ chat: "bChat", board: "bBoard", bg: "bBg", people: "bPeople", act: "bAct" }[which])?.classList.remove("badge");
   $("bChat2")?.classList.remove("badge");
   if (which === "chat") {
     renderChat();
@@ -927,6 +934,7 @@ function openPanel(which) {
   } else if (S.boardBig) setBoardBig(false);
   if (which === "bg") renderBackgrounds();
   if (which === "people") renderPeople();
+  if (which === "act") S.act.render();
 }
 
 function closePanel() {
@@ -1146,6 +1154,7 @@ $("bgFile").onchange = async (e) => {
 function onHost(m) {
   if (m.t === "room") {
     S.isHost = m.host;
+    S.act.render();
     S.locked = m.locked;
     S.waiting = false;
     localStorage.removeItem(`juntos.out.${S.code}`);
@@ -2318,6 +2327,8 @@ async function leave(why) {
   const save = $("endedCaps");
   save.hidden = !S.transcript.length;
   save.onclick = saveTranscript;
+  $("endedAct").hidden = !S.act.any();
+  $("endedAct").onclick = () => S.act.download();
   closePanel();
   callNotice(false);
   show("ended");
@@ -2375,6 +2386,23 @@ $("homeBtn").onclick = () => {
   route();
 };
 
+// polls and Q&A (act.js): the panel lives in #actPane
+S.act = new Activities({
+  t,
+  send: (m) => S.mesh?.broadcast(m),
+  sendTo: (id, m) => S.mesh?.sendTo(id, m),
+  hosts: () => S.mesh?.hosts || new Set(),
+  amHost: () => !!S.isHost,
+  myName: () => localStorage.getItem("name") || "",
+  notify: toast,
+  badge: () => {
+    if (S.panel !== "act") {
+      badge("bAct");
+      badge("bMore");
+    }
+  },
+});
+S.act.mount($("actPane"));
 window.__S = S;
 route();
 

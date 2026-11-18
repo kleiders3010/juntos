@@ -293,3 +293,46 @@ body.boardBig .grid .tile .label { font-size: 12px; padding: 1px 6px; }
 .pipBar .round { min-width: 40px; width: 40px; height: 40px; padding: 0; color: inherit; border: 0; cursor: pointer; }
 .pipBar .round svg { width: 20px; height: 20px; }
 .pipBody .toasts { top: 6px; font-size: 13px; }
+
+/* polls and Q&A */
+.actPane { overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.actPane[hidden] { display: none; }
+.actView { display: flex; flex-direction: column; gap: 10px; }
+.actView[hidden] { display: none; }
+.actTabs button { flex-direction: row; justify-content: center; font-weight: 600; padding: 10px; }
+.actForm { display: flex; flex-direction: column; gap: 8px; }
+.actForm[hidden] { display: none; }
+.actForm textarea { font: inherit; color: var(--fg); background: var(--card); border: 1px solid #4b5563; border-radius: 10px; padding: 10px 12px; resize: vertical; }
+.pollOpts { display: flex; flex-direction: column; gap: 6px; }
+.actRow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: flex-end; }
+.actRow[hidden] { display: none; }
+.actTools { justify-content: space-between; }
+.actTools select, .actHost select { font: inherit; color: var(--fg); background: var(--card); border: 1px solid #4b5563; border-radius: 8px; padding: 6px 8px; }
+.actHost { background: rgba(255,255,255,.04); border-radius: 10px; padding: 6px 10px; }
+.actHost[hidden] { display: none; }
+.actHost .check { font-size: 14px; }
+.actMsg { color: var(--muted); font-size: 14px; margin: 0; }
+.actMsg:empty { display: none; }
+.actList { display: flex; flex-direction: column; gap: 8px; }
+.actEmpty { color: var(--muted); text-align: center; margin: 12px 0; }
+.actCard { background: var(--card); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.actCard.q { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; }
+.actCard.q .actRow { grid-column: 1 / -1; }
+.actCard.answered { opacity: .7; }
+.actQ { font-weight: 600; overflow-wrap: anywhere; }
+.actBy { color: var(--muted); font-size: 13px; }
+.actMine { font-size: 14px; color: #93c5fd; }
+.pollVote { display: flex; flex-direction: column; gap: 2px; }
+.pollVote .primary { align-self: flex-end; margin-top: 4px; }
+.pollRes { display: flex; flex-direction: column; gap: 3px; }
+.resRow { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
+.resOpt { overflow-wrap: anywhere; }
+.resNum { color: var(--muted); white-space: nowrap; }
+.resBar { height: 8px; border-radius: 4px; background: rgba(255,255,255,.1); overflow: hidden; }
+.resBar i { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.resNames { color: var(--muted); font-size: 12px; }
+.upBtn { align-self: start; min-width: 52px; padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,.08); font-weight: 600; }
+.upBtn.on { background: var(--accent); color: #fff; }
+.upBtn:disabled { opacity: .5; cursor: default; }
+.actSave { align-self: center; }
+.actSave[hidden] { display: none; }

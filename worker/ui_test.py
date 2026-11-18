@@ -13,7 +13,7 @@ FRAMES = """async (sel) => { const v = document.querySelector(sel); if (!v) retu
   let n = 0; const tick = () => { n++; v.requestVideoFrameCallback(tick) }; v.requestVideoFrameCallback(tick);
   await new Promise(r => setTimeout(r, 1500)); return n }"""
 MIC_SELECT = "[...document.querySelectorAll('.devRow')].find(r => r.firstChild.textContent === 'Microphone').querySelector('select')"
-SHEET = "[document.querySelector('.seg button.on').dataset.layout, ...[...document.querySelectorAll('.recSheet input')].map(i => i.checked)]"
+SHEET = "[document.querySelector('.recSheet .seg button.on').dataset.layout, ...[...document.querySelectorAll('.recSheet input')].map(i => i.checked)]"
 errors = []
 
 
