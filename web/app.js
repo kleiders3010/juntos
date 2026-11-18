@@ -317,14 +317,41 @@ function refreshLocalVideo() {
   S.an?.update();
 }
 
+// ---------- what each person may do (the room server keeps it; every device applies it) ----------
+S.perms = { talk: true, share: true, chat: true, caps: true };
+S.talkOv = {}; // person id -> may speak, where a host chose for that person
+function roleOf(id) {
+  if (id === "me" || id === S.mesh?.id) return S.isOwner ? "host" : S.isHost ? "co" : "";
+  return S.mesh?.owners.has(id) ? "host" : S.mesh?.hosts.has(id) ? "co" : "";
+}
+function may(id, key) {
+  if (roleOf(id)) return true;
+  if (key !== "talk") return S.perms[key] !== false;
+  const o = S.talkOv[id === "me" ? S.mesh?.id : id];
+  return o === undefined ? S.perms.talk !== false : o;
+}
+// my voice goes out only while my own switch is on and I'm allowed to speak
+function micLive() {
+  return !!S.mic && may("me", "talk");
+}
+// not allowed to speak: say so and raise my hand to ask (my own switch stays as it is)
+function askToSpeak() {
+  if (!S.hands.has("me")) {
+    toggleHand();
+    toast(t("A host hasn't allowed you to speak. Your hand is raised to ask."));
+  } else toast(t("A host hasn't allowed you to speak yet. Your hand is raised."));
+}
+
 // how I am, for the others (and for their recordings: a shared screen leads the picture)
 function myState() {
-  return { k: "state", mic: S.mic, cam: S.cam, screen: !!S.screen };
+  return { k: "state", mic: micLive(), cam: S.cam, screen: !!S.screen };
 }
 
 function setMic(on) {
+  // not allowed to speak: the mic button asks to speak; my own switch stays as I left it
+  if (S.mesh && !may("me", "talk")) return askToSpeak();
   S.mic = on;
-  if (S.micTrack) S.micTrack.enabled = on;
+  if (S.micTrack) S.micTrack.enabled = micLive();
   if (!on) document.querySelector('#grid .tile[data-id="me"]')?.classList.remove("speaking"); // dark at once when muted
   paintToggles();
   if (S.mesh) S.mesh.broadcast(myState());
@@ -348,7 +375,7 @@ function paintToggles() {
   for (const [id, on, a, b] of [
     ["pMic", S.mic, "mic", "micOff"],
     ["pCam", S.cam, "cam", "camOff"],
-    ["bMic", S.mic, "mic", "micOff"],
+    ["bMic", micLive(), "mic", "micOff"],
     ["bCam", S.cam, "cam", "camOff"],
   ]) {
     const el = $(id);
@@ -357,6 +384,9 @@ function paintToggles() {
     el.classList.toggle("danger", !on);
     el.title = on ? t("Turn off") : t("Turn on");
   }
+  const noTalk = !!S.mesh && !may("me", "talk");
+  $("bMic")?.classList.toggle("blocked", noTalk);
+  if (noTalk) $("bMic")?.setAttribute("title", t("A host hasn't allowed you to speak"));
   const meTile = document.querySelector('.tile[data-id="me"]');
   if (meTile) meTile.classList.toggle("muted", !S.mic);
 }
@@ -526,7 +556,7 @@ function enterCall(name) {
   });
   mesh.addEventListener("host", (e) => onHost(e.detail));
   mesh.setTracks(audioOut(), videoOut());
-  if (S.micTrack) S.micTrack.enabled = S.mic;
+  if (S.micTrack) S.micTrack.enabled = micLive();
   mesh.addEventListener("peer", (e) => renderPeer(e.detail.id));
   mesh.addEventListener("left", (e) => {
     document.querySelector(`.tile[data-id="${e.detail.id}"]`)?.remove();
@@ -616,6 +646,7 @@ function onMessage(from, m) {
   if (S.br.receive(from, m)) {
     // breakout rooms
   } else if (m.k === "chat") {
+    if (!may(from, "chat")) return;
     addChat({ from, name: who, text: String(m.text).slice(0, 2000), at: Date.now() });
   } else if (m.k === "history") {
     for (const c of m.chat || []) if (!S.chat.some((x) => x.at === c.at && x.text === c.text)) S.chat.push(c);
@@ -624,9 +655,11 @@ function onMessage(from, m) {
   } else if (m.k === "state") {
     const tile = document.querySelector(`.tile[data-id="${from}"]`);
     if (tile) {
-      tile.classList.toggle("muted", !m.mic);
-      tile.classList.toggle("camoff", !m.cam && !m.screen); // their shared screen shows even with their camera off
-      tile.classList.toggle("screen", !!m.screen);
+      tile.dataset.mic = m.mic ? "1" : "0";
+      const scr = !!m.screen && may(from, "share"); // a screen shared without permission isn't shown
+      tile.classList.toggle("muted", !m.mic || !may(from, "talk"));
+      tile.classList.toggle("camoff", (!m.cam && !scr) || (!!m.screen && !scr)); // their shared screen shows even with their camera off
+      tile.classList.toggle("screen", scr);
       layout();
     }
     if (m.hand !== undefined) setHand(from, m.hand, who, true);
@@ -637,7 +670,7 @@ function onMessage(from, m) {
   } else if (m.k === "cap") {
     if (S.capsOn) showCap(from, who, String(m.text || "").slice(0, 500), !!m.final);
   } else if (m.k === "capwant") {
-    capWanted(from, !!m.on, who);
+    capWanted(from, !!m.on && may(from, "caps"), who);
   } else if (m.k === "capno") {
     if (S.capsOn) showCap(from, who, m.why === "browser" ? t("(their browser can't make captions)") : m.why === "broken" ? t("(their captions aren't working on their device right now)") : t("(they turned off captions of their voice)"), true, true);
   } else if (m.k === "rec") {
@@ -737,7 +770,8 @@ function volFor(name) {
 
 function applyVolume(tile, p) {
   const v = tile.querySelector("audio");
-  const pct = tile.classList.contains("away") ? 0 : volFor(p.name); // in another breakout room: not heard
+  // in another breakout room, or not allowed to speak: not heard
+  const pct = tile.classList.contains("away") || !may(tile.dataset.id, "talk") ? 0 : volFor(p.name);
   const tr = p.stream.getAudioTracks()[0];
   if (pct > 100 && tr) {
     const ctx = (S.out ||= new (window.AudioContext || window.webkitAudioContext)());
@@ -771,8 +805,9 @@ function applyVolume(tile, p) {
   }
   const b = tile.querySelector(".volBtn");
   if (b) {
-    b.innerHTML = svg(pct === 0 ? "volOff" : "vol") + (pct === 100 ? "" : `<span>${pct}%</span>`);
-    b.classList.toggle("changed", pct !== 100);
+    const shown = tile.classList.contains("away") ? 0 : volFor(p.name); // my own volume choice, not the host's permission
+    b.innerHTML = svg(shown === 0 ? "volOff" : "vol") + (shown === 100 ? "" : `<span>${shown}%</span>`);
+    b.classList.toggle("changed", shown !== 100);
   }
 }
 
@@ -1280,6 +1315,7 @@ $("chatForm").onsubmit = (e) => {
   e.preventDefault();
   const text = $("chatText").value.trim();
   if (!text) return;
+  if (!may("me", "chat")) return toast(t("A host turned off chat"));
   $("chatText").value = "";
   const c = { from: "me", name: localStorage.getItem("name"), text, at: Date.now() };
   S.mesh.roomcast({ k: "chat", text });
@@ -1457,6 +1493,7 @@ $("bgFile").onchange = async (e) => {
 function onHost(m) {
   if (m.t === "room") {
     S.isHost = m.host;
+    S.isOwner = !!m.owner;
     S.act.render();
     if ($("bBreak")) $("bBreak").hidden = !S.isHost;
     S.br.render();
@@ -1493,11 +1530,107 @@ function onHost(m) {
   } else if (m.t === "lock") {
     S.locked = m.on;
     toast(m.on ? t("{name} locked the call. New people ask to join.", { name: m.by }) : t("{name} unlocked the call", { name: m.by }));
-  } else if (m.t === "mute") {
-    if (S.mic) setMic(false);
-    toast(t("{name} muted you", { name: m.by || t("Someone") }));
+  } else if (m.t === "perms") {
+    return applyPerms(m);
+  } else if (m.t === "role") {
+    const me = m.id === S.mesh?.id;
+    if (me) {
+      S.isHost = !!m.role;
+      hostViews();
+      toast(m.role ? t("{name} made you a co-host", { name: m.by }) : t("{name} took back your co-host controls", { name: m.by }));
+      applyPerms({ perms: S.perms, talk: S.talkOv }); // a co-host may do everything
+      if (!m.role) {
+        S.knocks.clear();
+        paintKnocks();
+      }
+    } else {
+      for (const tile of document.querySelectorAll("#grid .tile[data-id]")) if (tile.dataset.id === m.id) refreshPeer(m.id);
+      S.act.render();
+    }
   }
   renderPeople();
+}
+
+// what the host side shows changed (I became or stopped being a co-host)
+function hostViews() {
+  S.act.render();
+  if ($("bBreak")) $("bBreak").hidden = !S.isHost;
+  S.br.render();
+  S.notes.render();
+}
+function refreshPeer(id) {
+  const tile = document.querySelector(`#grid .tile[data-id="${CSS.escape(id)}"]`);
+  const p = S.mesh?.peers.get(id);
+  if (tile && p) {
+    applyVolume(tile, p);
+    tile.classList.toggle("muted", tile.dataset.mic === "0" || !may(id, "talk"));
+  }
+}
+
+// the hosts changed what people may do: apply it to me (my own mic switch is never changed) and to the others
+function applyPerms(m) {
+  const before = { ...S.perms, talk: may("me", "talk") };
+  const first = !S.permsSeen;
+  S.permsSeen = true;
+  S.perms = { talk: true, share: true, chat: true, caps: true, ...(m.perms || {}) };
+  S.talkOv = m.talk && typeof m.talk === "object" ? m.talk : {};
+  const talk = may("me", "talk");
+  if (S.micTrack) S.micTrack.enabled = micLive();
+  if (talk !== before.talk) {
+    if (S.ptt && !talk) {
+      // holding Space to talk (the switch itself was off): it ends here
+      S.ptt = false;
+      $("pttNote").hidden = true;
+      S.mic = false;
+    }
+    if (talk && S.hands.has("me")) {
+      setHand("me", false);
+      S.mesh?.roomcast({ k: "hand", on: false });
+    }
+    if (!first || !talk)
+      toast(
+        talk
+          ? S.mic
+            ? t("{name} allowed you to speak", { name: m.by || t("A host") })
+            : t("{name} allowed you to speak. Your mic is off: turn it on when you want to talk.", { name: m.by || t("A host") })
+          : t("{name} hasn't allowed you to speak. Raise your hand to ask.", { name: m.by || t("A host") }),
+      );
+  }
+  if (S.screen && !may("me", "share")) {
+    stopScreen();
+    toast(t("A host turned off screen sharing"));
+  }
+  if (S.capsOn && !may("me", "caps")) {
+    setCaps(false, true);
+    toast(t("A host turned off captions"));
+  }
+  if (!first && !S.isHost) {
+    for (const k of ["share", "chat", "caps"])
+      if (before[k] !== S.perms[k])
+        toast(
+          t(
+            {
+              share: S.perms.share ? "{name} let everyone share their screen" : "{name} turned off screen sharing",
+              chat: S.perms.chat ? "{name} turned chat back on" : "{name} turned off chat",
+              caps: S.perms.caps ? "{name} let everyone use captions" : "{name} turned off captions",
+            }[k],
+            { name: m.by || t("A host") },
+          ),
+        );
+  }
+  paintToggles();
+  S.mesh?.broadcast(myState());
+  capSync();
+  for (const id of S.mesh?.peers.keys() || []) refreshPeer(id);
+  paintChatLock();
+  renderPeople();
+}
+function paintChatLock() {
+  const off = !!S.mesh && !may("me", "chat");
+  const box = $("chatText");
+  if (!box) return;
+  box.disabled = off;
+  box.placeholder = off ? t("A host turned off chat") : t("Send a message");
 }
 
 // someone asks to join a locked call: a card for the host to let them in
@@ -1612,6 +1745,34 @@ function sureButton(label, sure, act) {
   return b;
 }
 
+// what everyone may do (hosts and co-hosts always may), like Meet's host management locks
+function permRow() {
+  const li = document.createElement("li");
+  li.className = "permRow";
+  const head = document.createElement("div");
+  head.className = "small permHead";
+  head.textContent = t("Everyone can:");
+  li.append(head);
+  for (const [key, label] of [
+    ["talk", t("Speak")],
+    ["share", t("Share their screen")],
+    ["chat", t("Send chat messages")],
+    ["caps", t("Turn on captions")],
+  ]) {
+    const lab = document.createElement("label");
+    lab.className = "check";
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.name = `perm-${key}`;
+    box.checked = S.perms[key] !== false;
+    // speaking for everyone at once starts over the choices made person by person
+    box.onchange = () => S.mesh.host(key === "talk" ? { t: "talk", id: "*", on: box.checked } : { t: "perm", key, on: box.checked });
+    lab.append(box, ` ${label}`);
+    li.append(lab);
+  }
+  return li;
+}
+
 // people
 function renderPeople() {
   const ul = $("peopleList");
@@ -1622,25 +1783,27 @@ function renderPeople() {
   const sel = focus && [focus.selectionStart, focus.selectionEnd];
   S.passEditor = editing || null;
   ul.innerHTML = "";
+  // who hosts the call, for everyone to see
+  const owner = S.isOwner ? `${localStorage.getItem("name")} ${t("(you)")}` : [...S.mesh.peers.values()].find((p) => S.mesh.owners.has(p.id))?.name;
+  if (owner) {
+    const li = document.createElement("li");
+    li.className = "hostLine";
+    li.textContent = t("Host: {name}", { name: owner });
+    ul.append(li);
+  }
   if (S.isHost) {
     const li = document.createElement("li");
     li.className = "hostRow";
-    const muteAll = document.createElement("button");
-    muteAll.className = "chip";
-    muteAll.textContent = t("Mute everyone");
-    muteAll.onclick = () => {
-      S.mesh.host({ t: "mute", id: "*" });
-      toast(t("Everyone else is muted. They can unmute themselves."));
-    };
     const lock = document.createElement("button");
     lock.className = "chip" + (S.locked ? " on" : "");
     lock.id = "lockBtn";
     lock.textContent = S.locked ? t("Unlock the call") : t("Lock the call");
     lock.title = t("When locked, new people ask to join and you let them in.");
     lock.onclick = () => S.mesh.host({ t: "lock", on: !S.locked });
-    li.append(muteAll, lock);
+    li.append(lock);
     ul.append(li);
     ul.append(passRow());
+    ul.append(permRow());
     if (focus && focus.isConnected) {
       focus.focus();
       focus.setSelectionRange(...sel);
@@ -1658,36 +1821,55 @@ function renderPeople() {
     li.textContent = t("🔑 New people need the passcode (it is in the invite link).");
     ul.append(li);
   }
-  const add = (name, extra, id, host) => {
+  const add = (name, extra, id) => {
+    const role = roleOf(id || "me");
+    const talk = may(id || "me", "talk");
     const li = document.createElement("li");
     li.className = "person";
+    li.dataset.role = role;
     const nm = document.createElement("span");
     nm.className = "pName";
     nm.textContent = name + (extra ? ` ${extra}` : "");
     li.append(nm);
-    if (host) {
+    if (role) {
       const tag = document.createElement("span");
-      tag.className = "hostTag";
-      tag.textContent = t("Host");
+      tag.className = "hostTag" + (role === "co" ? " co" : "");
+      tag.textContent = role === "host" ? t("Host") : t("Co-host");
       li.append(tag);
     }
-    if (id && S.isHost) {
-      const mute = document.createElement("button");
-      mute.className = "chip";
-      mute.textContent = t("Mute");
-      mute.onclick = () => S.mesh.host({ t: "mute", id });
-      li.append(mute);
-      if (!host) li.append(sureButton(t("Remove"), t("Remove?"), () => S.mesh.host({ t: "remove", id })));
+    if (!talk) {
+      const tag = document.createElement("span");
+      tag.className = "noTalkTag";
+      tag.textContent = t("Not allowed to speak");
+      li.append(tag);
     }
+    if (id && S.isHost && !role) {
+      // speaking is a permission, separate from their own mic switch (which a host never touches)
+      const sp = document.createElement("button");
+      sp.className = "chip talkBtn" + (talk ? "" : " on");
+      sp.textContent = talk ? t("Don't allow to speak") : t("Allow to speak");
+      sp.onclick = () => S.mesh.host({ t: "talk", id, on: !talk });
+      li.append(sp);
+    }
+    if (id && S.isOwner && role !== "host") {
+      const co = document.createElement("button");
+      co.className = "chip coBtn";
+      co.textContent = role === "co" ? t("Remove as co-host") : t("Make co-host");
+      co.title = t("Co-hosts have the same controls as you, except making co-hosts.");
+      co.onclick = () => S.mesh.host({ t: "cohost", id, on: role !== "co" });
+      li.append(co);
+    }
+    if (id && S.isHost && role !== "host" && (role !== "co" || S.isOwner)) li.append(sureButton(t("Remove"), t("Remove?"), () => S.mesh.host({ t: "remove", id })));
     ul.append(li);
   };
-  add(`${localStorage.getItem("name")} ${t("(you)")}`, S.hands.has("me") ? "✋" : "", null, S.isHost);
-  for (const p of S.mesh.peers.values())
+  add(`${localStorage.getItem("name")} ${t("(you)")}`, S.hands.has("me") ? "✋" : "", null);
+  // hosts first, then raised hands (they may be asking to speak), then everyone else as they came
+  const order = (p) => (roleOf(p.id) === "host" ? 0 : roleOf(p.id) ? 1 : S.hands.has(p.id) ? 2 : 3);
+  for (const p of [...S.mesh.peers.values()].sort((a, b) => order(a) - order(b)))
     add(
       p.name || t("Joining…"),
       (S.hands.has(p.id) ? "✋ " : "") + (p.state === "connected" ? "" : t("· connecting")) + (S.br.roomOf(p.id) ? ` · ${S.br.room(S.br.roomOf(p.id))}` : ""),
       p.id,
-      S.mesh.hosts.has(p.id),
     );
   $("bPeople")?.querySelector("span") && ($("bPeople").querySelector("span").textContent = t("People ({n})", { n: S.mesh.peers.size + 1 }));
   S.br.refresh();
@@ -1778,6 +1960,7 @@ function stopShareSound() {
 // (Chrome and Edge: a tab, or the whole screen on Windows; not a single window). The call's own sound stays out.
 async function toggleScreen() {
   if (S.screen) return stopScreen();
+  if (!may("me", "share")) return toast(t("A host turned off screen sharing"));
   try {
     let s;
     try {
@@ -1890,6 +2073,7 @@ addEventListener("keydown", (e) => {
     if (S.panel === "board" || (e.target !== document.body && !e.target.closest("#bar, #grid"))) return;
     e.preventDefault();
     if (e.repeat || S.mic || S.ptt || !S.micTrack) return;
+    if (!may("me", "talk")) return askToSpeak();
     S.ptt = true;
     $("mutedNote").hidden = true;
     $("pttNote").textContent = t("Talking… let go of Space to mute");
@@ -1988,7 +2172,7 @@ function paintCaps() {
 
 // listen to my own voice only while someone wants captions, my mic is on and I haven't turned it off
 function capSync() {
-  const need = !!(SR && S.mesh && S.mic && S.capShare && (S.capsOn || S.capWant.size));
+  const need = !!(SR && S.mesh && micLive() && S.capShare && (S.capsOn || S.capWant.size));
   if (need === capOn) return;
   capOn = need;
   capFails = 0;
@@ -2158,9 +2342,10 @@ function showCap(id, name, text, final, note) {
   }, 8000);
 }
 
-function setCaps(on) {
+function setCaps(on, keep) {
+  if (on && S.mesh && !may("me", "caps")) return toast(t("A host turned off captions"));
   S.capsOn = on;
-  localStorage.setItem("juntos.captions", on ? "on" : "off");
+  if (!keep) localStorage.setItem("juntos.captions", on ? "on" : "off");
   S.capLines.clear();
   paintCaps();
   S.mesh?.broadcast({ k: "capwant", on });
@@ -2532,7 +2717,7 @@ async function useMic(id) {
       toast(t("Couldn't switch microphone"));
     }
     S.micTrack = s.getAudioTracks()[0];
-    S.micTrack.enabled = S.mic;
+    S.micTrack.enabled = micLive();
     localStorage.setItem("micId", S.micTrack.getSettings().deviceId || id);
     await S.mesh?.setTracks(audioOut(), videoOut());
     capRestart();

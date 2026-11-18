@@ -1,12 +1,20 @@
 // Juntos signaling: one Durable Object per room relays WebRTC handshakes between the people in it.
 // Media, chat and the board never pass through here: they go device to device (WebRTC).
 // The room keeps no history and no names once everyone has left; only a hash of the host's key,
-// the lock and a hash of the passcode (if the host set one), forgotten a month after the room was last used.
+// the lock, a hash of the passcode (if the host set one), the permissions, and by random per-visit ids (no names)
+// the co-hosts, speaking choices and who was let in; forgotten a month after the room was last used.
 
 const MAX_PEOPLE = 16; // tested: big_test.py 16 people (everyone hears everyone, video cap 9); a direct mesh past this asks too much of phones
 const MAX_MSG = 64 * 1024;
 const ROOM_KEEP = 31 * 24 * 3600 * 1000; // a room's host and lock are forgotten a month after its last use
-const HOST_CMDS = new Set(["lock", "admit", "admit-all", "deny", "remove", "mute", "pass"]);
+const HOST_CMDS = new Set(["lock", "admit", "admit-all", "deny", "remove", "pass", "talk", "perm", "cohost"]);
+// What everyone may do, set by the hosts (Meet's host management: chat, present, audio locks). Hosts and co-hosts
+// always may. "talk" off = nobody may speak unless a host lets them one by one (Zoom's "Mute all" without "Allow
+// participants to unmute themselves"). A host never switches anyone's microphone on or off: who isn't allowed to
+// speak isn't heard, and their own microphone switch stays as they left it.
+const PERMS = { talk: true, share: true, chat: true, caps: true };
+const MAX_TALK = 200; // people with their own speaking permission kept per room
+const MAX_IN = 300; // people already let in, kept per room (their link coming back doesn't ask again)
 // A passcode, like Zoom's: 4 to 10 letters or numbers (case matters). Wrong tries are limited per network.
 const PASS_RE = /^[A-Za-z0-9]{4,10}$/;
 const PASS_TRIES = 5; // wrong passcodes in a row from one network ...
@@ -94,17 +102,43 @@ export class Room {
     return this.state.getWebSockets().map((ws) => ({ ws, a: ws.deserializeAttachment() || {} })).filter((p) => p.a.id && (waiting || !p.a.wait));
   }
 
+  // the host (who started the call) and the co-hosts the host chose
   hosts() {
-    return this.peers().filter((p) => p.a.host);
+    return this.peers().filter((p) => p.a.host || p.a.co);
+  }
+
+  // permissions, speaking per person and co-hosts live in storage: the room may sleep between messages
+  async loadPerms() {
+    if (this.perms) return;
+    const st = this.state.storage;
+    this.perms = { ...PERMS, ...((await st.get("perms")) || {}) };
+    this.talk = (await st.get("talk")) || {};
+    this.cos = (await st.get("cos")) || {};
+    this.in = (await st.get("in")) || {};
+  }
+  permMsg(by) {
+    return { t: "perms", perms: this.perms, talk: this.talk, ...(by ? { by } : {}) };
+  }
+  role(a) {
+    return a.host ? "host" : a.co ? "co" : "";
   }
 
   // let someone in: they get everyone already here, everyone hears about them
   admit(ws, a) {
-    const others = this.peers().filter((p) => p.ws !== ws);
-    ws.serializeAttachment({ id: a.id, name: a.name, host: !!a.host });
-    this.send(ws, { t: "peers", peers: others.map((p) => ({ id: p.a.id, name: p.a.name, host: !!p.a.host })) });
-    this.send(ws, { t: "room", locked: !!this.locked, host: !!a.host, pass: !!this.hasPass });
-    for (const p of others) this.send(p.ws, { t: "join", id: a.id, name: a.name, host: !!a.host });
+    const others = this.peers().filter((p) => p.ws !== ws && p.a.id !== a.id); // an old link of theirs isn't someone else
+    if (this.in && !this.in[a.id]) {
+      this.in[a.id] = 1;
+      const ids = Object.keys(this.in);
+      if (ids.length > MAX_IN) delete this.in[ids[0]];
+      this.state.storage.put("in", this.in);
+    }
+    ws.serializeAttachment({ id: a.id, name: a.name, host: !!a.host, co: !!a.co });
+    this.send(ws, { t: "peers", peers: others.map((p) => ({ id: p.a.id, name: p.a.name, host: !!(p.a.host || p.a.co), role: this.role(p.a) })) });
+    this.send(ws, { t: "room", locked: !!this.locked, host: !!(a.host || a.co), owner: !!a.host, pass: !!this.hasPass });
+    this.send(ws, this.permMsg());
+    for (const p of others) this.send(p.ws, { t: "join", id: a.id, name: a.name, host: !!(a.host || a.co), role: this.role(a) });
+    // a co-host coming back hears who is waiting
+    if (a.co) for (const p of this.peers(true)) if (p.a.wait) this.send(ws, { t: "knock", id: p.a.id, name: p.a.name });
   }
 
   async fetch(req) {
@@ -151,6 +185,13 @@ export class Room {
       const id = String(msg.id || "").slice(0, 40);
       const name = String(msg.name || "").slice(0, 60);
       if (!/^[A-Za-z0-9_-]{6,40}$/.test(id)) return ws.close(1008, "bad id");
+      for (const p of this.peers(true))
+        if (p.a.id === id && p.ws !== ws) {
+          p.ws.serializeAttachment({});
+          try {
+            p.ws.close(4004, "replaced");
+          } catch (_) {}
+        }
       if (this.peers().length >= MAX_PEOPLE) {
         this.send(ws, { t: "full", max: MAX_PEOPLE });
         return ws.close(1008, "full");
@@ -198,15 +239,19 @@ export class Room {
       this.hasPass = !!passH;
       await st.put("seen", Date.now());
       await st.setAlarm(Date.now() + ROOM_KEEP);
+      await this.loadPerms();
+      const co = !host && !!this.cos[id];
       const hosts = this.hosts();
       // locked (or sent out earlier): ask to join, a host decides. With no host here nobody could answer, so come in.
-      if (!host && (this.locked || msg.knock) && hosts.length) {
+      // someone already let in whose link to the server dropped comes straight back (ids are random per visit)
+      const back = !!this.in[id] && !msg.knock;
+      if (!host && !co && !back && (this.locked || msg.knock) && hosts.length) {
         ws.serializeAttachment({ id, name, wait: true });
         this.send(ws, { t: "waiting" });
         for (const p of hosts) this.send(p.ws, { t: "knock", id, name });
         return;
       }
-      return this.admit(ws, { id, name, host });
+      return this.admit(ws, { id, name, host, co });
     }
     if (!me.id) return;
     if (msg.t === "signal" && typeof msg.to === "string") {
@@ -215,7 +260,7 @@ export class Room {
       return;
     }
     if (me.wait) return;
-    if (me.host && HOST_CMDS.has(msg.t)) return this.hostCmd(me, msg, ws);
+    if ((me.host || me.co) && HOST_CMDS.has(msg.t)) return this.hostCmd(me, msg, ws);
     if (msg.t === "name") {
       const name = String(msg.name || "").slice(0, 60);
       ws.serializeAttachment({ ...me, name });
@@ -254,13 +299,47 @@ export class Room {
       target.ws.serializeAttachment({});
       target.ws.close(4001, "denied");
       for (const p of this.hosts()) this.send(p.ws, { t: "knock-gone", id: target.a.id });
-    } else if (msg.t === "remove" && target && !target.a.wait && !target.a.host) {
+    } else if (msg.t === "remove" && target && !target.a.wait && !target.a.host && (!target.a.co || me.host)) {
       this.send(target.ws, { t: "removed", by: me.name });
       target.ws.serializeAttachment({});
       target.ws.close(4002, "removed");
-      for (const p of this.peers()) this.send(p.ws, { t: "leave", id: target.a.id });
-    } else if (msg.t === "mute") {
-      for (const p of this.peers()) if (p.a.id !== me.id && (msg.id === "*" || p.a.id === msg.id)) this.send(p.ws, { t: "mute", by: me.name });
+      if (this.in) {
+        delete this.in[target.a.id];
+        await this.state.storage.put("in", this.in);
+      }
+      for (const p of this.peers()) this.send(p.ws, { t: "leave", id: target.a.id, removed: true });
+    } else if (msg.t === "talk" || msg.t === "perm" || msg.t === "cohost") {
+      await this.loadPerms();
+      const st = this.state.storage;
+      if (msg.t === "talk" && msg.id === "*") {
+        // everyone at once: the per-person choices start over
+        this.perms.talk = !!msg.on;
+        this.talk = {};
+        await st.put({ perms: this.perms, talk: this.talk });
+      } else if (msg.t === "talk") {
+        if (!target || target.a.wait || target.a.host || target.a.co) return;
+        delete this.talk[target.a.id];
+        if (!!msg.on !== this.perms.talk) this.talk[target.a.id] = !!msg.on;
+        const ids = Object.keys(this.talk);
+        if (ids.length > MAX_TALK) delete this.talk[ids[0]];
+        await st.put("talk", this.talk);
+      } else if (msg.t === "perm") {
+        if (!["share", "chat", "caps"].includes(msg.key)) return;
+        this.perms[msg.key] = !!msg.on;
+        await st.put("perms", this.perms);
+      } else {
+        // only the host makes or unmakes co-hosts (Meet: "Grant host controls")
+        if (!me.host || !target || target.a.wait || target.a.host) return;
+        const on = !!msg.on;
+        target.ws.serializeAttachment({ ...target.a, co: on });
+        if (on) this.cos[target.a.id] = 1;
+        else delete this.cos[target.a.id];
+        await st.put("cos", this.cos);
+        for (const p of this.peers()) this.send(p.ws, { t: "role", id: target.a.id, role: on ? "co" : "", by: me.name });
+        if (on) for (const p of this.peers(true)) if (p.a.wait) this.send(target.ws, { t: "knock", id: p.a.id, name: p.a.name });
+        return;
+      }
+      for (const p of this.peers()) this.send(p.ws, this.permMsg(me.name));
     }
   }
 
@@ -282,6 +361,6 @@ export class Room {
     }
     for (const p of this.peers()) if (p.ws !== ws) this.send(p.ws, { t: "leave", id: me.id });
     // the last host left: nobody can answer anyone asking to join, so they come in
-    if (me.host && !this.hosts().length) for (const p of this.peers(true)) if (p.a.wait) this.admit(p.ws, p.a);
+    if ((me.host || me.co) && !this.hosts().length) for (const p of this.peers(true)) if (p.a.wait) this.admit(p.ws, p.a);
   }
 }

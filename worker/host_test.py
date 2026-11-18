@@ -1,5 +1,6 @@
-# Host controls (headless Edge, fake devices): who starts the call is its host. The host mutes one person
-# or everyone, locks the call (newcomers ask to join; let in or deny), removes someone (who then has to ask
+# Host controls (headless Edge, fake devices): who starts the call is its host. The host lets someone speak or
+# not (Kleider, 2026-11-18: "it should be 'allow to speak' 'don't allow to speak' and respect the users actual
+# mute/unmute status"), or everyone at once, locks the call (newcomers ask to join; let in or deny), removes someone (who then has to ask
 # to come back), and when the last host leaves, whoever is waiting comes in. Nobody else gets the controls,
 # not even with a made-up key. Run: python host_test.py [base-url]
 import sys
@@ -55,13 +56,34 @@ with sync_playwright() as p:
     check("Host" in o.evaluate("[...document.querySelectorAll('.hostTag')].map(e => e.parentNode.textContent).join('|')") and
           "Ana" in o.evaluate("document.querySelector('.hostTag')?.parentNode.textContent || ''"), "Beto sees Ana marked as host")
 
-    # mute one person
+    # speaking is a permission, apart from Beto's own mic switch: a host never turns anyone's mic on or off
+    beto = a.evaluate("[...__S.mesh.peers.values()].find(p => p.name === 'Beto').id")
+    BETO_AUDIO = f"document.querySelector('.tile[data-id=\"{beto}\"] audio').volume"
+    BETO_ROW = "[...document.querySelectorAll('.person')].find(e => e.textContent.includes('Beto'))?.textContent || ''"
     people(a)
-    a.click(".person .chip:text('Mute')")
-    o.wait_for_function("!__S.mic", timeout=5000)
-    check(not o.evaluate("__S.micTrack.enabled") and "muted you" in o.evaluate("document.getElementById('toasts').textContent"), "Ana mutes Beto: his mic is off and he's told who did it")
+    a.click(".person:has-text('Beto') .talkBtn")
+    o.wait_for_function("!__S.micTrack.enabled", timeout=5000)
+    check(o.evaluate("__S.mic"), "Ana doesn't let Beto speak: his own mic switch stays on")
+    check("allowed you to speak" in o.evaluate("document.getElementById('toasts').textContent") and o.evaluate("document.getElementById('bMic').classList.contains('blocked')"),
+          "nothing of his goes out, his mic button shows it and he's told")
+    a.wait_for_function(f"{BETO_AUDIO} === 0", timeout=5000)
+    check("Not allowed to speak" in a.evaluate(BETO_ROW), "Ana doesn't hear him either way, and People says so")
+    a.click(".person:has-text('Beto') .talkBtn")
+    o.wait_for_function("__S.micTrack.enabled", timeout=5000)
+    check(o.evaluate("__S.mic"), "allowed again: his mic is on, as he had it")
+    a.wait_for_function(f"{BETO_AUDIO} === 1", timeout=5000)
+    o.evaluate("document.getElementById('bMic').click()")  # he mutes himself
+    a.click(".person:has-text('Beto') .talkBtn")
+    o.wait_for_function("document.getElementById('bMic').classList.contains('blocked')", timeout=5000)
     o.evaluate("document.getElementById('bMic').click()")
-    check(o.evaluate("__S.mic"), "Beto can turn his mic back on himself")
+    check(not o.evaluate("__S.mic") and o.evaluate("__S.hands.has('me')"), "not allowed, tapping his mic raises his hand to ask (his mic stays off)")
+    a.wait_for_function(f"({BETO_ROW}).includes('✋')", timeout=5000)
+    a.click(".person:has-text('Beto') .talkBtn")
+    o.wait_for_function("!document.getElementById('bMic').classList.contains('blocked')", timeout=5000)
+    check(not o.evaluate("__S.mic") and not o.evaluate("__S.micTrack.enabled"), "allowed: his mic is not turned on for him")
+    check(not o.evaluate("__S.hands.has('me')") and "mic is off" in o.evaluate("document.getElementById('toasts').textContent"), "his hand goes down and he's told his mic is off")
+    o.evaluate("document.getElementById('bMic').click()")
+    check(o.evaluate("__S.mic && __S.micTrack.enabled"), "Beto turns his mic on himself")
 
     # lock: Caro asks to join, Ana says no; Caro asks again, Ana lets her in
     a.click("#lockBtn")
@@ -85,17 +107,23 @@ with sync_playwright() as p:
     c.wait_for_function("document.querySelectorAll('.tile video').length >= 3", timeout=20000)
     check(c.evaluate(TILES) == 3, "let in: Caro is in the call with both")
 
-    # mute everyone
+    # nobody may speak (Zoom's mute all), then one person may
     people(a)
-    a.click(".hostRow .chip:text('Mute everyone')")
-    o.wait_for_function("!__S.mic", timeout=5000)
-    c.wait_for_function("!__S.mic", timeout=5000)
-    check(a.evaluate("__S.mic"), "mute everyone mutes the others, not Ana")
+    a.uncheck("input[name='perm-talk']")
+    o.wait_for_function("!__S.micTrack.enabled", timeout=5000)
+    c.wait_for_function("!__S.micTrack.enabled", timeout=5000)
+    check(a.evaluate("__S.mic && __S.micTrack.enabled"), "'Everyone can speak' off: the others aren't heard, Ana is")
+    check(o.evaluate("__S.mic") and c.evaluate("__S.mic"), "and their own mic switches are as they left them")
+    a.click(".person:has-text('Caro') .talkBtn")
+    c.wait_for_function("__S.micTrack.enabled", timeout=5000)
+    check(not o.evaluate("__S.micTrack.enabled"), "Ana lets Caro speak: only Caro")
+    a.check("input[name='perm-talk']")
+    o.wait_for_function("__S.micTrack.enabled", timeout=5000)
+    check(True, "everyone may speak again: Beto is heard (his mic was on)")
 
     # remove Beto: two taps; he has to ask to come back even after the lock is off
     a.evaluate("__S.mesh.host({ t: 'lock', on: false })")
     a.wait_for_function("!__S.locked", timeout=5000)
-    beto = a.evaluate("[...__S.mesh.peers.values()].find(p => p.name === 'Beto').id")
     remove = f".person:has-text('Beto') .chip:text('Remove')"
     a.click(remove)
     check(a.evaluate("__S.mesh.peers.size") == 2, "one tap on Remove only asks")
@@ -122,9 +150,9 @@ with sync_playwright() as p:
     d.click("#enter")
     d.wait_for_function("__S.joined", timeout=15000)
     check(not d.evaluate("__S.isHost"), "a made-up key doesn't make Dani host")
-    d.evaluate("__S.mesh.host({ t: 'mute', id: '*' })")
+    d.evaluate("__S.mesh.host({ t: 'talk', id: '*', on: false })")
     a.wait_for_timeout(800)
-    check(a.evaluate("__S.mic"), "and her mute-everyone does nothing")
+    check(c.evaluate("__S.micTrack.enabled"), "and her 'nobody may speak' does nothing")
 
     # the host leaves while someone waits: they come in
     a.evaluate("__S.mesh.host({ t: 'lock', on: true })")

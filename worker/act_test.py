@@ -61,7 +61,12 @@ with sync_playwright() as p:
         pg.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
 
     # ---- polls ----
+    # only hosts start polls by default (roles_test.py covers that); here Ana lets everyone start them
+    panel(a, "polls")
+    a.select_option("select[name='pollWho']", "all")
+    a.click("#panelClose")  # closed again: a new poll shows as a dot on her button
     panel(o, "polls")
+    o.wait_for_function("!document.getElementById('pollStart').hidden", timeout=5000)
     check(o.is_visible("#pollList .actEmpty"), "the panel opens, no polls yet")
     o.click("#pollStart")
     o.fill('#pollDraft input[name="q"]', "Pizza or tacos?")

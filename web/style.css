@@ -124,6 +124,8 @@ a { color: #93c5fd; }
 .panelHead { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px 4px 16px; }
 .panelHead h3 { margin: 0; font-weight: 500; }
 .pane { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 8px 12px 12px; gap: 8px; }
+#peoplePane { overflow-y: auto; } /* a long People list (16 people, host controls) scrolls inside the panel */
+#peoplePane .people { flex: none; }
 .chatLog { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 .msg b { font-size: 14px; margin-right: 8px; }
 .msg time { font-size: 12px; color: var(--muted); }
@@ -138,8 +140,14 @@ a { color: #93c5fd; }
 .bgChoice.on { border-color: var(--accent); }
 .people { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .people .person { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.people .pName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.people .pName { flex: 1 1 7em; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .people .hostTag { font-size: 12px; color: var(--muted); border: 1px solid #4b5563; border-radius: 999px; padding: 1px 8px; }
+.people .hostTag:not(.co) { color: #fff; background: var(--accent); border-color: var(--accent); }
+.people .noTalkTag { font-size: 12px; color: var(--danger); border: 1px solid var(--danger); border-radius: 999px; padding: 1px 8px; }
+.people .hostLine { font-weight: 600; }
+.people .permRow { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; border-bottom: 1px solid #374151; }
+.people .permHead { color: var(--muted); }
+.round.blocked { background: var(--danger); opacity: .6; }
 .people .hostRow { display: flex; gap: 8px; flex-wrap: wrap; padding-bottom: 6px; border-bottom: 1px solid #374151; }
 .people .chip.on { background: var(--accent); color: #fff; }
 .people .lockNote { color: var(--muted); font-size: 14px; }
@@ -296,6 +304,7 @@ body.boardBig .grid .tile .label { font-size: 12px; padding: 1px 6px; }
 
 /* polls and Q&A */
 .actPane { overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+.pollWho { display: flex; flex-direction: column; gap: 6px; }
 .actPane[hidden] { display: none; }
 .actView { display: flex; flex-direction: column; gap: 10px; }
 .actView[hidden] { display: none; }

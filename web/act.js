@@ -1,6 +1,8 @@
 // Polls and Q&A, like Meet's (studied: support.google.com/meet/answer/10165071 polls, /10146000 Q&A).
 // Polls: a question with 2 to 10 answers; "responses without names"; "show everyone the results" (else only who
 // started it and the host see them); one vote each, not changed; who started it (or the host) ends or deletes it.
+// Who starts polls (hosts set it): hosts only (Meet's default), everyone, or everyone with a host approving each
+// first; hosts approve, hide, end or delete any poll.
 // Q&A: anyone asks (anonymously if the host allows it), anyone upvotes, sort by popular or recent, filter; the host
 // marks answered, hides, deletes, and can hold each question until approved; you can delete your own question.
 // Nothing is kept on a server: every device in the call holds the same list and catches newcomers up. Save it all
@@ -15,6 +17,7 @@ async function sha(s) {
 }
 const clip = (s, n) => String(s ?? "").slice(0, n);
 const KINDS = ["act", "actdel", "vote", "qup", "actset", "actsync"];
+const POLLS = ["hosts", "all", "approve"]; // who starts polls
 
 function clean(it) {
   if (!it || typeof it.id !== "string" || !it.id || it.id.length > 40) return null;
@@ -22,7 +25,7 @@ function clean(it) {
   if (it.type === "poll") {
     const opts = (Array.isArray(it.opts) ? it.opts : []).slice(0, MAXOPT).map((x) => clip(x, 200));
     if (opts.length < 2 || !clip(it.q, 300).trim()) return null;
-    return { ...base, type: "poll", q: clip(it.q, 300), opts, byName: clip(it.byName, 60), anon: !!it.anon, show: !!it.show, ended: !!it.ended };
+    return { ...base, type: "poll", q: clip(it.q, 300), opts, byName: clip(it.byName, 60), anon: !!it.anon, show: !!it.show, ended: !!it.ended, hidden: !!it.hidden, approved: it.approved !== false };
   }
   if (it.type === "q" && clip(it.text, 500).trim()) {
     return { ...base, type: "q", text: clip(it.text, 500), anon: !!it.anon, byName: it.anon ? "" : clip(it.byName, 60), answered: !!it.answered, hidden: !!it.hidden, approved: it.approved !== false };
@@ -61,7 +64,7 @@ export class Activities {
     this.dels = new Set();
     this.votes = new Map(); // poll id -> Map(ballot -> { opt, name })
     this.ups = new Map(); // question id -> Set(person keys)
-    this.set = { qa: true, anon: true, mod: false, ver: 0 };
+    this.set = { qa: true, anon: true, mod: false, polls: "hosts", ver: 0 }; // pinned: only hosts start polls unless a host opens it up
     let saved = {};
     try {
       saved = JSON.parse(sessionStorage.getItem(`juntos.act.${code}`) || "{}");
@@ -92,6 +95,12 @@ export class Activities {
   seesResults(p) {
     return p.show || this.mine(p) || this.o.amHost();
   }
+  visibleP(p) {
+    return this.o.amHost() || this.mine(p) || (p.approved && !p.hidden);
+  }
+  mayPoll() {
+    return this.o.amHost() || this.set.polls !== "hosts";
+  }
   visibleQ(q) {
     if (this.o.amHost()) return true;
     if (!q.approved || q.hidden) return this.mine(q) && !q.hidden;
@@ -118,7 +127,7 @@ export class Activities {
     return true;
   }
   applySet(s) {
-    this.set = { qa: !!s.qa, anon: !!s.anon, mod: !!s.mod, ver: +s.ver };
+    this.set = { qa: !!s.qa, anon: !!s.anon, mod: !!s.mod, polls: POLLS.includes(s.polls) ? s.polls : "hosts", ver: +s.ver };
     this.changed();
   }
   forget(id) {
@@ -134,6 +143,10 @@ export class Activities {
     if (!cur) {
       if (this.count(it.type) >= (it.type === "q" ? MAXQ : MAXP)) return;
       if (it.type === "q" && !this.set.qa && !viaSync && !this.isHost(from)) return;
+      if (it.type === "poll" && !viaSync && !this.isHost(from)) {
+        if (this.set.polls === "hosts") return; // only hosts start polls here
+        if (this.set.polls === "approve") it.approved = false;
+      }
       this.items.set(it.id, it);
       if (!viaSync) this.announce(it);
       return this.changed();
@@ -144,6 +157,12 @@ export class Activities {
     if (cur.type === "poll" && (host || owner || viaSync)) {
       cur.ended ||= it.ended; // an ended poll stays ended
       cur.show = it.show;
+    }
+    if (cur.type === "poll" && (host || viaSync)) {
+      const was = cur.approved;
+      cur.hidden = it.hidden;
+      cur.approved ||= it.approved;
+      if (!was && cur.approved && !viaSync) this.announce(cur);
     }
     if (cur.type === "q" && (host || viaSync)) {
       const was = cur.approved;
@@ -183,7 +202,10 @@ export class Activities {
   }
   announce(it) {
     const t = this.t;
-    if (it.type === "poll") this.o.notify(t("{name} started a poll: {q}", { name: it.byName || t("Someone"), q: it.q.slice(0, 80) }));
+    if (it.type === "poll") {
+      if (!this.visibleP(it) || it.hidden) return;
+      this.o.notify(it.approved ? t("{name} started a poll: {q}", { name: it.byName || t("Someone"), q: it.q.slice(0, 80) }) : t("A poll is waiting for your approval"));
+    }
     else if (this.visibleQ(it) && !it.hidden) this.o.notify(it.approved ? t("New question: {q}", { q: it.text.slice(0, 80) }) : t("A question is waiting for your approval"));
     this.o.badge();
   }
@@ -191,7 +213,7 @@ export class Activities {
   // catching a newcomer up (questions still waiting for approval only go to hosts)
   snapshotFor(id) {
     const host = this.isHost(id);
-    const items = [...this.items.values()].filter((x) => x.type === "poll" || x.approved || host).map((x) => ({ ...x }));
+    const items = [...this.items.values()].filter((x) => x.approved || host).map((x) => ({ ...x }));
     const votes = {};
     for (const [p, v] of this.votes) votes[p] = [...v].map(([b, x]) => [b, x.opt, x.name]);
     const ups = {};
@@ -211,13 +233,15 @@ export class Activities {
     this.secrets[c.id] = secret;
     this.save();
     this.items.set(c.id, c);
-    if (c.type === "q" && !c.approved) for (const h of this.o.hosts()) this.o.sendTo(h, { k: "act", item: c });
+    if (!c.approved) for (const h of this.o.hosts()) this.o.sendTo(h, { k: "act", item: c });
     else this.o.send({ k: "act", item: c });
     this.changed();
     return c;
   }
   startPoll(q, opts, anon, show) {
-    return this.create({ type: "poll", q, opts, anon, show, ended: false, byName: this.o.myName() });
+    if (!this.mayPoll()) return;
+    const approved = this.o.amHost() || this.set.polls === "all";
+    return this.create({ type: "poll", q, opts, anon, show, ended: false, byName: this.o.myName(), approved });
   }
   ask(text, anon) {
     const held = this.set.mod && !this.o.amHost();
@@ -348,7 +372,7 @@ export class Activities {
       start.hidden = false;
     };
     const start = h("button", { class: "primary", id: "pollStart", text: t("Start a poll"), onclick: () => (resetDraft(), (draft.hidden = false), (start.hidden = true), draft.q.focus()) });
-    const polls = h("div", { class: "actView", id: "actPolls" }, start, draft, pollList);
+    const polls = h("div", { class: "actView", id: "actPolls" }, h("div", { class: "actHost", id: "pollHost" }), h("p", { class: "actMsg", id: "pollOff" }), start, draft, pollList);
     // Q&A
     const hostSet = h("div", { class: "actHost", id: "qaHost" });
     const askForm = h(
@@ -401,11 +425,23 @@ export class Activities {
     // polls, newest first
     const pl = el.querySelector("#pollList");
     pl.innerHTML = "";
-    const polls = [...this.items.values()].filter((x) => x.type === "poll").sort((a, b) => b.at - a.at);
+    const ph = el.querySelector("#pollHost");
+    ph.innerHTML = "";
+    ph.hidden = !host;
+    if (host) {
+      const who = h("select", { name: "pollWho" });
+      for (const [v, label] of [["hosts", t("Hosts only")], ["all", t("Everyone")], ["approve", t("Everyone, a host approves each first")]]) who.append(h("option", { value: v, text: label, selected: v === this.set.polls }));
+      who.onchange = () => this.setSettings({ polls: who.value });
+      ph.append(h("label", { class: "pollWho" }, t("Who can start polls"), who));
+    }
+    el.querySelector("#pollOff").textContent = host ? "" : this.set.polls === "hosts" ? t("Only hosts start polls") : this.set.polls === "approve" ? t("A host approves each poll before others see it") : "";
+    el.querySelector("#pollStart").hidden = !this.mayPoll() || !el.querySelector("#pollDraft").hidden;
+    if (!this.mayPoll()) el.querySelector("#pollDraft").hidden = true;
+    const polls = [...this.items.values()].filter((x) => x.type === "poll" && this.visibleP(x)).sort((a, b) => b.at - a.at);
     if (!polls.length) pl.append(h("p", { class: "actEmpty", text: t("No polls yet") }));
     for (const p of polls) {
       const card = h("div", { class: "actCard poll" + (p.ended ? " ended" : ""), "data-id": p.id });
-      card.append(h("div", { class: "actQ", text: p.q }), h("div", { class: "actBy", text: [p.byName, p.anon && t("responses without names"), p.ended && t("ended")].filter(Boolean).join(" · ") }));
+      card.append(h("div", { class: "actQ", text: p.q }), h("div", { class: "actBy", text: [p.byName, p.anon && t("responses without names"), p.ended && t("ended"), !p.approved && t("Pending approval"), p.hidden && t("Hidden")].filter(Boolean).join(" · ") }));
       const voted = this.myVotes[p.id];
       if (voted === undefined && !p.ended) {
         const f = h("form", { class: "pollVote" });
@@ -436,6 +472,8 @@ export class Activities {
       } else if (voted !== undefined || p.ended) card.append(h("div", { class: "actBy", text: t("Only who started the poll and the host see the results") }));
       if (this.mine(p) || host) {
         const row = h("div", { class: "actRow" });
+        if (host && !p.approved) row.append(h("button", { class: "chip", name: "approve", text: t("Approve"), onclick: () => this.update(p, { approved: true }) }));
+        if (host && p.approved) row.append(h("button", { class: "chip", name: "hide", text: p.hidden ? t("Show") : t("Hide"), onclick: () => this.update(p, { hidden: !p.hidden }) }));
         if (!p.ended) row.append(h("button", { class: "chip", name: "end", text: t("End the poll"), onclick: () => this.update(p, { ended: true }) }));
         row.append(h("button", { class: "chip", name: "show", text: p.show ? t("Hide results from everyone") : t("Show everyone the results"), onclick: () => this.update(p, { show: !p.show }) }));
         row.append(h("button", { class: "chip", name: "del", text: t("Delete"), onclick: () => this.del(p) }));

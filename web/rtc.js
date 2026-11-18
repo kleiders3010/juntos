@@ -21,7 +21,8 @@ export class Mesh extends EventTarget {
     this.opts = opts || null; // the host's choices when starting the call: { lock, pass }
     this.key = key || ""; // only the person who started the call has it: host controls
     this.knock = !!knock; // sent out of this call before: ask to come back in
-    this.hosts = new Set(); // ids of the hosts among the others
+    this.hosts = new Set(); // ids of the hosts among the others (the host and the co-hosts)
+    this.owners = new Set(); // which of them started the call
     this.room = room;
     this.name = name;
     this.signalUrl = signalUrl;
@@ -48,7 +49,7 @@ export class Mesh extends EventTarget {
     };
     ws.onmessage = (e) => this.onSignal(JSON.parse(e.data));
     ws.onclose = () => {
-      if (this.closed) return;
+      if (this.closed || this.ws !== ws) return; // an old link closing after a new one opened
       // The signaling link only matters for new handshakes; calls in progress go on.
       this.emit("signal-lost");
       this.lost = (this.lost || 0) + 1;
@@ -70,17 +71,39 @@ export class Mesh extends EventTarget {
   onSignal(m) {
     if (m.t === "peers") {
       for (const p of m.peers) if (p.host) this.hosts.add(p.id);
+      for (const p of m.peers) if (p.role === "host") this.owners.add(p.id);
       for (const p of m.peers) if (!this.peers.has(p.id)) this.call(p.id, p.name);
       this.emit("joined", { count: m.peers.length });
     } else if (m.t === "join") {
+      const back = this.peers.get(m.id);
+      if (back?.away) {
+        back.away = false;
+        clearTimeout(back.leaveTimer);
+      }
       if (m.host) this.hosts.add(m.id);
+      else this.hosts.delete(m.id);
+      if (m.role === "host") this.owners.add(m.id);
       this.emit("someone-joining", { id: m.id, name: m.name });
-    } else if (["room", "lock", "knock", "knock-gone", "waiting", "denied", "removed", "mute", "passcode", "pass"].includes(m.t)) {
+    } else if (["room", "lock", "knock", "knock-gone", "waiting", "denied", "removed", "passcode", "pass", "perms", "role"].includes(m.t)) {
       // host controls: who may come in, mute, remove, the passcode (the server checks who is the host)
       if (m.t === "denied" || m.t === "removed" || m.t === "passcode") this.closed = true;
       if (m.t === "pass") this.pass = m.pass || "";
+      if (m.t === "role" && m.id !== this.id) {
+        if (m.role) this.hosts.add(m.id);
+        else this.hosts.delete(m.id);
+      }
       this.emit("host", m);
     } else if (m.t === "leave") {
+      // The room server lost their link, but our own connection to them still works (a phone changing
+      // network): they're still here, and come back to the server in a moment. If they really left, that
+      // connection closes too and they're gone at once; if it stays up but they never come back, after 30 s.
+      const p = this.peers.get(m.id);
+      if (p && !m.removed && p.state === "connected" && p.dc.readyState === "open") {
+        p.away = true;
+        clearTimeout(p.leaveTimer);
+        p.leaveTimer = setTimeout(() => this.peers.get(m.id) === p && p.away && this.drop(m.id), 30000);
+        return;
+      }
       this.drop(m.id);
     } else if (m.t === "name") {
       const p = this.peers.get(m.id);
@@ -127,9 +150,12 @@ export class Mesh extends EventTarget {
       if (!p.stream.getTracks().includes(e.track)) p.stream.addTrack(e.track);
       this.emit("peer", { id });
     };
+    // told they left while our connection still worked: once it closes, they're gone
+    dc.addEventListener("close", () => p.away && this.peers.get(id) === p && this.drop(id));
     pc.onconnectionstatechange = () => {
       if (this.peers.get(id) !== p) return; // replaced by a newer connection
       p.state = pc.connectionState;
+      if (p.away && p.state !== "connected") return this.drop(id);
       clearTimeout(p.blip);
       if (p.state === "connected") {
         p.wasConnected = true;
@@ -219,6 +245,7 @@ export class Mesh extends EventTarget {
 
   // close a connection without telling the app the person left (it is being replaced)
   forget(p) {
+    clearTimeout(p.leaveTimer);
     clearTimeout(p.timer);
     clearTimeout(p.giveUpTimer);
     clearTimeout(p.blip);
