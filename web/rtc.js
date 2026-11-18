@@ -34,7 +34,8 @@ export class Mesh extends EventTarget {
     const ws = new WebSocket(`${this.signalUrl}/ws/${this.room}`);
     this.ws = ws;
     ws.onopen = () => {
-      this.retry = 0;
+      this.tries = 0;
+      this.emit("signal-open");
       this.sendSignal({ t: "hello", id: this.id, name: this.name });
     };
     ws.onmessage = (e) => this.onSignal(JSON.parse(e.data));
@@ -42,7 +43,7 @@ export class Mesh extends EventTarget {
       if (this.closed) return;
       // The signaling link only matters for new handshakes; calls in progress go on.
       this.emit("signal-lost");
-      const wait = Math.min(15000, 1000 * 2 ** (this.retry = (this.retry || 0) + 1));
+      const wait = Math.min(15000, 1000 * 2 ** (this.tries = (this.tries || 0) + 1));
       setTimeout(() => !this.closed && this.reconnect(), wait);
     };
   }
@@ -81,24 +82,44 @@ export class Mesh extends EventTarget {
   peer(id, name) {
     let p = this.peers.get(id);
     if (p) return p;
-    const pc = new RTCPeerConnection({ iceServers: ICE });
+    // once a relay was needed in this call, new connections include it from the start
+    const pc = new RTCPeerConnection({ iceServers: this.relayList ? [...ICE, ...this.relayList] : ICE });
     const dc = pc.createDataChannel("juntos", { negotiated: true, id: 0 });
     p = { id, pc, dc, name: name || "", stream: new MediaStream(), audio: null, video: null, state: "connecting" };
     this.peers.set(id, p);
+    // No direct connection within a few seconds (mobile networks often block it): try the relay now
+    // instead of waiting the half minute a browser takes to give up.
+    p.timer = setTimeout(() => p.state !== "connected" && this.viaRelay(p), 6000);
     pc.onicecandidate = (e) => e.candidate && this.sendSignal({ t: "signal", to: id, data: { ice: e.candidate } });
     pc.ontrack = (e) => {
       if (!p.stream.getTracks().includes(e.track)) p.stream.addTrack(e.track);
       this.emit("peer", { id });
     };
     pc.onconnectionstatechange = () => {
+      if (this.peers.get(id) !== p) return; // replaced by a newer connection
       p.state = pc.connectionState;
-      if (pc.connectionState === "failed") this.viaRelay(p);
+      clearTimeout(p.blip);
+      if (p.state === "connected") {
+        p.wasConnected = true;
+        clearTimeout(p.timer);
+        clearTimeout(p.giveUpTimer);
+        p.gaveUp = false;
+        p.relaying = false;
+      } else if (p.state === "failed") {
+        if (p.relayTried) this.giveUp(p);
+        else this.viaRelay(p);
+      } else if (p.state === "disconnected") {
+        // a short drop (changing wifi, a tunnel): if it lasts, look for a new route
+        p.blip = setTimeout(() => p.state === "disconnected" && p.offerer && pc.restartIce(), 4000);
+      }
       this.emit("peer", { id });
     };
     pc.onnegotiationneeded = async () => {
       if (!p.offerer) return;
       await pc.setLocalDescription();
-      this.sendSignal({ t: "signal", to: id, data: { sdp: pc.localDescription, name: this.name } });
+      // the first offer of a connection says so: the other side drops any old, broken one it still holds
+      this.sendSignal({ t: "signal", to: id, data: { sdp: pc.localDescription, name: this.name, fresh: !p.offered } });
+      p.offered = true;
     };
     dc.onopen = () => this.emit("channel-open", { id });
     dc.onmessage = (e) => {
@@ -119,14 +140,49 @@ export class Mesh extends EventTarget {
   async viaRelay(p) {
     if (p.relayTried) return;
     p.relayTried = true;
+    p.relaying = true;
+    this.emit("peer", { id: p.id });
     if (!this.relay) {
       const http = this.signalUrl.replace(/^ws/, "http");
       this.relay = fetch(`${http}/turn`).then((r) => r.json()).then((j) => j.iceServers || []).catch(() => []);
     }
-    const servers = await this.relay;
-    if (!servers.length) return this.emit("relay-unavailable", { id: p.id });
-    p.pc.setConfiguration({ iceServers: [...ICE, ...(Array.isArray(servers) ? servers : [servers])] });
+    const got = await this.relay;
+    const servers = (Array.isArray(got) ? got : [got]).filter(Boolean);
+    if (!servers.length) {
+      this.emit("relay-unavailable", { id: p.id });
+      return this.giveUp(p);
+    }
+    this.relayList = servers;
+    if (this.peers.get(p.id) !== p || p.state === "connected") return;
+    p.pc.setConfiguration({ iceServers: [...ICE, ...servers] });
     if (p.offerer) p.pc.restartIce();
+    p.giveUpTimer = setTimeout(() => p.state !== "connected" && this.giveUp(p), 15000);
+  }
+
+  giveUp(p) {
+    if (this.peers.get(p.id) !== p || p.state === "connected") return;
+    p.gaveUp = true;
+    p.relaying = false;
+    this.emit("peer", { id: p.id });
+  }
+
+  /** "Try again" on someone we couldn't reach: a brand-new connection (with the relay), offered by us. */
+  retry(id) {
+    const p = this.peers.get(id);
+    if (!p) return;
+    this.forget(p);
+    this.call(id, p.name);
+  }
+
+  // close a connection without telling the app the person left (it is being replaced)
+  forget(p) {
+    clearTimeout(p.timer);
+    clearTimeout(p.giveUpTimer);
+    clearTimeout(p.blip);
+    try {
+      p.pc.close();
+    } catch (_) {}
+    if (this.peers.get(p.id) === p) this.peers.delete(p.id);
   }
 
   // We offer: the newcomer calls everyone already in the room.
@@ -142,6 +198,14 @@ export class Mesh extends EventTarget {
 
   async onPeerSignal(from, data) {
     let p = this.peers.get(from);
+    if (data.sdp && data.sdp.type === "offer" && data.fresh && p) {
+      // A new connection from them while we still hold an old one: theirs replaces ours (their side of
+      // it is gone). Only if both of us are setting up a first connection at the same moment does the
+      // lower id win.
+      if (p.offerer && !p.wasConnected && p.state !== "failed" && !p.gaveUp && this.id < from) return;
+      this.forget(p);
+      p = null;
+    }
     if (data.sdp) {
       if (!p) p = this.peer(from, data.name);
       if (data.name) p.name = data.name;
@@ -185,10 +249,7 @@ export class Mesh extends EventTarget {
   drop(id) {
     const p = this.peers.get(id);
     if (!p) return;
-    try {
-      p.pc.close();
-    } catch (_) {}
-    this.peers.delete(id);
+    this.forget(p);
     this.emit("left", { id, name: p.name });
     this.retune();
   }

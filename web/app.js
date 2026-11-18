@@ -5,6 +5,7 @@ import { Recorder } from "./rec.js";
 import { t, translatePage } from "./i18n.js";
 
 translatePage();
+const t2 = t; // the translator, where "t" is a tile
 
 // ---------- small helpers ----------
 const $ = (id) => document.getElementById(id);
@@ -27,6 +28,9 @@ const ICON = {
   people: "M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z",
   bg: "M12 2a10 10 0 1 0 0 20a10 10 0 1 0 0-20zm0 2v16a8 8 0 0 1 0-16z",
   flip: "M20 5h-3.17L15 3H9L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-5 11.5V14H9v2.5L5.5 13 9 9.5V12h6V9.5l3.5 3.5-3.5 3.5z",
+  gear: "M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z",
+  full: "M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z",
+  fullExit: "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z",
 };
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
 
@@ -113,10 +117,7 @@ async function getMedia() {
     return false;
   }
   try {
-    const s = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: S.facing, frameRate: { ideal: 24 } },
-    });
+    const s = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(localStorage.getItem("micId")), video: camConstraints(localStorage.getItem("camId")) });
     S.camStream = s;
     S.micTrack = s.getAudioTracks()[0] || null;
     S.camTrack = s.getVideoTracks()[0] || null;
@@ -220,6 +221,7 @@ async function openLobby() {
   show("lobby");
   $("name").value = localStorage.getItem("name") || "";
   $("pBg").innerHTML = svg("bg");
+  $("pDev").innerHTML = svg("gear");
   if (!S.camStream) await (S.mediaReady ||= getMedia());
   refreshLocalVideo();
   paintToggles();
@@ -234,6 +236,7 @@ $("pBg").onclick = () => {
   applyBackground(next);
   toast(t("Background: {name}", { name: t((BACKGROUNDS.find((b) => b.id === next) || { label: next }).label) }));
 };
+$("pDev").onclick = openDevices;
 $("name").addEventListener("keydown", (e) => e.key === "Enter" && $("enter").click());
 $("enter").onclick = async () => {
   const name = $("name").value.trim();
@@ -249,6 +252,7 @@ $("enter").onclick = async () => {
   }
   // Joining before the camera and mic are ready would send nothing to the others.
   $("enter").disabled = true;
+  askNotices();
   await (S.mediaReady ||= getMedia());
   $("enter").disabled = false;
   enterCall(name);
@@ -268,15 +272,32 @@ function enterCall(name) {
   mesh.addEventListener("left", (e) => {
     document.querySelector(`.tile[data-id="${e.detail.id}"]`)?.remove();
     S.hands.delete(e.detail.id);
+    if (!document.querySelector(".tile.spot")) $("grid").classList.remove("hasSpot");
+    if (S.recBy?.delete(e.detail.id)) paintRec();
     layout();
+    paintNet();
     if (e.detail.name) toast(t("{name} left", { name: e.detail.name }));
     renderPeople();
   });
   mesh.addEventListener("someone-joining", (e) => toast(t("{name} joined", { name: e.detail.name || t("Someone") })));
   mesh.addEventListener("full", (e) => toast(t("This call is full ({max} people)", { max: e.detail.max })));
-  mesh.addEventListener("joined", (e) => {
-    if (e.detail.count === 0) toast(t("You're the first one here. Invite people with the link."));
+  S.net = "connecting";
+  S.joined = false;
+  mesh.addEventListener("joined", () => {
+    S.joined = true;
+    paintNet();
   });
+  mesh.addEventListener("signal-open", () => {
+    S.net = "open";
+    paintNet();
+  });
+  mesh.addEventListener("signal-lost", () => {
+    S.net = "lost";
+    paintNet();
+  });
+  addEventListener("offline", paintNet);
+  addEventListener("online", paintNet);
+  paintNet();
   mesh.addEventListener("channel-open", (e) => {
     // catch the newcomer up: board, chat, how I am
     mesh.sendTo(e.detail.id, { k: "state", mic: S.mic, cam: S.cam, hand: S.hands.has("me") });
@@ -286,8 +307,26 @@ function enterCall(name) {
   });
   mesh.addEventListener("message", (e) => onMessage(e.detail.from, e.detail.msg));
   mesh.connect();
+  callControls();
   window.addEventListener("beforeunload", () => mesh.leave());
 }
+
+// The line at the top: is the call reachable, and is anyone else here yet?
+function paintNet() {
+  const el = $("netState");
+  if (!el || !S.mesh) return;
+  let text = "";
+  let cls = "";
+  if (!navigator.onLine || S.net === "lost") {
+    text = t("No connection. Reconnecting…");
+    cls = "bad";
+  } else if (!S.joined) text = t("Connecting…");
+  else if (!S.mesh.peers.size) text = t("Waiting for others. Invite them with the link.");
+  el.hidden = !text;
+  el.textContent = text;
+  el.className = `netState ${cls}`;
+}
+$("netState").onclick = () => $("invite").click();
 
 function onMessage(from, m) {
   const p = S.mesh.peers.get(from);
@@ -310,8 +349,10 @@ function onMessage(from, m) {
   } else if (m.k === "react") {
     react(from, m.e);
   } else if (m.k === "rec") {
-    $("recDot").hidden = !m.on && !S.recorder;
-    toast(t(m.on ? "{name} started recording" : "{name} stopped recording", { name: who }));
+    S.recBy ||= new Set();
+    if (m.on) S.recBy.add(from);
+    else S.recBy.delete(from);
+    paintRec();
   } else if (["stroke", "clear", "board"].includes(m.k)) {
     ensureBoard().receive(m);
     if (m.k === "stroke" && S.panel !== "board") badge("bBoard");
@@ -336,11 +377,58 @@ function makeTile(id, name) {
   const t = document.createElement("div");
   t.className = "tile";
   t.dataset.id = id;
-  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span></div>`;
+  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Full screen")}">${svg("full")}</button>`;
   t.querySelector(".nm").textContent = name;
   t.querySelector(".avatar").textContent = (name || "?").trim().charAt(0).toUpperCase();
-  t.ondblclick = () => t.classList.toggle("big");
+  t.querySelector(".fsBtn").onclick = (e) => {
+    e.stopPropagation();
+    spotlight(t);
+  };
+  t.ondblclick = () => spotlight(t);
   return t;
+}
+
+// One person fills the screen; the same button (or Esc) brings everyone back.
+function spotlight(tile) {
+  const on = !tile.classList.contains("spot");
+  for (const x of document.querySelectorAll(".tile.spot")) {
+    x.classList.remove("spot");
+    x.querySelector(".fsBtn").innerHTML = svg("full");
+  }
+  $("grid").classList.toggle("hasSpot", on);
+  if (on) {
+    tile.classList.add("spot");
+    tile.querySelector(".fsBtn").innerHTML = svg("fullExit");
+  }
+  layout();
+}
+addEventListener("keydown", (e) => {
+  const s = document.querySelector(".tile.spot");
+  if (e.key === "Escape" && s) spotlight(s);
+});
+
+// What a tile shows while its connection isn't up: connecting, another route, or a way to try again.
+function paintStatus(tile, p) {
+  const st = tile.querySelector(".status");
+  let text = "";
+  if (p.gaveUp) text = t2("Couldn't connect to {name}", { name: p.name || t2("Someone") });
+  else if (p.state === "disconnected") text = t2("Reconnecting…");
+  else if (p.relaying) text = t2("Trying another way…");
+  else if (p.state !== "connected") text = t2("Connecting…");
+  st.hidden = !text;
+  if (!text) return;
+  st.innerHTML = `${p.gaveUp ? "" : '<i class="spin"></i>'}<span></span>`;
+  st.querySelector("span").textContent = text;
+  if (p.gaveUp) {
+    const b = document.createElement("button");
+    b.className = "primary";
+    b.textContent = t2("Try again");
+    b.onclick = (e) => {
+      e.stopPropagation();
+      S.mesh.retry(p.id);
+    };
+    st.append(b);
+  }
 }
 
 function renderPeer(id) {
@@ -357,10 +445,12 @@ function renderPeer(id) {
   const v = tile.querySelector("video");
   if (v.srcObject !== p.stream && p.stream.getTracks().length) {
     v.srcObject = p.stream;
+    if (S.sink) v.setSinkId?.(S.sink).catch(() => {});
     v.play().catch(() => tile.classList.add("tapToPlay"));
     watchVoice(tile, p.stream);
   }
-  tile.classList.toggle("connecting", p.state !== "connected");
+  paintStatus(tile, p);
+  paintNet();
   renderPeople();
 }
 
@@ -392,6 +482,8 @@ function layout() {
   const wide = innerWidth > innerHeight;
   const cols = n <= 1 ? 1 : n <= 2 ? (wide ? 2 : 1) : n <= 4 ? 2 : n <= 9 ? 3 : 4;
   $("grid").style.setProperty("--cols", cols);
+  let i = 0;
+  for (const tile of $("grid").children) if (!tile.classList.contains("spot")) tile.style.setProperty("--i", i++);
 }
 addEventListener("resize", layout);
 document.addEventListener("click", (e) => {
@@ -425,6 +517,7 @@ function buildBar() {
   extra.push(button("bChat", "chat", "Chat", () => openPanel("chat")));
   extra.push(button("bBoard", "board", "Board", () => openPanel("board")));
   extra.push(button("bBg", "bg", "Background", () => openPanel("bg")));
+  extra.push(button("bDev", "gear", "Devices", openDevices));
   extra.push(button("bPeople", "people", "People", () => openPanel("people")));
   if (Recorder.supported()) extra.push(button("bRec", "rec", "Record", toggleRec));
   const react = button("bReact", "more", "React", openReactions);
@@ -678,31 +771,170 @@ async function stopScreen() {
   await S.mesh.setTracks(S.micTrack, videoOut());
 }
 
-async function flipCamera() {
-  S.facing = S.facing === "user" ? "environment" : "user";
+// ---------- cameras, microphones, speakers ----------
+function camConstraints(id) {
+  const v = { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } };
+  return id ? { ...v, deviceId: { ideal: id } } : { ...v, facingMode: S.facing };
+}
+function micConstraints(id) {
+  const a = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  return id ? { ...a, deviceId: { ideal: id } } : a;
+}
+
+async function useCamera(video) {
   try {
-    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: S.facing, width: { ideal: 640 }, height: { ideal: 480 } } });
+    const s = await navigator.mediaDevices.getUserMedia({ video });
     S.camTrack?.stop();
     S.camTrack = s.getVideoTracks()[0];
+    S.camTrack.enabled = S.cam;
+    localStorage.setItem("camId", S.camTrack.getSettings().deviceId || "");
+    S.facing = S.camTrack.getSettings().facingMode || S.facing;
     if (S.bg) {
       S.bg.stop();
       S.bg = null;
     }
     if (S.bgMode !== "none") await applyBackground(S.bgMode);
     refreshLocalVideo();
-    await S.mesh.setTracks(S.micTrack, videoOut());
+    await S.mesh?.setTracks(S.micTrack, videoOut());
+    return true;
   } catch (_) {
     toast(t("Couldn't switch camera"));
+    return false;
   }
 }
 
+async function useMic(id) {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(id) });
+    S.micTrack?.stop();
+    S.micTrack = s.getAudioTracks()[0];
+    S.micTrack.enabled = S.mic;
+    localStorage.setItem("micId", S.micTrack.getSettings().deviceId || id);
+    await S.mesh?.setTracks(S.micTrack, videoOut());
+    return true;
+  } catch (_) {
+    toast(t("Couldn't switch microphone"));
+    return false;
+  }
+}
+
+// where the others' voices come out (computers and Android; iPhones choose it in the system)
+function useSpeaker(id) {
+  S.sink = id;
+  localStorage.setItem("sinkId", id);
+  for (const v of document.querySelectorAll('.tile:not([data-id="me"]) video')) v.setSinkId?.(id).catch(() => {});
+}
+S.sink = localStorage.getItem("sinkId") || "";
+
+async function flipCamera() {
+  S.facing = S.facing === "user" ? "environment" : "user";
+  await useCamera({ ...camConstraints(null), facingMode: S.facing });
+}
+
+// One sheet for choosing the camera, microphone and speaker, with a live level of the microphone.
+async function openDevices() {
+  const list = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  const inner = document.createElement("div");
+  inner.className = "sheetInner devices";
+  const close = () => {
+    sheet.remove();
+    clearInterval(meterTimer);
+  };
+  const row = (label, kind, current, pick) => {
+    const items = list.filter((d) => d.kind === kind);
+    if (!items.length) return;
+    const l = document.createElement("label");
+    l.className = "devRow";
+    l.innerHTML = `<span>${t(label)}</span>`;
+    const sel = document.createElement("select");
+    items.forEach((d, i) => sel.append(new Option(d.label || `${t(label)} ${i + 1}`, d.deviceId)));
+    if (current && items.some((d) => d.deviceId === current)) sel.value = current;
+    sel.onchange = () => pick(sel.value);
+    l.append(sel);
+    inner.append(l);
+    return l;
+  };
+  row("Camera", "videoinput", S.camTrack?.getSettings().deviceId, (id) =>
+    useCamera({ ...camConstraints(null), facingMode: undefined, deviceId: { exact: id } }));
+  const micRow = row("Microphone", "audioinput", S.micTrack?.getSettings().deviceId, async (id) => {
+    await useMic(id);
+    startMeter();
+  });
+  if ("setSinkId" in HTMLMediaElement.prototype) row("Speaker", "audiooutput", S.sink || "default", useSpeaker);
+  // the level bar moves when the microphone hears you
+  const meter = document.createElement("div");
+  meter.className = "meter";
+  meter.innerHTML = "<i></i>";
+  micRow?.append(meter);
+  let meterTimer = null;
+  const startMeter = () => {
+    clearInterval(meterTimer);
+    if (!S.micTrack) return;
+    const ac = (openDevices.ac ||= new (window.AudioContext || window.webkitAudioContext)());
+    ac.resume?.();
+    const an = ac.createAnalyser();
+    an.fftSize = 512;
+    ac.createMediaStreamSource(new MediaStream([S.micTrack])).connect(an);
+    const buf = new Uint8Array(an.fftSize);
+    meterTimer = setInterval(() => {
+      an.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (const b of buf) sum += (b - 128) ** 2;
+      meter.firstChild.style.width = `${Math.min(100, Math.sqrt(sum / buf.length) * 4)}%`;
+      meter.classList.toggle("off", !S.mic);
+    }, 100);
+  };
+  startMeter();
+  if (!list.some((d) => d.label)) {
+    const p = document.createElement("p");
+    p.className = "small";
+    p.textContent = t("Allow the camera and microphone to see their names.");
+    inner.append(p);
+  }
+  const done = document.createElement("button");
+  done.className = "primary";
+  done.textContent = t("Done");
+  done.onclick = close;
+  inner.append(done);
+  sheet.append(inner);
+  sheet.onclick = (e) => e.target === sheet && close();
+  document.body.append(sheet);
+}
+
 // recording (on this device)
+// While recording: the button turns red and says Stop, and a red pill with the time runs at the top
+// (tap it to stop). The others see "<name> is recording" in the same place.
+function paintRec() {
+  const b = $("bRec");
+  const mine = !!S.recorder;
+  if (b) {
+    b.classList.toggle("recording", mine);
+    b.querySelector("span").textContent = mine ? t("Stop") : t("Record");
+  }
+  const others = [...(S.recBy || [])].map((id) => S.mesh?.peers.get(id)?.name).filter(Boolean);
+  const dot = $("recDot");
+  clearInterval(paintRec.timer);
+  dot.hidden = !mine && !others.length;
+  dot.classList.toggle("mine", mine);
+  if (mine) {
+    const tick = () => {
+      const s = Math.floor((Date.now() - S.recorder.startedAt) / 1000);
+      dot.textContent = `● ${t("REC")} ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    };
+    tick();
+    paintRec.timer = setInterval(tick, 1000);
+  } else if (others.length) dot.textContent = `● ${t("{name} is recording", { name: others.join(", ") })}`;
+}
+$("recDot").onclick = () => S.recorder && toggleRec();
+
 async function toggleRec() {
   if (S.recorder) {
-    await S.recorder.stop();
+    const r = S.recorder;
     S.recorder = null;
-    $("bRec").classList.remove("on");
-    $("recDot").hidden = true;
+    paintRec();
+    await r.stop();
     S.mesh.broadcast({ k: "rec", on: false });
     toast(t("Recording saved to your downloads"));
     return;
@@ -715,10 +947,8 @@ async function toggleRec() {
     })),
   );
   S.recorder.start();
-  $("bRec").classList.add("on");
-  $("recDot").hidden = false;
+  paintRec();
   S.mesh.broadcast({ k: "rec", on: true });
-  toast(t("Recording. Everyone in the call can see that."));
 }
 
 // invite
@@ -743,7 +973,44 @@ async function leave() {
   S.mesh?.leave();
   S.mesh = null;
   closePanel();
+  callNotice(false);
   show("ended");
+}
+
+// ---------- "you're in a call" while the app is in the background (phones) ----------
+// A quiet notification while you're in another app (tap it to come back), and the phone's call
+// controls (mute, camera, hang up) where the system shows them.
+const swReady = "serviceWorker" in navigator ? navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready).catch(() => null) : Promise.resolve(null);
+async function callNotice(show) {
+  const reg = await swReady;
+  if (!reg) return;
+  for (const n of await reg.getNotifications({ tag: "juntos-call" }).catch(() => [])) n.close();
+  if (!show || !S.mesh || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  const n = S.mesh.peers.size;
+  reg.showNotification(t("You're in a call"), {
+    tag: "juntos-call",
+    body: n ? t("With {n} more. Tap to go back.", { n }) : t("Tap to go back."),
+    icon: "/img/icon-192.png",
+    badge: "/img/icon-192.png",
+    silent: true,
+    requireInteraction: true,
+    data: { url: location.href },
+  }).catch(() => {});
+}
+document.addEventListener("visibilitychange", () => callNotice(document.hidden && !!S.mesh));
+function askNotices() {
+  // asked once, when joining a call from a phone (the moment it makes sense)
+  if (isPhone && typeof Notification !== "undefined" && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+}
+function callControls() {
+  const ms = navigator.mediaSession;
+  if (!ms) return;
+  try {
+    ms.metadata = new MediaMetadata({ title: t("Call on Juntos"), artist: S.code, artwork: [{ src: "/img/icon-512.png", sizes: "512x512", type: "image/png" }] });
+    ms.setActionHandler("hangup", () => leave());
+    ms.setActionHandler("togglemicrophone", () => setMic(!S.mic));
+    ms.setActionHandler("togglecamera", () => setCam(!S.cam));
+  } catch (_) {}
 }
 $("rejoin").onclick = () => enterCall(localStorage.getItem("name"));
 $("homeBtn").onclick = () => {
