@@ -25,6 +25,7 @@ install, open source.
 - Keyboard: M microphone, V camera (or Meet's Ctrl+D / Ctrl+E), H raise a hand, C chat, ? the list.
 - Set how loud you hear each person, from silent to 300 % for someone quiet (only on your device, remembered).
 - Record the call on your own device as an MP4 (everyone sees that you are recording). Landscape, with whoever is talking (or a shared screen) big and the others small, or everyone the same size; reactions, raised hands and chat can show in the video. No upload, no limit.
+- Send feedback (start page, Devices, and after a call): a problem, an idea or something else, an optional email for an answer, and, if you keep the tick, the recent call's technical numbers (connection states, delay, lost packets, how many people; never sound, video, chat or names). "See what's sent" shows it all first. It is emailed to hello@jurisgames.com through [jurisgames-feedback](https://github.com/kleiders3010/jurisgames-feedback), which stores nothing.
 
 ## How it works
 Audio, video, chat and the board go directly between the people in the call (WebRTC). A tiny Cloudflare Worker

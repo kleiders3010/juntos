@@ -7,6 +7,7 @@ import { Activities } from "./act.js";
 import { Breakout } from "./breakout.js";
 import { Notes } from "./notes.js";
 import { Annotate } from "./annotate.js";
+import { openFeedback } from "./feedback.js";
 import { scheduleSheet, inviteSheet, paintUpcoming, securityFields, keepSecurity, passOf, callUrl, newPass, PASS_RE } from "./schedule.js";
 import { Net } from "./net.js";
 
@@ -105,6 +106,51 @@ const S = {
 };
 // how good each connection is, the bars, data saver / audio only, stepping down on a weak connection
 S.netq = new Net({ mesh: () => S.mesh, t, grid: () => $("grid"), keepVideo: () => !!S.recorder || !!S.pip, changed: () => paintNet() });
+
+// ---------- "Send feedback": what happened in the call, without names or content ----------
+// joins, leaves, reconnects and connection states, by time; people are p1, p2... (never names)
+const DIAG = [];
+function diag(ev, extra) {
+  DIAG.push({ at: Date.now(), ev, ...extra });
+  if (DIAG.length > 200) DIAG.shift();
+}
+function callDetails() {
+  const ids = new Map();
+  const who = (id) => (id ? (ids.has(id) || ids.set(id, `p${ids.size + 1}`), ids.get(id)) : undefined);
+  const ago = (at) => `${Math.round((Date.now() - at) / 1000)}s ago`;
+  const peers = S.mesh ? [...S.mesh.peers.values()] : [];
+  return {
+    app: document.referrer.startsWith("android-app://") ? "android app" : "web",
+    call: {
+      inCall: !!S.mesh,
+      people: S.mesh ? peers.length + 1 : 0,
+      host: !!S.isHost,
+      locked: !!S.locked,
+      passcode: !!S.hasPass,
+      mic: !!S.mic,
+      camera: !!S.cam,
+      sharingScreen: !!S.screen,
+      background: S.bgMode,
+      videoQuality: S.netq.pref,
+      stepDown: S.netq.level,
+      recording: !!S.recorder,
+    },
+    devices: S.devKinds || null,
+    connections: peers.map((p) => ({ p: who(p.id), state: p.state, ice: p.pc.iceConnectionState, viaRelay: !!p.relayTried })),
+    events: DIAG.map(({ at, ev, id, ...x }) => ({ when: ago(at), ev, p: who(id), ...x })),
+    measurements: S.netq.log.slice(-120).map((m) => ({ when: ago(m.at), p: who(m.id), rttMs: m.rtt, lossPct: m.loss, jitterMs: m.jitter, kbps: m.kbps, bars: m.bars })),
+  };
+}
+function feedback() {
+  openFeedback({
+    app: "juntos",
+    t,
+    toast,
+    detailsLabel: "Include recent call technical details",
+    detailsNote: "Connection numbers (delay, lost packets, video size), how many people, devices by kind, browser and system, recent errors. Never sound, video, chat, notes or anyone's name.",
+    details: callDetails,
+  });
+}
 
 // ---------- routing ----------
 function route() {
@@ -436,6 +482,20 @@ function enterCall(name) {
     })(),
   });
   const mesh = S.mesh;
+  diag("enter");
+  navigator.mediaDevices?.enumerateDevices?.().then((l) => (S.devKinds = l.reduce((o, d) => ((o[d.kind] = (o[d.kind] || 0) + 1), o), {}))).catch(() => {});
+  const states = new Map();
+  for (const ev of ["signal-open", "signal-lost", "joined", "full"]) mesh.addEventListener(ev, (e) => diag(ev, e.detail?.count != null ? { count: e.detail.count } : undefined));
+  mesh.addEventListener("someone-joining", (e) => diag("join", { id: e.detail.id }));
+  mesh.addEventListener("left", (e) => diag("leave", { id: e.detail.id }));
+  mesh.addEventListener("host", (e) => diag(`host:${e.detail.t}`));
+  mesh.addEventListener("peer", (e) => {
+    const p = mesh.peers.get(e.detail.id);
+    if (p && states.get(p.id) !== p.state) {
+      states.set(p.id, p.state);
+      diag("connection", { id: p.id, state: p.state });
+    }
+  });
   mesh.addEventListener("host", (e) => onHost(e.detail));
   mesh.setTracks(S.mic ? S.micTrack : S.micTrack, videoOut());
   if (S.micTrack) S.micTrack.enabled = S.mic;
@@ -594,7 +654,9 @@ function makeTile(id, name) {
   };
   t.ondblclick = () => spotlight(t);
   // a picture paused to save data: tapping it makes it the big one, which is then shown
-  t.onclick = () => t.classList.contains("paused") && !t.classList.contains("spot") && spotlight(t);
+  t.onclick = () => {
+    if (t.classList.contains("paused") && !t.classList.contains("spot")) spotlight(t);
+  };
   t.querySelector(".bars").onclick = (e) => {
     e.stopPropagation();
     netPop(t);
@@ -1335,6 +1397,7 @@ function onHost(m) {
     return passRefused(m);
   } else if (m.t === "pass") {
     S.hasPass = m.on;
+    $("peopleList")?.querySelector(".passRow.editing")?.classList.remove("editing"); // saved: show the new one
     try {
       if (m.pass) localStorage.setItem(`juntos.pass.${S.code}`, m.pass);
       else localStorage.removeItem(`juntos.pass.${S.code}`);
@@ -1406,6 +1469,7 @@ function paintKnocks() {
 
 // The host's passcode row in People: add one, change it, remove it. New people need it; who is in stays.
 function passRow() {
+  if (S.passEditor) return S.passEditor;
   const li = document.createElement("li");
   li.className = "hostRow passRow";
   const pass = passOf(S.code);
@@ -1421,6 +1485,7 @@ function passRow() {
   };
   const edit = (start) => {
     li.innerHTML = "";
+    li.classList.add("editing");
     const input = document.createElement("input");
     input.name = "newPass";
     input.value = start;
@@ -1433,8 +1498,13 @@ function passRow() {
       S.mesh.host({ t: "pass", pass: v });
     });
     save.classList.add("on");
-    input.onkeydown = (e) => e.key === "Enter" && save.click();
-    li.append(input, save, btn(t("Cancel"), "cancelPass", () => renderPeople()));
+    input.onkeydown = (e) => {
+      if (e.key === "Enter") save.click(); // a block: returning false would stop typing
+    };
+    li.append(input, save, btn(t("Cancel"), "cancelPass", () => {
+      li.classList.remove("editing");
+      renderPeople();
+    }));
     input.select();
   };
   if (S.hasPass) {
@@ -1470,6 +1540,11 @@ function sureButton(label, sure, act) {
 function renderPeople() {
   const ul = $("peopleList");
   if (!ul || !S.mesh) return;
+  // the passcode being typed survives a redraw (People redraws whenever someone's connection changes)
+  const editing = ul.querySelector(".passRow.editing");
+  const focus = editing?.contains(document.activeElement) && document.activeElement;
+  const sel = focus && [focus.selectionStart, focus.selectionEnd];
+  S.passEditor = editing || null;
   ul.innerHTML = "";
   if (S.isHost) {
     const li = document.createElement("li");
@@ -1490,6 +1565,10 @@ function renderPeople() {
     li.append(muteAll, lock);
     ul.append(li);
     ul.append(passRow());
+    if (focus && focus.isConnected) {
+      focus.focus();
+      focus.setSelectionRange(...sel);
+    }
   }
   if (S.locked) {
     const li = document.createElement("li");
@@ -2382,6 +2461,16 @@ async function openDevices() {
     };
     inner.append(k);
   }
+  // something wrong with sound, picture or the connection: tell the person who makes Juntos, with the call's numbers
+  const fb = document.createElement("button");
+  fb.className = "linkBtn";
+  fb.name = "feedback";
+  fb.textContent = t("Report a problem or idea");
+  fb.onclick = () => {
+    close();
+    feedback();
+  };
+  inner.append(fb);
   if (!list.some((d) => d.label)) {
     const p = document.createElement("p");
     p.className = "small";
@@ -2546,6 +2635,10 @@ function startRec(opts) {
 }
 
 // invite
+$("feedbackHome").onclick = $("endedFeedback").onclick = (e) => {
+  e.preventDefault();
+  feedback();
+};
 $("invite").onclick = () => inviteSheet(S.hasPass ? callUrl(S.code) : `${location.origin}/r/${S.code}`, { t, toast, isPhone, locked: S.locked, pass: S.hasPass ? passOf(S.code) : "" });
 
 async function leave(why) {
@@ -2562,6 +2655,7 @@ async function leave(why) {
   S.chat = S.chat.filter((c) => !c.room);
   closePip();
   capSync();
+  diag("left the call");
   const save = $("endedCaps");
   save.hidden = !S.transcript.length;
   save.onclick = saveTranscript;

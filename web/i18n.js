@@ -1,8 +1,14 @@
 // UI language: the browser's, or ?lang=xx in the link. English text is the key; other languages map it.
 // Add a language: copy the "es" block, translate the right-hand side.
 
+import { FEEDBACK_ES } from "./feedback.js";
+
 const DICT = {
   es: { // Spanish as spoken in Argentina (vos)
+    ...FEEDBACK_ES,
+    "Include recent call technical details": "Incluir detalles técnicos recientes de la llamada",
+    "Connection numbers (delay, lost packets, video size), how many people, devices by kind, browser and system, recent errors. Never sound, video, chat, notes or anyone's name.": "Números de la conexión (demora, paquetes perdidos, tamaño del video), cuántas personas, tipos de dispositivos, navegador y sistema, errores recientes. Nunca sonido, video, chat, notas ni el nombre de nadie.",
+    "Report a problem or idea": "Contar un problema o una idea",
     "Juntos · free video calls": "Juntos · videollamadas gratis",
     "Free video calls for everyone.": "Videollamadas gratis para todos.",
     "No account, no time limit.": "Sin cuenta, sin límite de tiempo.",

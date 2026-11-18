@@ -125,7 +125,9 @@ with sync_playwright() as p:
     people(o)
     check(not o.query_selector("#peopleList .passRow") and "need the passcode" in o.evaluate("document.getElementById('peopleList').textContent"), "the others see that new people need a passcode, not the controls")
     a.click('[name="changePass"]')
-    a.fill('[name="newPass"]', "77x7")
+    a.click('[name="newPass"]')
+    a.keyboard.press("Control+A")
+    a.keyboard.type("77x7")  # real keys: the field must take typing
     a.click('[name="savePass"]')
     o.wait_for_function("localStorage.getItem('juntos.pass.' + __S.code) === '77x7'", timeout=5000)
     check("set a passcode" in o.evaluate("document.getElementById('toasts').textContent"), "Beto is told, and his invite link gets the new passcode")
