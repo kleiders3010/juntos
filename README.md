@@ -7,6 +7,7 @@ install, open source.
 [Privacy](https://meet.jurisgames.com/privacy)
 
 - **Start a call** and send the link. People type their name and join.
+- Schedule a call for later, like Meet's and Zoom's: title, day, time, how long, repeat (every day, weekday, week, 2 weeks, month). Copy the link or the invitation, add it to Google Calendar or Outlook.com, or save a calendar file (.ics, with your time zone, so a repeating call stays at the same time after a clock change) for Apple Calendar, Outlook and others. The calls you planned are listed on the start page of that device, and you are their host. A QR code opens the link on a phone, also from Invite people during a call.
 - Background blur or a picture behind you (runs on your own device).
 - Chat, screen sharing, raise a hand, reactions.
 - Layouts, like Meet's: Auto, Tiled, Spotlight (only who's talking) and Sidebar (who's talking big, the others beside); pin someone; hide people with their camera off; your own picture with everyone, small in a corner or hidden. Remembered on your device.

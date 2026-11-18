@@ -7,6 +7,7 @@ import { Activities } from "./act.js";
 import { Breakout } from "./breakout.js";
 import { Notes } from "./notes.js";
 import { Annotate } from "./annotate.js";
+import { scheduleSheet, inviteSheet, paintUpcoming } from "./schedule.js";
 
 translatePage();
 const t2 = t; // the translator, where "t" is a tile
@@ -110,6 +111,7 @@ function route() {
     openLobby();
   } else {
     show("home");
+    paintUpcoming($("upcoming"), schedOpts());
   }
 }
 window.addEventListener("popstate", route);
@@ -123,6 +125,9 @@ $("start").onclick = () => {
   history.pushState({}, "", `/r/${code}`);
   route();
 };
+// planned calls: "Schedule for later" and the list of calls planned on this device
+const schedOpts = () => ({ t, toast, isPhone, newCode, hostKey: () => randomId() + randomId(), changed: () => paintUpcoming($("upcoming"), schedOpts()) });
+$("schedule").onclick = () => scheduleSheet(schedOpts());
 $("joinForm").onsubmit = (e) => {
   e.preventDefault();
   const code = codeFrom($("joinCode").value);
@@ -2338,21 +2343,7 @@ function startRec(opts) {
 }
 
 // invite
-$("invite").onclick = async () => {
-  const url = `${location.origin}/r/${S.code}`;
-  if (navigator.share && isPhone) {
-    try {
-      await navigator.share({ title: t("Join my call"), text: t("Join my call on Juntos"), url });
-      return;
-    } catch (_) {}
-  }
-  try {
-    await navigator.clipboard.writeText(url);
-    toast(t("Link copied. Send it to anyone."));
-  } catch (_) {
-    prompt(t("Copy this link:"), url);
-  }
-};
+$("invite").onclick = () => inviteSheet(`${location.origin}/r/${S.code}`, { t, toast, isPhone, locked: S.locked });
 
 async function leave(why) {
   // why: set when the call ended you (removed, not let in); a click passes an event

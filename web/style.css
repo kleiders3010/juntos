@@ -403,3 +403,29 @@ body:has(#brBar:not([hidden])) .toasts { top: calc(var(--brH, 60px) + 24px); } /
 .anMenu button[aria-checked="true"]::before { content: "✓"; }
 .anText { position: absolute; z-index: 4; min-width: 160px; max-width: 60%; resize: none; overflow: hidden; background: rgba(17,24,39,.6); border: 1px dashed rgba(255,255,255,.7); border-radius: 4px; padding: 2px 4px; font-weight: 600; font-family: system-ui, sans-serif; line-height: 1.2; outline: none; }
 @media (max-width: 600px) { .anBar { top: 54px; max-width: calc(100% - 16px); } .anBar > button { width: 34px; height: 34px; } }
+
+/* planned calls and the invite sheet (link, calendars, QR code) */
+.schedSheet input, .schedSheet select { font: inherit; font-size: 16px; color: var(--fg, #fff); background: var(--card); border: 1px solid #4b5563; border-radius: 10px; padding: 10px; min-width: 0; color-scheme: dark; }
+.schedForm { display: flex; flex-direction: column; gap: 12px; }
+.schedWhen { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.schedLink { display: flex; gap: 8px; }
+.schedLink input { flex: 1; font-size: 15px; }
+.schedQr { margin: 4px auto 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.schedQr canvas { width: 176px; height: 176px; image-rendering: pixelated; border-radius: 8px; }
+.schedQr figcaption { color: var(--muted); font-size: 13px; }
+.schedTime { margin: 0; color: #d1d5db; }
+.schedCal { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; color: var(--muted); }
+.schedCal .chip { text-decoration: none; color: inherit; }
+.schedCal span { width: 100%; }
+@media (min-width: 641px) { .sheet:has(.schedSheet) { align-items: center; } }
+.home #schedule { margin-top: -6px; }
+.upcoming { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.upcoming h2 { font-size: 15px; color: var(--muted); font-weight: 600; margin: 0; }
+.upItem { display: flex; align-items: center; gap: 6px; background: var(--card); border-radius: 12px; padding: 4px 4px 4px 0; }
+.upInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; text-align: left; padding: 8px 12px; color: inherit; }
+.upInfo b, .upInfo span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upInfo span { color: var(--muted); font-size: 13px; }
+.upItem .chip { text-decoration: none; color: inherit; }
+.upDel { width: 36px; height: 36px; border-radius: 50%; font-size: 20px; color: var(--muted); }
+.upDel:hover { background: #374151; }
+.schedWhen > * { min-width: 0; }
