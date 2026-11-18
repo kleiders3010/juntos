@@ -759,3 +759,19 @@ $("homeBtn").onclick = () => {
 
 window.__S = S;
 route();
+
+// ---------- install (Chrome / Edge on computers and Android: the browser offers it, we show a button) ----------
+let installEvent = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault();
+  installEvent = e;
+  $("install").hidden = false;
+});
+$("install").onclick = async () => {
+  if (!installEvent) return;
+  installEvent.prompt();
+  await installEvent.userChoice;
+  installEvent = null;
+  $("install").hidden = true;
+};
+window.addEventListener("appinstalled", () => ($("install").hidden = true));

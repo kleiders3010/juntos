@@ -9,6 +9,7 @@ const DICT = {
     "Start a call": "Iniciar una llamada",
     "Enter a code or link": "Escribí un código o enlace",
     "Join": "Unirse",
+    "Install app": "Instalar la app",
     "Open source": "Código abierto",
     "Camera is off": "La cámara está apagada",
     "Microphone": "Micrófono",
