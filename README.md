@@ -17,4 +17,6 @@ Audio, video, chat and the board go directly between the people in the call (Web
     # serve web/ with any static server that falls back to index.html, then open
     # http://localhost:8080/?signal=ws://127.0.0.1:8787
 
-License: Apache-2.0. Background segmentation: MediaPipe (Apache-2.0).
+License: Apache-2.0. Background segmentation: MediaPipe (Apache-2.0, vendored in `web/vendor/mediapipe`, see its NOTICE.md).
+
+The Worker reads one optional secret, `TURN_KEY` (a Cloudflare TURN key, set with `wrangler secret put`), for people behind strict networks; without it calls still work on most networks.
