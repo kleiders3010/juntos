@@ -133,6 +133,26 @@ with sync_playwright() as p:
     c.uncheck('input[name="caps"]')
     c.click(".capSheet .primary")
 
+    # Dani is on Brave: it has the API but its speech service never works. Said plainly, never silently nothing.
+    # (Kleider, 2026-11-18: his mother on Brave shared her voice as subtitles and nobody saw them.)
+    d = page("Dani", STUB + "Object.defineProperty(navigator, 'brave', { value: { isBrave: () => Promise.resolve(true) } });")
+    enter(d, "Dani", join)
+    o.wait_for_function("[...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Dani'))", timeout=30000)
+    check(listening(d) == 0, "Brave: Dani's browser doesn't pretend to listen; Beto is told her browser can't make captions")
+    d.click("#bCaps")
+    d.wait_for_selector(".capSheet")
+    check("Brave" in d.inner_text(".capSheet") and not d.query_selector('input[name="capShare"]'), "Dani's captions sheet says Brave can't do it and names browsers that can")
+    d.click(".capSheet .primary")
+    d.close()
+
+    # Eva's browser has the API but the speech service fails ("network"): after a few tries it gives up and says so
+    e = page("Eva", STUB.replace("start() { if (this.on) throw new Error(\"already started\"); this.on = true; __sr.push(this); }",
+                                 "start() { setTimeout(() => { this.onerror && this.onerror({ error: 'network' }); this.onend && this.onend(); }, 50); }"))
+    enter(e, "Eva", join)
+    o.wait_for_function("[...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Eva'))", timeout=30000)
+    check(True, "a speech service that never answers: Eva's browser gives up and Beto is told")
+    e.close()
+
     # Ana turns off captions of her voice
     a.click("#bCaps")
     a.uncheck('input[name="capShare"]')

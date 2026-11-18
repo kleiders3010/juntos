@@ -155,6 +155,8 @@ const DICT = {
     "I speak": "Hablo",
     "The language of this device": "El idioma de este dispositivo",
     "Turn my voice into captions for the others": "Pasar mi voz a subtítulos para los demás",
+    "Brave can't turn your voice into text (its speech service doesn't work). Chrome or Edge can. You still see what the others say.": "Brave no puede pasar tu voz a texto (su servicio de voz no funciona). Chrome o Edge sí. Igual ves lo que dicen los demás.",
+    "This browser can't turn your voice into text. Chrome or Edge can.": "Este navegador no puede pasar tu voz a texto. Chrome o Edge sí.",
     "This browser can't turn your voice into text (Chrome, Edge and Safari can). You still see what the others say.": "Este navegador no puede pasar tu voz a texto (Chrome, Edge y Safari sí). Igual ves lo que dicen los demás.",
     "Save captions (.txt)": "Guardar subtítulos (.txt)",
     "Each person's browser turns their own voice into text. Chrome, Edge and Safari may send the sound to Google, Microsoft or Apple to do it.": "El navegador de cada persona pasa su propia voz a texto. Chrome, Edge y Safari pueden enviar el sonido a Google, Microsoft o Apple para hacerlo.",

@@ -1859,7 +1859,9 @@ addEventListener("blur", pttEnd);
 // ---------- live captions ----------
 // Each person's own browser turns their own voice into text (Web Speech API) and sends the words to whoever has
 // captions on. Nobody's browser listens unless someone in the call wants captions, and never while muted.
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+// Brave has the API but its speech service never answers (Brave doesn't use Google's), so it made nothing, silently
+const IS_BRAVE = !!navigator.brave;
+let SR = IS_BRAVE ? null : window.SpeechRecognition || window.webkitSpeechRecognition;
 S.capsOn = localStorage.getItem("juntos.captions") === "on";
 S.capShare = localStorage.getItem("juntos.capshare") !== "off";
 S.capSize = localStorage.getItem("juntos.capsize") || "large";
@@ -1871,6 +1873,20 @@ let capRec = null;
 let capOn = false;
 let capFails = 0;
 let capToldMe = false;
+let capHeard = false; // this browser has turned speech into text at least once
+
+// this browser can't make captions after all: stop trying, and tell me and whoever wants mine
+function capGiveUp() {
+  SR = null;
+  capOn = false;
+  const r = capRec;
+  capRec = null;
+  try {
+    r?.abort();
+  } catch {}
+  toast(t("This browser can't turn your voice into text. Chrome or Edge can."));
+  for (const id of S.capWant) S.mesh?.sendTo(id, { k: "capno", why: "browser" });
+}
 
 function capReset() {
   if (S.capCode !== S.code) S.transcript = [];
@@ -1915,6 +1931,7 @@ function capStart() {
   r.lang = S.capLang || navigator.language || "en-US";
   r.onresult = (e) => {
     capFails = 0;
+    capHeard = true;
     let fin = "";
     let now = "";
     for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -1925,10 +1942,11 @@ function capStart() {
     if (now.trim()) capSend(now.trim(), false);
   };
   r.onerror = (e) => {
-    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "language-not-supported") {
-      capOn = false;
-      toast(t("Captions don't work in this browser"));
-    } else if (e.error !== "no-speech" && e.error !== "aborted") capFails++;
+    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "language-not-supported") capGiveUp();
+    else if (e.error !== "no-speech" && e.error !== "aborted") {
+      capFails++;
+      if (e.error === "network" && capFails >= 3 && !capHeard) capGiveUp(); // the speech service never answers here
+    }
   };
   // the browser stops listening now and then (silence, a time limit): start again while still wanted
   r.onend = () => {
@@ -2237,7 +2255,9 @@ function captionsSheet() {
   } else {
     const p = document.createElement("p");
     p.className = "small";
-    p.textContent = t("This browser can't turn your voice into text (Chrome, Edge and Safari can). You still see what the others say.");
+    p.textContent = IS_BRAVE
+      ? t("Brave can't turn your voice into text (its speech service doesn't work). Chrome or Edge can. You still see what the others say.")
+      : t("This browser can't turn your voice into text (Chrome, Edge and Safari can). You still see what the others say.");
     inner.append(p);
   }
   const save = document.createElement("button");
