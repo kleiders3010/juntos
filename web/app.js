@@ -143,12 +143,13 @@ function callDetails() {
       boostContext: S.out ? S.out.state : null,
       people: peers.map((p) => {
         const tile = document.querySelector(`.tile[data-id="${p.id}"]`);
-        const v = tile?.querySelector("video");
+        const v = tile?.querySelector("audio");
         const tr = p.stream?.getAudioTracks()[0];
         return {
           p: who(p.id),
           tile: !!tile,
           paused: v ? v.paused : null,
+          started: v ? v.readyState > 0 : null,
           muted: v ? v.muted : null,
           volume: v ? v.volume : null,
           ownSpeaker: v ? !!v.sinkId : null,
@@ -667,7 +668,10 @@ function makeTile(id, name) {
   const t = document.createElement("div");
   t.className = "tile";
   t.dataset.id = id;
-  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span><button class="bars" hidden><i></i><i></i><i></i><i></i></button></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Full screen")}">${svg("full")}</button>${id === "me" ? "" : `<button class="volBtn" title="${t2("Volume")}"></button>`}`;
+  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span><button class="bars" hidden><i></i><i></i><i></i><i></i></button></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Full screen")}">${svg("full")}</button>${id === "me" ? "" : `<button class="volBtn" title="${t2("Volume")}"></button><audio autoplay></audio>`}`;
+  // the voice plays from its own <audio>: a video element with no picture (camera off, or video not sent to
+  // save data) never starts, and its sound would never start with it
+  if (id !== "me") t.querySelector("video").muted = true;
   t.querySelector(".nm").textContent = name;
   t.querySelector(".avatar").textContent = (name || "?").trim().charAt(0).toUpperCase();
   t.querySelector(".fsBtn").onclick = (e) => {
@@ -725,7 +729,7 @@ function volFor(name) {
 }
 
 function applyVolume(tile, p) {
-  const v = tile.querySelector("video");
+  const v = tile.querySelector("audio");
   const pct = tile.classList.contains("away") ? 0 : volFor(p.name); // in another breakout room: not heard
   const tr = p.stream.getAudioTracks()[0];
   if (pct > 100 && tr) {
@@ -873,9 +877,15 @@ function renderPeer(id) {
   const v = tile.querySelector("video");
   if (v.srcObject !== p.stream && p.stream.getTracks().length) {
     v.srcObject = p.stream;
-    if (S.sink) v.setSinkId?.(S.sink).catch(() => {});
-    v.play().catch(() => tile.classList.add("tapToPlay"));
+    v.play().catch(() => {});
     watchVoice(tile, p.stream);
+  }
+  const a = tile.querySelector("audio");
+  const voice = p.stream.getAudioTracks()[0];
+  if (voice && a.srcObject?.getAudioTracks()[0] !== voice) {
+    a.srcObject = new MediaStream([voice]);
+    if (S.sink) a.setSinkId?.(S.sink).catch(() => {});
+    a.play().catch(() => tile.classList.add("tapToPlay"));
   }
   applyVolume(tile, p);
   paintStatus(tile, p);
@@ -1076,7 +1086,8 @@ addEventListener("resize", layout);
 document.addEventListener("click", (e) => {
   const t = e.target.closest(".tile.tapToPlay");
   if (t) {
-    t.querySelector("video").play();
+    t.querySelector("audio")?.play().catch(() => {});
+    t.querySelector("video").play().catch(() => {});
     t.classList.remove("tapToPlay");
   }
 });
@@ -2324,7 +2335,7 @@ async function useMic(id) {
 function useSpeaker(id) {
   S.sink = id;
   localStorage.setItem("sinkId", id);
-  for (const v of document.querySelectorAll('.tile:not([data-id="me"]) video')) v.setSinkId?.(id).catch(() => {});
+  for (const v of document.querySelectorAll('.tile:not([data-id="me"]) audio')) v.setSinkId?.(id).catch(() => {});
   S.out?.setSinkId?.(id).catch(() => {}); // boosted voices
 }
 S.sink = localStorage.getItem("sinkId") || "";

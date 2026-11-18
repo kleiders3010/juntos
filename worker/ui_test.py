@@ -78,10 +78,10 @@ with sync_playwright() as p:
     boost = a.evaluate(f"""async () => {{ const p = [...__S.mesh.peers.values()][0]; if (!p.boost) return 'no boost';
       const an = __S.out.createAnalyser(); an.fftSize = 512; p.boost.gain.connect(an); const buf = new Uint8Array(512); let peak = 0;
       for (let i = 0; i < 30; i++) {{ await new Promise(r => setTimeout(r, 50)); an.getByteTimeDomainData(buf); for (const b of buf) peak = Math.max(peak, Math.abs(b - 128)) }}
-      return [p.boost.gain.gain.value, document.querySelector('{OTHER} video').muted, peak] }}""")
+      return [p.boost.gain.gain.value, document.querySelector('{OTHER} audio').muted, peak] }}""")
     check(isinstance(boost, list) and abs(boost[0] - vmax / 100) < 0.01 and boost[1] and boost[2] > 2, f"boosted: louder voice really plays, tile quiet ({boost})")
     a.evaluate("(() => { const r = document.querySelector('.volPop input'); r.value = 50; r.dispatchEvent(new Event('input')) })()")
-    check(a.evaluate(f"(() => {{ const v = document.querySelector('{OTHER} video'); return !v.muted && Math.abs(v.volume - .5) < .01 && ![...__S.mesh.peers.values()][0].boost }})()"),
+    check(a.evaluate(f"(() => {{ const v = document.querySelector('{OTHER} audio'); return !v.muted && Math.abs(v.volume - .5) < .01 && ![...__S.mesh.peers.values()][0].boost }})()"),
           "lower than normal: the tile's own volume, no boost")
     a.mouse.click(5, 5)
     check(not a.evaluate("!!document.querySelector('.volPop')"), "a tap elsewhere closes the volume box")
