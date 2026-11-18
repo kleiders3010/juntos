@@ -89,6 +89,7 @@ with sync_playwright() as p:
     a.uncheck("input[name='perm-chat']")
     c.wait_for_function("document.getElementById('chatText').disabled", timeout=5000)
     check("turned off chat" in c.evaluate(TOASTS), "chat off: Caro's message box is off and she's told")
+    a.wait_for_function("__S.perms.chat === false", timeout=5000)  # Ana has the setting too (the server tells everyone)
     c.evaluate("__S.mesh.roomcast({ k: 'chat', text: 'sneaky' })")
     o.evaluate("__S.mesh.roomcast({ k: 'chat', text: 'from the co-host' })")
     a.wait_for_function("__S.chat.some(m => m.text === 'from the co-host')", timeout=5000)
