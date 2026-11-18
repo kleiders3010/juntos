@@ -13,6 +13,7 @@ FRAMES = """async (sel) => { const v = document.querySelector(sel); if (!v) retu
   let n = 0; const tick = () => { n++; v.requestVideoFrameCallback(tick) }; v.requestVideoFrameCallback(tick);
   await new Promise(r => setTimeout(r, 1500)); return n }"""
 MIC_SELECT = "[...document.querySelectorAll('.devRow')].find(r => r.firstChild.textContent === 'Microphone').querySelector('select')"
+SHEET = "[document.querySelector('.seg button.on').dataset.layout, ...[...document.querySelectorAll('.recSheet input')].map(i => i.checked)]"
 errors = []
 
 
@@ -68,7 +69,19 @@ with sync_playwright() as p:
     a.evaluate("[...document.querySelectorAll('.sheet button.primary')].pop().click()")
 
     # recording: red Stop button and a running timer for Ana, "Ana is recording" for Beto
+    # first a sheet says what will be recorded; the choices made there are remembered next time
     a.evaluate("document.getElementById('bRec').click()")
+    check(not a.evaluate("!!__S.recorder"), "Record first shows what will be recorded (not recording yet)")
+    before = a.evaluate(SHEET)
+    a.click('.seg button[data-layout="grid"]')
+    a.uncheck('.recSheet input[name="chat"]')
+    a.click(".recSheet .ghost")
+    a.evaluate("document.getElementById('bRec').click()")
+    check(a.evaluate(SHEET) == before, "Cancel keeps the old choices")
+    a.click('.seg button[data-layout="grid"]')
+    a.uncheck('.recSheet input[name="chat"]')
+    a.click("#recGo")
+    check(a.evaluate("__S.recorder.opts.layout === 'grid' && !__S.recorder.opts.chat"), "the recording uses what was chosen")  # pinned: layout ids speaker/grid are stored on devices
     a.wait_for_timeout(2500)
     check(a.evaluate("document.getElementById('bRec').classList.contains('recording')"), "record button turns red")
     dot = a.evaluate("document.getElementById('recDot').hidden ? '' : document.getElementById('recDot').textContent")
@@ -80,6 +93,10 @@ with sync_playwright() as p:
     with a.expect_download(timeout=20000):
         a.evaluate("document.getElementById('recDot').click()")
     o.wait_for_function("document.getElementById('recDot').hidden", timeout=5000)
+    a.evaluate("document.getElementById('bRec').click()")
+    check(a.evaluate(SHEET)[0] == "grid" and a.evaluate("!document.querySelector('.recSheet input[name=\"chat\"]').checked"),
+          "next time the sheet remembers the choices")  # pinned: layout ids speaker/grid are stored on devices
+    a.click(".recSheet .ghost")
     check(a.evaluate("document.getElementById('recDot').hidden && !document.getElementById('bRec').classList.contains('recording')"), "tapping the timer stops and saves")
 
     # a connection that gave up shows Try again, and Try again reconnects

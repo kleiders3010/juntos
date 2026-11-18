@@ -181,11 +181,16 @@ function refreshLocalVideo() {
   }
 }
 
+// how I am, for the others (and for their recordings: a shared screen leads the picture)
+function myState() {
+  return { k: "state", mic: S.mic, cam: S.cam, screen: !!S.screen };
+}
+
 function setMic(on) {
   S.mic = on;
   if (S.micTrack) S.micTrack.enabled = on;
   paintToggles();
-  if (S.mesh) S.mesh.broadcast({ k: "state", mic: on, cam: S.cam });
+  if (S.mesh) S.mesh.broadcast(myState());
 }
 
 async function setCam(on) {
@@ -195,7 +200,7 @@ async function setCam(on) {
   paintToggles();
   if (S.mesh) {
     await S.mesh.setTracks(S.micTrack, videoOut());
-    S.mesh.broadcast({ k: "state", mic: S.mic, cam: on });
+    S.mesh.broadcast(myState());
   }
 }
 
@@ -300,7 +305,7 @@ function enterCall(name) {
   paintNet();
   mesh.addEventListener("channel-open", (e) => {
     // catch the newcomer up: board, chat, how I am
-    mesh.sendTo(e.detail.id, { k: "state", mic: S.mic, cam: S.cam, hand: S.hands.has("me") });
+    mesh.sendTo(e.detail.id, { ...myState(), hand: S.hands.has("me") });
     if (S.board && S.board.strokes.length) mesh.sendTo(e.detail.id, S.board.snapshot());
     if (S.chat.length) mesh.sendTo(e.detail.id, { k: "history", chat: S.chat.slice(-200) });
     if (S.recorder) mesh.sendTo(e.detail.id, { k: "rec", on: true });
@@ -342,6 +347,7 @@ function onMessage(from, m) {
     if (tile) {
       tile.classList.toggle("muted", !m.mic);
       tile.classList.toggle("camoff", !m.cam);
+      tile.classList.toggle("screen", !!m.screen);
     }
     if (m.hand !== undefined) setHand(from, m.hand, who, true);
   } else if (m.k === "hand") {
@@ -554,7 +560,9 @@ function openMore(items) {
   };
   inner.append(flip);
   sheet.append(inner);
-  sheet.onclick = (e) => e.target === sheet && sheet.remove();
+  sheet.onclick = (e) => {
+    if (e.target === sheet) sheet.remove(); // a block: an onclick that returns false cancels the click (checkboxes stopped working)
+  };
   document.body.append(sheet);
 }
 
@@ -589,6 +597,7 @@ $("panelClose").onclick = closePanel;
 // chat
 function addChat(c) {
   S.chat.push(c);
+  S.recorder?.event({ kind: "chat", name: c.from === "me" ? localStorage.getItem("name") || "" : c.name, text: c.text });
   renderChat();
   if (S.panel !== "chat") {
     badge("bChat");
@@ -746,6 +755,7 @@ function react(id, e) {
   f.className = "float";
   f.textContent = e;
   tile.append(f);
+  S.recorder?.event({ kind: "react", id, e });
   setTimeout(() => f.remove(), 2600);
 }
 
@@ -758,7 +768,8 @@ async function toggleScreen() {
     S.screen.onended = stopScreen;
     $("bScreen")?.classList.add("on");
     refreshLocalVideo();
-    await S.mesh.setTracks(S.mic ? S.micTrack : S.micTrack, S.screen);
+    await S.mesh.setTracks(S.micTrack, S.screen);
+    S.mesh.broadcast(myState());
     toast(t("You're sharing your screen"));
   } catch (_) {}
 }
@@ -769,6 +780,7 @@ async function stopScreen() {
   $("bScreen")?.classList.remove("on");
   refreshLocalVideo();
   await S.mesh.setTracks(S.micTrack, videoOut());
+  S.mesh.broadcast(myState());
 }
 
 // ---------- cameras, microphones, speakers ----------
@@ -899,7 +911,9 @@ async function openDevices() {
   done.onclick = close;
   inner.append(done);
   sheet.append(inner);
-  sheet.onclick = (e) => e.target === sheet && close();
+  sheet.onclick = (e) => {
+    if (e.target === sheet) close(); // a block: an onclick that returns false cancels the click (checkboxes stopped working)
+  };
   document.body.append(sheet);
 }
 
@@ -927,7 +941,9 @@ function paintRec() {
     paintRec.timer = setInterval(tick, 1000);
   } else if (others.length) dot.textContent = `● ${t("{name} is recording", { name: others.join(", ") })}`;
 }
-$("recDot").onclick = () => S.recorder && toggleRec();
+$("recDot").onclick = () => {
+  if (S.recorder) toggleRec();
+};
 
 async function toggleRec() {
   if (S.recorder) {
@@ -939,12 +955,106 @@ async function toggleRec() {
     toast(t("Recording saved to your downloads"));
     return;
   }
+  recordSheet();
+}
+
+// What a recording holds, said before it starts (like Meet's "make sure everyone is ready"), with the choices
+// remembered on this device: the layout, and what of the call shows in the picture.
+const REC_DEFAULT = { layout: "speaker", reactions: true, hands: true, chat: true };
+function recOptions() {
+  try {
+    return { ...REC_DEFAULT, ...JSON.parse(localStorage.getItem("juntos.rec") || "{}") };
+  } catch (_) {
+    return { ...REC_DEFAULT };
+  }
+}
+
+function recordSheet() {
+  const o = recOptions();
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  const inner = document.createElement("div");
+  inner.className = "sheetInner devices recSheet";
+  const close = () => sheet.remove();
+  const h = document.createElement("h3");
+  h.textContent = t("Record this call");
+  inner.append(h);
+  const seg = document.createElement("div");
+  seg.className = "seg";
+  const choices = [
+    ["speaker", t("Who's talking"), t("Big, with everyone else small")],
+    ["grid", t("Everyone"), t("All the same size")],
+  ];
+  for (const [id, name, hint] of choices) {
+    const b = document.createElement("button");
+    b.dataset.layout = id;
+    b.innerHTML = `<b></b><small></small>`;
+    b.firstChild.textContent = name;
+    b.lastChild.textContent = hint;
+    b.onclick = () => {
+      o.layout = id;
+      for (const x of seg.children) x.classList.toggle("on", x === b);
+    };
+    b.classList.toggle("on", o.layout === id);
+    seg.append(b);
+  }
+  inner.append(seg);
+  const show = document.createElement("p");
+  show.className = "small";
+  show.textContent = t("Also show in the video:");
+  inner.append(show);
+  for (const [key, label] of [["reactions", t("Reactions")], ["hands", t("Raised hands")], ["chat", t("Chat messages")]]) {
+    const l = document.createElement("label");
+    l.className = "check";
+    const c = document.createElement("input");
+    c.type = "checkbox";
+    c.name = key;
+    c.checked = !!o[key];
+    c.onchange = () => (o[key] = c.checked);
+    l.append(c, document.createTextNode(label));
+    inner.append(l);
+  }
+  const note = document.createElement("p");
+  note.className = "small";
+  note.textContent = t("Everyone's voices and the picture above, saved as a video on this device. Nothing is uploaded. Everyone sees that you're recording.");
+  inner.append(note);
+  const row = document.createElement("div");
+  row.className = "row2";
+  const cancel = document.createElement("button");
+  cancel.className = "ghost";
+  cancel.textContent = t("Cancel");
+  cancel.onclick = close;
+  const go = document.createElement("button");
+  go.className = "primary";
+  go.id = "recGo";
+  go.textContent = t("Start recording");
+  go.onclick = () => {
+    localStorage.setItem("juntos.rec", JSON.stringify(o));
+    close();
+    startRec(o);
+  };
+  row.append(cancel, go);
+  inner.append(row);
+  sheet.append(inner);
+  sheet.onclick = (e) => {
+    if (e.target === sheet) close(); // a block: an onclick that returns false cancels the click (checkboxes stopped working)
+  };
+  document.body.append(sheet);
+}
+
+function startRec(opts) {
+  if (S.recorder) return;
   S.recorder = new Recorder(() =>
     [...document.querySelectorAll(".tile")].map((t) => ({
+      id: t.dataset.id,
       video: t.querySelector("video"),
-      name: t.querySelector(".nm").textContent,
+      name: t.dataset.id === "me" ? localStorage.getItem("name") || "" : t.querySelector(".nm").textContent, // no "(you)" in the file
+      camoff: t.classList.contains("camoff"),
+      screen: t.dataset.id === "me" ? !!S.screen : t.classList.contains("screen"),
+      hand: S.hands.has(t.dataset.id),
       stream: t.dataset.id === "me" ? (S.micTrack ? new MediaStream([S.micTrack]) : null) : S.mesh.peers.get(t.dataset.id)?.stream,
     })),
+    opts,
   );
   S.recorder.start();
   paintRec();

@@ -9,7 +9,7 @@ install, open source.
 - **Start a call** and send the link. People type their name and join.
 - Background blur or a picture behind you (runs on your own device).
 - Chat, a shared whiteboard, screen sharing, raise a hand, reactions.
-- Record the call on your own device (everyone sees that you are recording). No upload, no limit.
+- Record the call on your own device as an MP4 (everyone sees that you are recording). Landscape, with whoever is talking (or a shared screen) big and the others small, or everyone the same size; reactions, raised hands and chat can show in the video. No upload, no limit.
 
 ## How it works
 Audio, video, chat and the board go directly between the people in the call (WebRTC). A tiny Cloudflare Worker

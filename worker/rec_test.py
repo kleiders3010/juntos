@@ -21,7 +21,7 @@ with sync_playwright() as p:
     errs = []; pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.goto(BASE + "/"); pg.click("#start"); pg.fill("#name", "Test"); pg.click("#enter")
     pg.wait_for_selector("#call:not([hidden])", timeout=20000); pg.wait_for_timeout(1500)
-    pg.evaluate("document.getElementById('bRec').click()"); pg.wait_for_timeout(int(SECONDS * 1000))
+    pg.evaluate("document.getElementById('bRec').click()"); pg.click('#recGo'); pg.wait_for_timeout(int(SECONDS * 1000))
     with pg.expect_download(timeout=20000) as dl:
         pg.evaluate("document.getElementById('bRec').click()")
     path = os.path.join(os.environ.get("REC_OUT") or tempfile.mkdtemp(), MODE + ".mp4"); dl.value.save_as(path)
