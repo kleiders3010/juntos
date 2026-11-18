@@ -1,6 +1,7 @@
 # Everyone is heard: the other person's voice really plays (its <audio> starts and its time moves), with cameras on
 # and with cameras off. A video element that never gets a picture (camera off, or video not sent to save data) never
 # starts; voices used to play from it, so with cameras off nobody was heard while their talking ring still lit up.
+# Also: every connection is encrypted (Kleider, 2026-11-18: "make sure sessions are encrypted of course").
 # Run: python hear_test.py [base-url]
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
@@ -57,6 +58,13 @@ def call(b, cams):
         playing = bool(v1 and v2 and v2["started"] and not v2["paused"] and not v2["muted"] and v2["time"] > v1["time"])
         check(playing, f"{label}: {who} hears the other person (voice plays: {v2})")
         check(bool(v2 and v2["videoMuted"]), f"{label}: the picture is muted, the voice comes only from its own element")
+    # every connection is encrypted (DTLS + SRTP), and on a real site the signaling is TLS (wss)
+    crypto = a.evaluate("""Promise.all([...__S.mesh.peers.values()].map(p => p.pc.getStats().then(r => { let ok = false;
+      r.forEach(x => { if (x.type === 'transport' && x.dtlsState === 'connected' && x.srtpCipher) ok = true }); return ok })))""")
+    check(bool(crypto) and all(crypto), f"{label}: the call is encrypted (DTLS + SRTP on every connection)")
+    if BASE.startswith("https"):
+        check(a.evaluate("[...performance.getEntriesByType('resource')].every(e => !e.name.startsWith('http:'))") and a.url.startswith("https"),
+              f"{label}: everything loads over https")
     a.context.close()
     o.context.close()
 
