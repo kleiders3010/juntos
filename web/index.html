@@ -45,6 +45,7 @@
       <h2>Ready to join?</h2>
       <input id="name" placeholder="Your name" maxlength="60" autocomplete="name">
       <button id="enter" class="primary big">Join now</button>
+      <div class="lobbyMic"><span>Microphone</span><div id="pMeter" class="meter"><i></i></div><button id="pCheck" class="chip">Check sound</button></div>
       <p id="lobbyMsg" class="small"></p>
     </div>
   </div>
@@ -88,6 +89,8 @@
 </section>
 
 <div id="toasts" class="toasts"></div>
+<div id="mutedNote" class="mutedNote" role="status" hidden></div>
+<div id="pttNote" class="pttNote" role="status" hidden></div>
 <input id="bgFile" type="file" accept="image/*" hidden>
 <script type="module" src="/app.js"></script>
 </body>

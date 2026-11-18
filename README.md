@@ -12,6 +12,8 @@ install, open source.
 - Layouts, like Meet's: Auto, Tiled, Spotlight (only who's talking) and Sidebar (who's talking big, the others beside); pin someone; hide people with their camera off; your own picture with everyone, small in a corner or hidden. Remembered on your device.
 - Whoever starts the call is its host: mute one person or everyone, remove someone, lock the call so newcomers ask to join and the host lets them in. If the host leaves, whoever is waiting comes in.
 - A shared whiteboard with no edges: pen in three sizes, rectangles, circles, arrows, text, an eraser and undo; move and zoom your own view (pinch or Ctrl + scroll to zoom; two fingers, scrolling or the hand to move); make it big with everyone small floating over it.
+- Sound: check your microphone and speaker before joining (a live level, a test sound, record a few seconds and hear them back); background noise reduction (on, can be turned off); a note when you talk with the microphone off; hold Space to talk while muted.
+- Keyboard: M microphone, V camera (or Meet's Ctrl+D / Ctrl+E), H raise a hand, C chat, ? the list.
 - Set how loud you hear each person, from silent to 300 % for someone quiet (only on your device, remembered).
 - Record the call on your own device as an MP4 (everyone sees that you are recording). Landscape, with whoever is talking (or a shared screen) big and the others small, or everyone the same size; reactions, raised hands and chat can show in the video. No upload, no limit.
 

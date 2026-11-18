@@ -245,3 +245,21 @@ body.boardBig .grid .tile .label { font-size: 12px; padding: 1px 6px; }
 }
 #boardMax { margin-left: auto; margin-right: 4px; }
 #boardMax svg { width: 22px; height: 22px; fill: currentColor; display: block; }
+
+/* audio: lobby level, sound tests, muted note, push to talk, shortcuts */
+.lobbyMic { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
+.lobbyMic[hidden] { display: none; }
+.devTests { display: flex; flex-wrap: wrap; gap: 8px; }
+.devTests .chip { padding: 10px 16px; font-size: 15px; }
+.devTests .chip:disabled { opacity: .8; }
+.linkBtn { background: none; color: var(--muted); text-decoration: underline; font-size: 14px; justify-self: start; align-self: flex-start; padding: 4px 0; }
+.mutedNote, .pttNote { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 60;
+  display: flex; align-items: center; gap: 12px; background: #e5e7eb; color: #111827; padding: 10px 12px 10px 16px; border-radius: 14px;
+  box-shadow: 0 6px 24px rgba(0,0,0,.4); font-size: 16px; max-width: calc(100vw - 24px); }
+.mutedNote[hidden], .pttNote[hidden] { display: none; }
+.mutedNote svg { width: 22px; height: 22px; fill: #dc2626; flex: none; }
+.mutedNote .primary { padding: 8px 14px; }
+.pttNote { background: #16a34a; color: #fff; padding: 10px 16px; }
+.keysSheet dl { display: grid; grid-template-columns: auto 1fr; gap: 10px 18px; margin: 4px 0 8px; font-size: 16px; }
+.keysSheet dt { font-family: ui-monospace, monospace; font-weight: 600; white-space: nowrap; }
+.keysSheet dd { margin: 0; color: var(--muted); }

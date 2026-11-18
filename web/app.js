@@ -247,7 +247,38 @@ async function openLobby() {
   paintToggles();
   if (S.bgMode !== "none" && S.camTrack) applyBackground(S.bgMode);
   ($("name").value ? $("enter") : $("name")).focus();
+  lobbyMeter();
 }
+// the microphone's level in the lobby, so you see it hears you before you go in
+function lobbyMeter() {
+  clearInterval(lobbyMeter.timer);
+  const m = $("pMeter");
+  if (!S.micTrack) return (m.parentNode.hidden = true);
+  m.parentNode.hidden = false;
+  const ac = (openDevices.ac ||= new (window.AudioContext || window.webkitAudioContext)());
+  const an = ac.createAnalyser();
+  an.fftSize = 512;
+  let tr = null;
+  const buf = new Uint8Array(an.fftSize);
+  lobbyMeter.timer = setInterval(() => {
+    if ($("lobby").hidden) {
+      clearInterval(lobbyMeter.timer);
+      return tr?.stop();
+    }
+    if (!tr || tr.src !== S.micTrack) {
+      tr?.stop();
+      tr = micCopy();
+      ac.createMediaStreamSource(new MediaStream([tr])).connect(an);
+    }
+    ac.resume?.();
+    an.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (const b of buf) sum += (b - 128) ** 2;
+    m.firstChild.style.width = `${Math.min(100, Math.sqrt(sum / buf.length) * 4)}%`;
+    m.classList.toggle("off", !S.mic);
+  }, 100);
+}
+$("pCheck").onclick = openDevices;
 $("pMic").onclick = () => setMic(!S.mic);
 $("pCam").onclick = () => setCam(!S.cam);
 $("pBg").onclick = () => {
@@ -289,6 +320,7 @@ function enterCall(name) {
   S.waiting = false;
   S.knocks = new Map();
   paintKnocks();
+  watchMuted();
   S.mesh = new Mesh({
     room: S.code,
     name,
@@ -1245,6 +1277,12 @@ function setHand(id, on, who, quiet) {
   if (on && !quiet && id !== "me") toast(t("{name} raised a hand", { name: who }));
   renderPeople();
 }
+function toggleHand() {
+  const on = !S.hands.has("me");
+  setHand("me", on);
+  S.mesh.broadcast({ k: "hand", on });
+  return on;
+}
 function openReactions() {
   const box = $("reactions");
   if (!box.hidden) return (box.hidden = true);
@@ -1253,9 +1291,7 @@ function openReactions() {
   hand.className = "chip";
   hand.textContent = S.hands.has("me") ? t("Lower hand") : t("✋ Raise hand");
   hand.onclick = () => {
-    const on = !S.hands.has("me");
-    setHand("me", on);
-    S.mesh.broadcast({ k: "hand", on });
+    toggleHand();
     box.hidden = true;
   };
   box.append(hand);
@@ -1308,13 +1344,146 @@ async function stopScreen() {
   S.mesh.broadcast(myState());
 }
 
+// ---------- talking while muted, push to talk, keyboard shortcuts ----------
+// Talking with the mic off: a note says so (listening to a copy of the mic, which nobody receives).
+function watchMuted() {
+  clearInterval(watchMuted.timer);
+  const ac = (openDevices.ac ||= new (window.AudioContext || window.webkitAudioContext)());
+  let tr = null, an = null, loud = 0, lastShown = 0;
+  const buf = new Uint8Array(512);
+  const stop = () => {
+    tr?.stop();
+    tr = null;
+    loud = 0;
+  };
+  watchMuted.timer = setInterval(() => {
+    if ($("call").hidden) {
+      stop();
+      return clearInterval(watchMuted.timer);
+    }
+    if (S.mic || !S.micTrack || S.ptt) {
+      if (S.mic) $("mutedNote").hidden = true;
+      return stop();
+    }
+    if (!tr || tr.src !== S.micTrack) {
+      tr?.stop();
+      tr = micCopy();
+      an = ac.createAnalyser();
+      an.fftSize = 512;
+      ac.createMediaStreamSource(new MediaStream([tr])).connect(an);
+    }
+    an.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (const b of buf) sum += (b - 128) ** 2;
+    loud = Math.sqrt(sum / buf.length) > 6 ? loud + 1 : 0;
+    // about a second of talking, and not again for half a minute
+    if (loud >= 5 && Date.now() - lastShown > 30000) {
+      lastShown = Date.now();
+      showMuted();
+    }
+  }, 200);
+}
+function showMuted() {
+  const n = $("mutedNote");
+  n.innerHTML = `${svg("micOff")}<span></span><button class="primary"></button>`;
+  n.querySelector("span").textContent = isPhone ? t("You're muted") : t("You're muted. Hold Space to talk, or press M.");
+  n.querySelector("button").textContent = t("Unmute");
+  n.querySelector("button").onclick = () => {
+    n.hidden = true;
+    setMic(true);
+  };
+  n.hidden = false;
+  clearTimeout(showMuted.timer);
+  showMuted.timer = setTimeout(() => (n.hidden = true), 6000);
+}
+
+function typing(e) {
+  return e.target.closest?.("input, textarea, select, [contenteditable]");
+}
+function pttEnd() {
+  if (!S.ptt) return;
+  S.ptt = false;
+  $("pttNote").hidden = true;
+  setMic(false);
+}
+addEventListener("keydown", (e) => {
+  if ($("call").hidden || typing(e) || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (e.ctrlKey || e.metaKey) {
+    // the keys Meet uses
+    if (k === "d") setMic(!S.mic);
+    else if (k === "e") setCam(!S.cam);
+    else return;
+    return e.preventDefault();
+  }
+  if (e.key === " ") {
+    // hold Space to talk while muted (on the board Space moves the board; a focused field keeps its Space)
+    if (S.panel === "board" || (e.target !== document.body && !e.target.closest("#bar, #grid"))) return;
+    e.preventDefault();
+    if (e.repeat || S.mic || S.ptt || !S.micTrack) return;
+    S.ptt = true;
+    $("mutedNote").hidden = true;
+    $("pttNote").textContent = t("Talking… let go of Space to mute");
+    $("pttNote").hidden = false;
+    return setMic(true);
+  }
+  if (document.querySelector(".sheet")) return;
+  if (k === "m") setMic(!S.mic);
+  else if (k === "v") setCam(!S.cam);
+  else if (k === "h") toast(toggleHand() ? t("Hand raised") : t("Hand lowered"));
+  else if (k === "c") openPanel("chat");
+  else if (e.key === "?") shortcutsSheet();
+  else return;
+  e.preventDefault();
+});
+addEventListener("keyup", (e) => e.key === " " && pttEnd());
+addEventListener("blur", pttEnd);
+
+function shortcutsSheet() {
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  const inner = document.createElement("div");
+  inner.className = "sheetInner devices recSheet keysSheet";
+  const h = document.createElement("h3");
+  h.textContent = t("Keyboard shortcuts");
+  inner.append(h);
+  const dl = document.createElement("dl");
+  for (const [keys, what] of [
+    ["M  ·  Ctrl+D", "Microphone on / off"],
+    ["Space", "Hold to talk while muted"],
+    ["V  ·  Ctrl+E", "Camera on / off"],
+    ["H", "Raise / lower your hand"],
+    ["C", "Chat"],
+    ["Esc", "Unpin"],
+    ["?", "This list"],
+  ]) {
+    const dt = document.createElement("dt");
+    dt.textContent = keys;
+    const dd = document.createElement("dd");
+    dd.textContent = t(what);
+    dl.append(dt, dd);
+  }
+  inner.append(dl);
+  const done = document.createElement("button");
+  done.className = "primary";
+  done.textContent = t("Done");
+  done.onclick = () => sheet.remove();
+  inner.append(done);
+  sheet.append(inner);
+  sheet.onclick = (e) => {
+    if (e.target === sheet) sheet.remove();
+  };
+  document.body.append(sheet);
+  done.focus();
+}
+
 // ---------- cameras, microphones, speakers ----------
 function camConstraints(id) {
   const v = { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24 } };
   return id ? { ...v, deviceId: { ideal: id } } : { ...v, facingMode: S.facing };
 }
 function micConstraints(id) {
-  const a = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+  const a = { echoCancellation: true, noiseSuppression: S.noise, autoGainControl: true };
   return id ? { ...a, deviceId: { ideal: id } } : a;
 }
 
@@ -1340,10 +1509,28 @@ async function useCamera(video) {
   }
 }
 
+// a copy of the microphone for a level meter (heard by nobody); useMic stops them all
+function micCopy() {
+  const c = S.micTrack.clone();
+  c.src = S.micTrack;
+  c.enabled = true;
+  (S.micCopies ||= new Set()).add(c);
+  return c;
+}
 async function useMic(id) {
+  // a browser shares one capture between the tracks of a microphone: while any of them is open, a new one
+  // keeps the old settings (the noise switch did nothing), so everything on it stops first
+  for (const c of S.micCopies || []) c.stop();
+  S.micCopies?.clear();
+  S.micTrack?.stop();
   try {
-    const s = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(id) });
-    S.micTrack?.stop();
+    let s;
+    try {
+      s = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(id) });
+    } catch (e) {
+      s = await navigator.mediaDevices.getUserMedia({ audio: true }); // never left without a microphone
+      toast(t("Couldn't switch microphone"));
+    }
     S.micTrack = s.getAudioTracks()[0];
     S.micTrack.enabled = S.mic;
     localStorage.setItem("micId", S.micTrack.getSettings().deviceId || id);
@@ -1363,6 +1550,27 @@ function useSpeaker(id) {
   S.out?.setSinkId?.(id).catch(() => {}); // boosted voices
 }
 S.sink = localStorage.getItem("sinkId") || "";
+S.noise = localStorage.getItem("juntos.noise") !== "off"; // the browser's own noise reduction (on unless turned off)
+
+// a short two-note chime as a WAV, so it can be played on the chosen speaker
+function chime() {
+  const rate = 22050, n = Math.round(rate * 0.9), d = new DataView(new ArrayBuffer(44 + n * 2));
+  const w = (o, s) => [...s].forEach((c, i) => d.setUint8(o + i, c.charCodeAt(0)));
+  w(0, "RIFF"); d.setUint32(4, 36 + n * 2, true); w(8, "WAVEfmt "); d.setUint32(16, 16, true); d.setUint16(20, 1, true);
+  d.setUint16(22, 1, true); d.setUint32(24, rate, true); d.setUint32(28, rate * 2, true); d.setUint16(32, 2, true);
+  d.setUint16(34, 16, true); w(36, "data"); d.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) {
+    const s = i / rate, f = s < 0.45 ? 660 : 880, local = s % 0.45;
+    const env = Math.min(1, local * 40) * Math.exp(-local * 5);
+    d.setInt16(44 + i * 2, Math.sin(2 * Math.PI * f * s) * env * 0.5 * 32767, true);
+  }
+  return URL.createObjectURL(new Blob([d], { type: "audio/wav" }));
+}
+function playOnSpeaker(url) {
+  const a = new Audio(url);
+  if (S.sink) a.setSinkId?.(S.sink).catch(() => {});
+  return a.play().then(() => a).catch(() => null);
+}
 
 async function flipCamera() {
   S.facing = S.facing === "user" ? "environment" : "user";
@@ -1425,6 +1633,77 @@ async function openDevices() {
     }, 100);
   };
   startMeter();
+  const noise = document.createElement("label");
+  noise.className = "check";
+  noise.innerHTML = `<input type="checkbox" name="noise"><span></span>`;
+  noise.lastChild.textContent = t("Reduce background noise");
+  noise.firstChild.checked = S.noise;
+  noise.firstChild.onchange = async () => {
+    S.noise = noise.firstChild.checked;
+    localStorage.setItem("juntos.noise", S.noise ? "on" : "off");
+    await useMic(S.micTrack?.getSettings().deviceId || localStorage.getItem("micId"));
+    startMeter();
+  };
+  inner.append(noise);
+  const tests = document.createElement("div");
+  tests.className = "devTests";
+  const testBtn = (name, label, run) => {
+    const b = document.createElement("button");
+    b.className = "chip";
+    b.name = name;
+    b.textContent = t(label);
+    b.onclick = async () => {
+      if (b.disabled) return;
+      b.disabled = true;
+      try {
+        await run(b);
+      } finally {
+        b.disabled = false;
+        b.textContent = t(label);
+      }
+    };
+    tests.append(b);
+  };
+  testBtn("testSpeaker", "Play a test sound", async (b) => {
+    b.textContent = t("Playing…");
+    const a = await playOnSpeaker((chime.url ||= chime()));
+    if (!a) return toast(t("Couldn't play a sound here"));
+    await new Promise((r) => (a.onended = r));
+  });
+  if (window.MediaRecorder && S.micTrack) {
+    // say something, hear it back: the way to know the others hear you
+    testBtn("testMic", "Test microphone", async (b) => {
+      const tr = S.micTrack.clone();
+      tr.enabled = true;
+      const rec = new MediaRecorder(new MediaStream([tr]));
+      const parts = [];
+      rec.ondataavailable = (e) => e.data.size && parts.push(e.data);
+      const done = new Promise((r) => (rec.onstop = r));
+      rec.start();
+      for (let s = 3; s > 0; s--) {
+        b.textContent = t("Say something… {n}", { n: s });
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      rec.stop();
+      await done;
+      tr.stop();
+      b.textContent = t("Playing it back…");
+      const a = await playOnSpeaker(URL.createObjectURL(new Blob(parts, { type: rec.mimeType })));
+      if (!a) return toast(t("Couldn't play a sound here"));
+      await new Promise((r) => (a.onended = r));
+    });
+  }
+  inner.append(tests);
+  if (!isPhone) {
+    const k = document.createElement("button");
+    k.className = "linkBtn";
+    k.textContent = t("Keyboard shortcuts");
+    k.onclick = () => {
+      close();
+      shortcutsSheet();
+    };
+    inner.append(k);
+  }
   if (!list.some((d) => d.label)) {
     const p = document.createElement("p");
     p.className = "small";
