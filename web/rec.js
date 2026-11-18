@@ -208,6 +208,7 @@ export class Recorder {
       const vw = vw0 * r;
       const vh = vh0 * r;
       ctx.drawImage(v, x + (w - vw) / 2, y + (h - vh) / 2, vw, vh);
+      if (t.overlay) t.overlay(ctx, x + (w - vw) / 2, y + (h - vh) / 2, vw, vh); // drawings on a shared screen
     } else {
       ctx.fillStyle = "#3c4043";
       ctx.fillRect(x, y, w, h);

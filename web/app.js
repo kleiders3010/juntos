@@ -6,6 +6,7 @@ import { t, translatePage } from "./i18n.js";
 import { Activities } from "./act.js";
 import { Breakout } from "./breakout.js";
 import { Notes } from "./notes.js";
+import { Annotate } from "./annotate.js";
 
 translatePage();
 const t2 = t; // the translator, where "t" is a tile
@@ -202,6 +203,7 @@ function refreshLocalVideo() {
     tile.classList.toggle("camoff", !(S.cam && t));
     tile.classList.toggle("mirror", !S.screen && S.facing === "user");
   }
+  S.an?.update();
 }
 
 // how I am, for the others (and for their recordings: a shared screen leads the picture)
@@ -383,6 +385,7 @@ function enterCall(name) {
     if (S.act.any()) mesh.sendTo(e.detail.id, S.act.snapshotFor(e.detail.id));
     S.br.greet(e.detail.id);
     S.notes.greet(e.detail.id);
+    S.an.greet(e.detail.id);
   });
   mesh.addEventListener("message", (e) => onMessage(e.detail.from, e.detail.msg));
   S.br.reset();
@@ -417,7 +420,7 @@ function onMessage(from, m) {
   const p = S.mesh.peers.get(from);
   const who = (p && p.name) || t("Someone");
   // chat, hands, reactions and captions from someone in another breakout room aren't for me
-  if (["chat", "hand", "react", "cap"].includes(m.k) && !S.br.same(from)) return;
+  if (["chat", "hand", "react", "cap", "ana", "and", "anc", "ano", "anp", "ans"].includes(m.k) && !S.br.same(from)) return;
   if (S.br.receive(from, m)) {
     // breakout rooms
   } else if (m.k === "chat") {
@@ -452,6 +455,8 @@ function onMessage(from, m) {
     paintRec();
   } else if (S.notes.receive(from, m)) {
     // shared notes
+  } else if (S.an.receive(from, m)) {
+    // drawing on a shared screen
   } else if (S.act.receive(from, m)) {
     // polls and Q&A
   } else if (["bitem", "bdel", "bclear", "bstate"].includes(m.k)) {
@@ -715,6 +720,7 @@ setInterval(() => {
 }, 300);
 
 function layout() {
+  S.an?.update(); // drawing on shared screens: which tiles show one
   const g = $("grid");
   const v = S.view;
   const tiles = [...g.children].filter((x) => !x.classList.contains("away")); // people in other breakout rooms aren't shown
@@ -2321,6 +2327,7 @@ function startRec(opts) {
       camoff: t.classList.contains("camoff"),
       screen: t.dataset.id === "me" ? !!S.screen : t.classList.contains("screen"),
       hand: S.hands.has(t.dataset.id),
+      overlay: S.an.overlay(t.dataset.id), // drawings on a shared screen
       stream: t.dataset.id === "me" ? (S.micTrack ? new MediaStream([S.micTrack]) : null) : S.mesh.peers.get(t.dataset.id)?.stream,
     })).concat(S.boardBig && S.panel === "board" ? [{ id: "board", video: $("boardCanvas"), name: t("Board"), screen: true }] : []),
     opts,
@@ -2460,6 +2467,25 @@ S.notes = new Notes({
   },
 });
 S.notes.mount($("notesPane"));
+
+// drawing on a shared screen (annotate.js): a pen button on the shared screen's tile
+S.an = new Annotate({
+  t,
+  send: (m) => S.mesh?.roomcast(m),
+  sendTo: (id, m) => S.mesh?.sendTo(id, m),
+  myId: () => S.mesh?.id || "me",
+  myName: () => localStorage.getItem("name") || "",
+  amHost: () => !!S.isHost,
+  isHost: (id) => !!S.mesh?.hosts.has(id),
+  name: (id) => (id === S.mesh?.id ? localStorage.getItem("name") || "" : S.mesh?.peers.get(id)?.name || t("Someone")),
+  sharing: (id) => {
+    if (id === "me") return !!S.screen;
+    const tile = document.querySelector(`#grid .tile[data-id="${CSS.escape(id)}"]`);
+    return !!tile && tile.classList.contains("screen") && !tile.classList.contains("away");
+  },
+  focus: (tile) => spotlight(tile),
+  notify: toast,
+});
 
 // breakout rooms (breakout.js): the host's panel lives in #brPane, the bar and invitation at the top of the call
 function brMoved() {

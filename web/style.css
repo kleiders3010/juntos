@@ -373,3 +373,33 @@ body:has(#brBar:not([hidden])) .toasts { top: calc(var(--brH, 60px) + 24px); } /
 .notesText[readonly] { opacity: .85; }
 .notesWriting { color: var(--muted); font-size: 13px; min-height: 18px; }
 .notesFoot { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* drawing on a shared screen */
+.anCanvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; touch-action: none; }
+.tile.annotating .anCanvas { pointer-events: auto; cursor: crosshair; }
+.tile.annotating[data-tool="eraser"] .anCanvas { cursor: cell; }
+.tile.annotating[data-tool="text"] .anCanvas { cursor: text; }
+.tile.annotating[data-tool="pointer"] .anCanvas { cursor: none; }
+.anBtn { position: absolute; top: 8px; right: 56px; width: 40px; height: 40px; border-radius: 50%; background: rgba(0,0,0,.5); display: grid; place-items: center; z-index: 3; opacity: .85; }
+.anBtn[hidden] { display: none; }
+.anBtn svg { width: 20px; height: 20px; fill: #fff; }
+@media (hover: hover) { .anBtn { opacity: 0; transition: opacity .15s; } .tile:hover .anBtn, .tile.spot .anBtn, .tile.main .anBtn { opacity: .9; } }
+.tile.annotating .anBtn { background: #2563eb; opacity: 1; }
+.grid[data-mode="tiled"].hasSpot .tile:not(.spot) .anBtn, .grid[data-mode="sidebar"] .tile:not(.main) .anBtn { display: none; }
+.anBar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); width: max-content; z-index: 5; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 2px; max-width: calc(100% - 120px); padding: 4px 6px; border-radius: 12px; background: rgba(17,24,39,.92); box-shadow: 0 4px 16px rgba(0,0,0,.45); }
+.anBar > button { width: 36px; height: 36px; border-radius: 8px; display: grid; place-items: center; background: transparent; }
+.anBar > button svg { width: 20px; height: 20px; fill: #e5e7eb; }
+.anBar > button:hover { background: rgba(255,255,255,.1); }
+.anBar > button.on { background: #2563eb; }
+.anBar > button.on svg { fill: #fff; }
+.anBar > button:disabled { opacity: .35; }
+.anBar .anColor { width: 26px; height: 26px; border-radius: 50%; background: var(--c); border: 2px solid rgba(255,255,255,.35); margin: 0 2px; }
+.anBar .anColor.on { outline: 2px solid #fff; outline-offset: 2px; background: var(--c); }
+.anSep { width: 1px; height: 24px; background: #4b5563; margin: 0 4px; }
+.anMenu { position: absolute; top: calc(100% + 6px); right: 0; display: flex; flex-direction: column; min-width: 220px; padding: 6px; border-radius: 10px; background: #1f2937; box-shadow: 0 6px 20px rgba(0,0,0,.5); }
+.anMenu button { text-align: left; padding: 10px 12px; border-radius: 8px; background: transparent; color: var(--fg); font: inherit; font-size: 14px; }
+.anMenu button:hover { background: rgba(255,255,255,.08); }
+.anMenu button[aria-checked]::before { content: ""; display: inline-block; width: 18px; }
+.anMenu button[aria-checked="true"]::before { content: "✓"; }
+.anText { position: absolute; z-index: 4; min-width: 160px; max-width: 60%; resize: none; overflow: hidden; background: rgba(17,24,39,.6); border: 1px dashed rgba(255,255,255,.7); border-radius: 4px; padding: 2px 4px; font-weight: 600; font-family: system-ui, sans-serif; line-height: 1.2; outline: none; }
+@media (max-width: 600px) { .anBar { top: 54px; max-width: calc(100% - 16px); } .anBar > button { width: 34px; height: 34px; } }
