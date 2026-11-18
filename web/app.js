@@ -6,7 +6,8 @@ import { Recorder } from "./rec.js";
 // ---------- small helpers ----------
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
-const SIGNAL = params.get("signal") || "wss://signal.jurisgames.com";
+// The page and its signaling share one host (meet.jurisgames.com); ?signal= points elsewhere for testing.
+const SIGNAL = params.get("signal") || (location.protocol === "https:" ? `wss://${location.host}` : "wss://meet.jurisgames.com");
 const isPhone = matchMedia("(max-width: 640px)").matches;
 
 const ICON = {

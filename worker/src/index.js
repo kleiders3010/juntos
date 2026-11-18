@@ -15,9 +15,30 @@ export default {
       return env.ROOMS.get(id).fetch(req);
     }
     if (url.pathname === "/health") return new Response("ok");
+    if (url.pathname === "/turn") return turn(env);
     return new Response("not found", { status: 404 });
   },
 };
+
+// Relay (TURN) credentials, only for people whose direct connection failed. Cloudflare's free
+// allowance is 1,000 GB a month (shared with its SFU); past it, it bills. So the number of
+// credentials handed out per month is capped well below what could reach that.
+const TURN_PER_MONTH = 150;
+
+async function turn(env) {
+  if (!env.TURN_KEY || !env.TURN_KEY_ID) return Response.json({ iceServers: [] });
+  const budget = env.ROOMS.get(env.ROOMS.idFromName("~budget"));
+  const ok = await (await budget.fetch("https://budget/take")).json();
+  if (!ok.granted) return Response.json({ iceServers: [], reason: "monthly relay budget used" }, { status: 429 });
+  const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.TURN_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ ttl: 4 * 3600 }),
+  });
+  if (!r.ok) return Response.json({ iceServers: [] }, { status: 502 });
+  const body = await r.json();
+  return Response.json({ iceServers: body.iceServers || [] }, { headers: { "Cache-Control": "no-store" } });
+}
 
 export class Room {
   constructor(state) {
@@ -29,6 +50,14 @@ export class Room {
   }
 
   async fetch(req) {
+    if (new URL(req.url).pathname === "/take") {
+      // the "~budget" object: counts relay credentials per calendar month
+      const month = new Date().toISOString().slice(0, 7);
+      const used = (await this.state.storage.get(month)) || 0;
+      if (used >= TURN_PER_MONTH) return Response.json({ granted: false, used });
+      await this.state.storage.put(month, used + 1);
+      return Response.json({ granted: true, used: used + 1 });
+    }
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1]);
     return new Response(null, { status: 101, webSocket: pair[0] });

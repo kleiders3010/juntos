@@ -1,9 +1,18 @@
-# Juntos signaling (Cloudflare Worker + one Durable Object per room). Free plan: SQLite-backed Durable Objects.
+# Juntos: the web app (static files) and its signaling (one Durable Object per room), one Worker.
+# Free plan: SQLite-backed Durable Objects, static assets.
 name = "juntos-signal"
 main = "src/index.js"
 compatibility_date = "2026-09-01"
 workers_dev = false
-routes = [{ pattern = "signal.jurisgames.com", custom_domain = true }]
+routes = [
+  { pattern = "meet.jurisgames.com", custom_domain = true },
+  { pattern = "signal.jurisgames.com", custom_domain = true },
+]
+
+[assets]
+directory = "../web"
+not_found_handling = "single-page-application"
+run_worker_first = ["/ws/*", "/health", "/turn"]
 
 [[durable_objects.bindings]]
 name = "ROOMS"

@@ -92,7 +92,7 @@ export class Mesh extends EventTarget {
     };
     pc.onconnectionstatechange = () => {
       p.state = pc.connectionState;
-      if (pc.connectionState === "failed" && p.offerer) pc.restartIce();
+      if (pc.connectionState === "failed") this.viaRelay(p);
       this.emit("peer", { id });
     };
     pc.onnegotiationneeded = async () => {
@@ -112,6 +112,21 @@ export class Mesh extends EventTarget {
     };
     this.emit("peer", { id });
     return p;
+  }
+
+  // A direct connection failed (strict networks, some mobile carriers): try again through a relay.
+  // Relay credentials come from our server, which caps how many it gives out a month.
+  async viaRelay(p) {
+    if (p.relayTried) return;
+    p.relayTried = true;
+    if (!this.relay) {
+      const http = this.signalUrl.replace(/^ws/, "http");
+      this.relay = fetch(`${http}/turn`).then((r) => r.json()).then((j) => j.iceServers || []).catch(() => []);
+    }
+    const servers = await this.relay;
+    if (!servers.length) return this.emit("relay-unavailable", { id: p.id });
+    p.pc.setConfiguration({ iceServers: [...ICE, ...(Array.isArray(servers) ? servers : [servers])] });
+    if (p.offerer) p.pc.restartIce();
   }
 
   // We offer: the newcomer calls everyone already in the room.
