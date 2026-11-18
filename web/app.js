@@ -273,9 +273,10 @@ async function getMedia() {
   }
 }
 
+// what my picture is: a shared screen goes out whether or not the camera is on
 function videoOut() {
-  if (!S.cam) return null;
   if (S.screen) return S.screen;
+  if (!S.cam) return null;
   return (S.bg && S.bg.track) || S.camTrack;
 }
 
@@ -304,12 +305,13 @@ function refreshLocalVideo() {
   const stream = t ? new MediaStream([t]) : null;
   const pv = $("previewVideo");
   if (pv.srcObject?.getVideoTracks()[0] !== t) pv.srcObject = stream;
-  $("previewOff").hidden = !!(S.cam && t);
+  const showing = !!(t && (S.screen || S.cam)); // a shared screen shows even with the camera off
+  $("previewOff").hidden = showing;
   const self = document.querySelector('.tile[data-id="me"] video');
   if (self && self.srcObject?.getVideoTracks()[0] !== t) self.srcObject = stream;
   const tile = document.querySelector('.tile[data-id="me"]');
   if (tile) {
-    tile.classList.toggle("camoff", !(S.cam && t));
+    tile.classList.toggle("camoff", !showing);
     tile.classList.toggle("mirror", !S.screen && S.facing === "user");
   }
   S.an?.update();
@@ -323,6 +325,7 @@ function myState() {
 function setMic(on) {
   S.mic = on;
   if (S.micTrack) S.micTrack.enabled = on;
+  if (!on) document.querySelector('#grid .tile[data-id="me"]')?.classList.remove("speaking"); // dark at once when muted
   paintToggles();
   if (S.mesh) S.mesh.broadcast(myState());
   capSync();
@@ -620,7 +623,7 @@ function onMessage(from, m) {
     const tile = document.querySelector(`.tile[data-id="${from}"]`);
     if (tile) {
       tile.classList.toggle("muted", !m.mic);
-      tile.classList.toggle("camoff", !m.cam);
+      tile.classList.toggle("camoff", !m.cam && !m.screen); // their shared screen shows even with their camera off
       tile.classList.toggle("screen", !!m.screen);
       layout();
     }
@@ -659,6 +662,7 @@ function buildGrid() {
   grid.appendChild(makeTile("me", `${localStorage.getItem("name")} ${t("(you)")}`));
   const v = grid.querySelector('.tile[data-id="me"] video');
   v.muted = true;
+  watchMe();
   refreshLocalVideo();
   paintToggles();
   layout();
@@ -891,6 +895,37 @@ function renderPeer(id) {
   paintStatus(tile, p);
   paintNet();
   renderPeople();
+}
+
+// My own tile lights up while I talk too: a quick sign that my microphone works. It follows the microphone in
+// use (switched in Devices), and stays dark while muted.
+function watchMe() {
+  clearInterval(watchMe.timer);
+  const ac = (watchVoice.ac ||= new (window.AudioContext || window.webkitAudioContext)());
+  let tr = null, an = null;
+  const buf = new Uint8Array(512);
+  watchMe.timer = setInterval(() => {
+    const tile = document.querySelector('#grid .tile[data-id="me"]');
+    if (!tile) return clearInterval(watchMe.timer);
+    if (S.micTrack !== tr) {
+      tr = S.micTrack;
+      an = null;
+      if (tr) {
+        an = ac.createAnalyser();
+        an.fftSize = 512;
+        ac.createMediaStreamSource(new MediaStream([tr])).connect(an);
+      }
+    }
+    if (ac.state === "suspended") ac.resume().catch(() => {});
+    let loud = false;
+    if (an && S.mic && tr.enabled) {
+      an.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (const b of buf) sum += (b - 128) ** 2;
+      loud = Math.sqrt(sum / buf.length) > 6;
+    }
+    tile.classList.toggle("speaking", loud);
+  }, 150);
 }
 
 // Who is talking: a soft ring around their tile.
