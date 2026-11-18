@@ -1884,7 +1884,7 @@ function capGiveUp() {
   try {
     r?.abort();
   } catch {}
-  toast(t("This browser can't turn your voice into text. Chrome or Edge can."));
+  toast(t("This browser can't turn your voice into text. Chrome, Edge or Firefox can."));
   for (const id of S.capWant) S.mesh?.sendTo(id, { k: "capno", why: "browser" });
 }
 
@@ -2256,8 +2256,8 @@ function captionsSheet() {
     const p = document.createElement("p");
     p.className = "small";
     p.textContent = IS_BRAVE
-      ? t("Brave can't turn your voice into text (its speech service doesn't work). Chrome or Edge can. You still see what the others say.")
-      : t("This browser can't turn your voice into text (Chrome, Edge and Safari can). You still see what the others say.");
+      ? t("Brave can't turn your voice into text (its speech service doesn't work). Chrome, Edge or Firefox can. You still see what the others say.")
+      : t("This browser can't turn your voice into text (Chrome, Edge, Safari and Firefox on computers can). You still see what the others say.");
     inner.append(p);
   }
   const save = document.createElement("button");
@@ -2269,7 +2269,7 @@ function captionsSheet() {
   inner.append(save);
   const note = document.createElement("p");
   note.className = "small";
-  note.textContent = t("Each person's browser turns their own voice into text. Chrome, Edge and Safari may send the sound to Google, Microsoft or Apple to do it.");
+  note.textContent = t("Each person's browser turns their own voice into text. Chrome, Edge and Safari may send the sound to Google, Microsoft or Apple to do it; Firefox does it on the device.");
   inner.append(note);
   const done = document.createElement("button");
   done.className = "primary";
