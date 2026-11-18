@@ -41,6 +41,7 @@ const ICON = {
   hand: "M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.08 0-2.1-.43-2.85-1.19L1 14.83s1.26-1.23 1.3-1.25c.22-.19.49-.29.79-.29.22 0 .42.06.6.16.04.01 4.31 2.46 4.31 2.46V4c0-.83.67-1.5 1.5-1.5S11 3.17 11 4v7h1V1.5c0-.83.67-1.5 1.5-1.5S15 .67 15 1.5V11h1V2.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5V11h1V5.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5z",
   undo: "M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z",
   layout: "M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z",
+  cc: "M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z",
   fullExit: "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z",
 };
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
@@ -206,6 +207,7 @@ function setMic(on) {
   if (S.micTrack) S.micTrack.enabled = on;
   paintToggles();
   if (S.mesh) S.mesh.broadcast(myState());
+  capSync();
 }
 
 async function setCam(on) {
@@ -338,6 +340,7 @@ function enterCall(name) {
     S.hands.delete(e.detail.id);
     if (!document.querySelector(".tile.spot")) $("grid").classList.remove("hasSpot");
     if (S.recBy?.delete(e.detail.id)) paintRec();
+    if (S.capWant.delete(e.detail.id)) capSync();
     layout();
     paintNet();
     if (e.detail.name) toast(t("{name} left", { name: e.detail.name }));
@@ -368,9 +371,11 @@ function enterCall(name) {
     if (S.board && S.board.items.length) mesh.sendTo(e.detail.id, S.board.snapshot());
     if (S.chat.length) mesh.sendTo(e.detail.id, { k: "history", chat: S.chat.slice(-200) });
     if (S.recorder) mesh.sendTo(e.detail.id, { k: "rec", on: true });
+    if (S.capsOn) mesh.sendTo(e.detail.id, { k: "capwant", on: true });
   });
   mesh.addEventListener("message", (e) => onMessage(e.detail.from, e.detail.msg));
   mesh.connect();
+  capReset();
   callControls();
   window.addEventListener("beforeunload", () => mesh.leave());
 }
@@ -415,6 +420,12 @@ function onMessage(from, m) {
     setHand(from, m.on, who);
   } else if (m.k === "react") {
     react(from, m.e);
+  } else if (m.k === "cap") {
+    if (S.capsOn) showCap(from, who, String(m.text || "").slice(0, 500), !!m.final);
+  } else if (m.k === "capwant") {
+    capWanted(from, !!m.on, who);
+  } else if (m.k === "capno") {
+    if (S.capsOn) showCap(from, who, m.why === "browser" ? t("(their browser can't make captions)") : t("(they turned off captions of their voice)"), true, true);
   } else if (m.k === "rec") {
     S.recBy ||= new Set();
     if (m.on) S.recBy.add(from);
@@ -848,6 +859,7 @@ function buildBar() {
   extra.push(button("bDev", "gear", "Devices", openDevices));
   extra.push(button("bPeople", "people", "People", () => openPanel("people")));
   extra.push(button("bLayout", "layout", "Layout", layoutSheet));
+  extra.push(button("bCaps", "cc", "Captions", captionsSheet));
   if (Recorder.supported()) extra.push(button("bRec", "rec", "Record", toggleRec));
   const react = button("bReact", "more", "React", openReactions);
   react.innerHTML = `<b class="emoji">✋</b><span>${t("Hand / react")}</span>`;
@@ -1439,6 +1451,275 @@ addEventListener("keydown", (e) => {
 addEventListener("keyup", (e) => e.key === " " && pttEnd());
 addEventListener("blur", pttEnd);
 
+// ---------- live captions ----------
+// Each person's own browser turns their own voice into text (Web Speech API) and sends the words to whoever has
+// captions on. Nobody's browser listens unless someone in the call wants captions, and never while muted.
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+S.capsOn = localStorage.getItem("juntos.captions") === "on";
+S.capShare = localStorage.getItem("juntos.capshare") !== "off";
+S.capSize = localStorage.getItem("juntos.capsize") || "large";
+S.capLang = localStorage.getItem("juntos.caplang") || "";
+S.capWant = new Set(); // who in the call wants captions (peer ids)
+S.capLines = new Map(); // speaker id -> { el, done, timer }
+S.transcript = []; // { at, name, text }
+let capRec = null;
+let capOn = false;
+let capFails = 0;
+let capToldMe = false;
+
+function capReset() {
+  if (S.capCode !== S.code) S.transcript = [];
+  S.capCode = S.code;
+  S.capWant.clear();
+  S.capLines.clear();
+  capToldMe = false;
+  paintCaps();
+  capSync();
+}
+
+function paintCaps() {
+  const box = $("captions");
+  box.hidden = !S.capsOn;
+  box.className = `captions ${S.capSize}`;
+  if (!S.capsOn) box.innerHTML = "";
+  $("bCaps")?.classList.toggle("on", S.capsOn);
+}
+
+// listen to my own voice only while someone wants captions, my mic is on and I haven't turned it off
+function capSync() {
+  const need = !!(SR && S.mesh && S.mic && S.capShare && (S.capsOn || S.capWant.size));
+  if (need === capOn) return;
+  capOn = need;
+  capFails = 0;
+  if (need) capStart();
+  else if (capRec) {
+    const r = capRec;
+    capRec = null;
+    try {
+      r.abort();
+    } catch {}
+  }
+}
+
+function capStart() {
+  if (!capOn || capRec) return;
+  const r = new SR();
+  capRec = r;
+  r.continuous = true;
+  r.interimResults = true;
+  r.lang = S.capLang || navigator.language || "en-US";
+  r.onresult = (e) => {
+    capFails = 0;
+    let fin = "";
+    let now = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) fin += e.results[i][0].transcript;
+      else now += e.results[i][0].transcript;
+    }
+    if (fin.trim()) capSend(fin.trim(), true);
+    if (now.trim()) capSend(now.trim(), false);
+  };
+  r.onerror = (e) => {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "language-not-supported") {
+      capOn = false;
+      toast(t("Captions don't work in this browser"));
+    } else if (e.error !== "no-speech" && e.error !== "aborted") capFails++;
+  };
+  // the browser stops listening now and then (silence, a time limit): start again while still wanted
+  r.onend = () => {
+    if (capRec !== r) return;
+    capRec = null;
+    if (capOn) setTimeout(capStart, Math.min(300 * 2 ** capFails, 15000));
+  };
+  try {
+    r.start();
+  } catch {
+    capRec = null;
+  }
+}
+
+function capSend(text, final) {
+  text = text.slice(0, 500);
+  const m = { k: "cap", text, final };
+  for (const id of S.capWant) S.mesh?.sendTo(id, m);
+  if (S.capsOn) showCap("me", t("You"), text, final);
+}
+
+// someone turned their captions on or off
+function capWanted(from, on, who) {
+  if (on) {
+    S.capWant.add(from);
+    if (!SR || !S.capShare) S.mesh.sendTo(from, { k: "capno", why: SR ? "off" : "browser" });
+    else if (!capToldMe) {
+      capToldMe = true;
+      toast(t("{name} turned on captions: your browser turns what you say into text", { name: who }));
+    }
+  } else S.capWant.delete(from);
+  capSync();
+}
+
+function showCap(id, name, text, final, note) {
+  const box = $("captions");
+  let L = S.capLines.get(id);
+  if (!L) {
+    const el = document.createElement("div");
+    el.className = "capLine";
+    el.dataset.id = id;
+    el.innerHTML = "<b></b><span></span>";
+    box.append(el);
+    L = { el, done: "", timer: 0 };
+    S.capLines.set(id, L);
+    while (box.children.length > 3) {
+      const old = box.firstElementChild;
+      S.capLines.delete(old.dataset.id);
+      old.remove();
+    }
+  }
+  L.el.classList.toggle("note", !!note);
+  L.el.firstChild.textContent = name;
+  if (final) {
+    L.done = `${L.done} ${text}`.trim().slice(-400);
+    if (!note) S.transcript.push({ at: Date.now(), name: id === "me" ? localStorage.getItem("name") || name : name, text });
+  }
+  let s = final ? L.done : `${L.done} ${text}`.trim();
+  if (s.length > 160) s = "… " + s.slice(-160).replace(/^\S*\s/, "");
+  L.el.lastChild.textContent = s;
+  clearTimeout(L.timer);
+  L.timer = setTimeout(() => {
+    L.el.remove();
+    if (S.capLines.get(id) === L) S.capLines.delete(id);
+  }, 8000);
+}
+
+function setCaps(on) {
+  S.capsOn = on;
+  localStorage.setItem("juntos.captions", on ? "on" : "off");
+  S.capLines.clear();
+  paintCaps();
+  S.mesh?.broadcast({ k: "capwant", on });
+  capSync();
+}
+
+function saveTranscript() {
+  const pad = (n) => String(n).padStart(2, "0");
+  const d = new Date();
+  const lines = S.transcript.map((x) => {
+    const a = new Date(x.at);
+    return `[${pad(a.getHours())}:${pad(a.getMinutes())}] ${x.name}: ${x.text}`;
+  });
+  const head = `Juntos ${S.code || ""}, ${d.toLocaleDateString()}`;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([`${head}\r\n\r\n${lines.join("\r\n")}\r\n`], { type: "text/plain;charset=utf-8" }));
+  a.download = `Juntos captions ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}-${pad(d.getMinutes())}.txt`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+function captionsSheet() {
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  const inner = document.createElement("div");
+  inner.className = "sheetInner devices recSheet capSheet";
+  const h = document.createElement("h3");
+  h.textContent = t("Captions");
+  inner.append(h);
+  const check = (name, text, on, change) => {
+    const l = document.createElement("label");
+    l.className = "check";
+    const c = document.createElement("input");
+    c.type = "checkbox";
+    c.name = name;
+    c.checked = on;
+    c.onchange = () => change(c.checked);
+    l.append(c, document.createTextNode(text));
+    inner.append(l);
+  };
+  check("caps", t("Show captions"), S.capsOn, setCaps);
+  const size = document.createElement("div");
+  size.className = "seg three";
+  size.dataset.key = "capSize";
+  for (const [id, name] of [["normal", t("Normal")], ["large", t("Large")], ["huge", t("Huge")]]) {
+    const b = document.createElement("button");
+    b.dataset.v = id;
+    b.innerHTML = "<b></b>";
+    b.firstChild.textContent = name;
+    b.classList.toggle("on", S.capSize === id);
+    b.onclick = () => {
+      S.capSize = id;
+      localStorage.setItem("juntos.capsize", id);
+      for (const x of size.children) x.classList.toggle("on", x === b);
+      paintCaps();
+    };
+    size.append(b);
+  }
+  const sl = document.createElement("p");
+  sl.className = "small";
+  sl.textContent = t("Text size");
+  inner.append(sl, size);
+  if (SR) {
+    const ll = document.createElement("p");
+    ll.className = "small";
+    ll.textContent = t("I speak");
+    const sel = document.createElement("select");
+    sel.name = "capLang";
+    for (const [v, name] of [
+      ["", t("The language of this device")],
+      ["es-ES", "Español"],
+      ["en-US", "English"],
+      ["pt-BR", "Português"],
+      ["fr-FR", "Français"],
+      ["de-DE", "Deutsch"],
+      ["it-IT", "Italiano"],
+    ]) {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = name;
+      o.selected = S.capLang === v;
+      sel.append(o);
+    }
+    sel.onchange = () => {
+      S.capLang = sel.value;
+      localStorage.setItem("juntos.caplang", sel.value);
+      if (capRec) capRec.stop(); // starts again in the new language
+    };
+    inner.append(ll, sel);
+    check("capShare", t("Turn my voice into captions for the others"), S.capShare, (on) => {
+      S.capShare = on;
+      localStorage.setItem("juntos.capshare", on ? "on" : "off");
+      if (!on) for (const id of S.capWant) S.mesh?.sendTo(id, { k: "capno", why: "off" });
+      capSync();
+    });
+  } else {
+    const p = document.createElement("p");
+    p.className = "small";
+    p.textContent = t("This browser can't turn your voice into text (Chrome, Edge and Safari can). You still see what the others say.");
+    inner.append(p);
+  }
+  const save = document.createElement("button");
+  save.className = "chip";
+  save.name = "capSave";
+  save.textContent = t("Save captions (.txt)");
+  save.disabled = !S.transcript.length;
+  save.onclick = saveTranscript;
+  inner.append(save);
+  const note = document.createElement("p");
+  note.className = "small";
+  note.textContent = t("Each person's browser turns their own voice into text. Chrome, Edge and Safari may send the sound to Google, Microsoft or Apple to do it.");
+  inner.append(note);
+  const done = document.createElement("button");
+  done.className = "primary";
+  done.textContent = t("Done");
+  done.onclick = () => sheet.remove();
+  inner.append(done);
+  sheet.append(inner);
+  sheet.onclick = (e) => {
+    if (e.target === sheet) sheet.remove();
+  };
+  document.body.append(sheet);
+}
+
 function shortcutsSheet() {
   const sheet = document.createElement("div");
   sheet.className = "sheet";
@@ -1892,6 +2173,10 @@ async function leave(why) {
   paintKnocks();
   S.mesh?.leave();
   S.mesh = null;
+  capSync();
+  const save = $("endedCaps");
+  save.hidden = !S.transcript.length;
+  save.onclick = saveTranscript;
   closePanel();
   callNotice(false);
   show("ended");

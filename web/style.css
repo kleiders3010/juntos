@@ -263,3 +263,14 @@ body.boardBig .grid .tile .label { font-size: 12px; padding: 1px 6px; }
 .keysSheet dl { display: grid; grid-template-columns: auto 1fr; gap: 10px 18px; margin: 4px 0 8px; font-size: 16px; }
 .keysSheet dt { font-family: ui-monospace, monospace; font-weight: 600; white-space: nowrap; }
 .keysSheet dd { margin: 0; color: var(--muted); }
+
+/* live captions: under the pictures, above the buttons; big, white on black */
+.captions { margin: 8px 12px 0; padding: 10px 16px; background: #000; color: #fff; border-radius: 12px; font-size: 24px; line-height: 1.35; max-height: 40vh; overflow: hidden; }
+.captions:empty, .captions[hidden] { display: none; }
+.captions .capLine { margin: 2px 0; }
+.captions .capLine b { color: #fde68a; margin-right: 8px; font-weight: 700; }
+.captions .capLine.note span { color: #d1d5db; font-style: italic; }
+.captions.normal { font-size: 18px; }
+.captions.huge { font-size: 34px; }
+@media (max-width: 640px) { .captions { margin: 6px 6px 0; padding: 8px 12px; font-size: 20px; } .captions.normal { font-size: 16px; } .captions.huge { font-size: 28px; } }
+.capSheet select { width: 100%; padding: 8px; border-radius: 8px; background: var(--card); color: inherit; }
