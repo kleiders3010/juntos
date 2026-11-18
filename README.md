@@ -9,6 +9,7 @@ install, open source.
 - **Start a call** and send the link. People type their name and join.
 - Background blur or a picture behind you (runs on your own device).
 - Chat, a shared whiteboard, screen sharing, raise a hand, reactions.
+- Set how loud you hear each person, from silent to 300 % for someone quiet (only on your device, remembered).
 - Record the call on your own device as an MP4 (everyone sees that you are recording). Landscape, with whoever is talking (or a shared screen) big and the others small, or everyone the same size; reactions, raised hands and chat can show in the video. No upload, no limit.
 
 ## How it works
