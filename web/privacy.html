@@ -32,8 +32,10 @@ at meet.jurisgames.com.</p>
 </ul>
 
 <h2>The server</h2>
-<p>Our server (Cloudflare Workers) only introduces the devices in a call to each other and forgets the call when
-it ends. To keep the free relay fair it counts relay uses per network per day under a scrambled one-way code
+<p>Our server (Cloudflare Workers) only introduces the devices in a call to each other. For each call code it keeps
+two things: a scrambled one-way code of the host's secret (the secret itself stays on the host's device) and
+whether the call is locked; both are deleted a month after the code was last used. No names, messages or
+media are kept. To keep the free relay fair it counts relay uses per network per day under a scrambled one-way code
 of the network address, never the address itself; those counts are deleted the next day. Cloudflare may keep
 standard security logs.</p>
 

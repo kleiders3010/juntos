@@ -1,6 +1,7 @@
 // Juntos signaling: one Durable Object per room relays WebRTC handshakes between the people in it.
 // Media, chat and the board never pass through here: they go device to device (WebRTC).
-// The room keeps no history and no names once everyone has left.
+// The room keeps no history and no names once everyone has left; only a hash of the host's key and
+// the lock, forgotten a month after the room was last used.
 
 const MAX_PEOPLE = 12; // a direct mesh beyond this asks too much of phones
 const MAX_MSG = 64 * 1024;

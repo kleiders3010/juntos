@@ -16,7 +16,7 @@ install, open source.
 
 ## How it works
 Audio, video, chat and the board go directly between the people in the call (WebRTC). A tiny Cloudflare Worker
-(`worker/`) only introduces people to each other when they join a room; it stores nothing.
+(`worker/`) only introduces people to each other when they join a room. Per room it keeps only a hash of the host's key and whether the call is locked, deleted a month after the room was last used.
 
 ## Run locally
     cd worker && npx wrangler dev --port 8787
