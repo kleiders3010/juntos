@@ -297,7 +297,7 @@ async function applyBackground(mode) {
     }
   }
   refreshLocalVideo();
-  if (S.mesh) await S.mesh.setTracks(S.mic ? S.micTrack : null, videoOut());
+  if (S.mesh) await S.mesh.setTracks(audioOut(), videoOut());
 }
 
 function refreshLocalVideo() {
@@ -337,7 +337,7 @@ async function setCam(on) {
   refreshLocalVideo();
   paintToggles();
   if (S.mesh) {
-    await S.mesh.setTracks(S.micTrack, videoOut());
+    await S.mesh.setTracks(audioOut(), videoOut());
     S.mesh.broadcast(myState());
   }
 }
@@ -523,7 +523,7 @@ function enterCall(name) {
     }
   });
   mesh.addEventListener("host", (e) => onHost(e.detail));
-  mesh.setTracks(S.mic ? S.micTrack : S.micTrack, videoOut());
+  mesh.setTracks(audioOut(), videoOut());
   if (S.micTrack) S.micTrack.enabled = S.mic;
   mesh.addEventListener("peer", (e) => renderPeer(e.detail.id));
   mesh.addEventListener("left", (e) => {
@@ -1445,7 +1445,7 @@ $("bgFile").onchange = async (e) => {
   await S.bg.setImage(f);
   S.bgMode = "img:custom";
   refreshLocalVideo();
-  await S.mesh.setTracks(S.micTrack, videoOut());
+  await S.mesh.setTracks(audioOut(), videoOut());
   renderBackgrounds();
 };
 
@@ -1741,27 +1741,71 @@ function react(id, e) {
   setTimeout(() => f.remove(), 2600);
 }
 
-// screen sharing (replaces your camera while it lasts)
+// What the others hear from me: my microphone, plus the sound of what I'm sharing while I share a tab or screen
+// with sound. Both go out mixed in one track, so muting my microphone (the track switched off) leaves the shared
+// sound playing, as in Meet and Zoom.
+function audioOut() {
+  const m = S.shareMix;
+  if (!m) return S.micTrack;
+  if (m.mic !== S.micTrack) {
+    m.micSrc?.disconnect();
+    m.mic = S.micTrack;
+    m.micSrc = S.micTrack ? m.ac.createMediaStreamSource(new MediaStream([S.micTrack])) : null;
+    m.micSrc?.connect(m.out);
+  }
+  return m.out.stream.getAudioTracks()[0];
+}
+function shareSound(track) {
+  const ac = new (window.AudioContext || window.webkitAudioContext)();
+  const out = ac.createMediaStreamDestination();
+  ac.createMediaStreamSource(new MediaStream([track])).connect(out);
+  S.shareMix = { ac, out, track, mic: null, micSrc: null };
+  ac.resume?.().catch(() => {});
+}
+function stopShareSound() {
+  const m = S.shareMix;
+  if (!m) return;
+  S.shareMix = null;
+  m.track.stop();
+  m.ac.close().catch(() => {});
+}
+
+// screen sharing (replaces your camera while it lasts), with the sound of the tab or screen when the browser offers it
+// (Chrome and Edge: a tab, or the whole screen on Windows; not a single window). The call's own sound stays out.
 async function toggleScreen() {
   if (S.screen) return stopScreen();
   try {
-    const s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
+    let s;
+    try {
+      s = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 15 },
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false, restrictOwnAudio: true },
+        systemAudio: "include",
+        selfBrowserSurface: "exclude",
+      });
+    } catch (e) {
+      if (e && e.name === "NotAllowedError") throw e; // they said no: don't ask again
+      s = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 15 }, audio: false });
+    }
+    const snd = s.getAudioTracks()[0];
+    if (snd) shareSound(snd);
     S.screen = s.getVideoTracks()[0];
     S.screen.onended = stopScreen;
     $("bScreen")?.classList.add("on");
     refreshLocalVideo();
-    await S.mesh.setTracks(S.micTrack, S.screen);
+    await S.mesh.setTracks(audioOut(), S.screen);
     S.mesh.broadcast(myState());
-    toast(t("You're sharing your screen"));
+    toast(S.shareMix ? t("You're sharing your screen, with its sound") : t("You're sharing your screen"));
   } catch (_) {}
 }
 async function stopScreen() {
   if (!S.screen) return;
   S.screen.stop();
   S.screen = null;
+  stopShareSound();
   $("bScreen")?.classList.remove("on");
   refreshLocalVideo();
-  await S.mesh.setTracks(S.micTrack, videoOut());
+  await S.mesh.setTracks(audioOut(), videoOut());
   S.mesh.broadcast(myState());
 }
 
@@ -2390,7 +2434,7 @@ async function useCamera(video) {
     }
     if (S.bgMode !== "none") await applyBackground(S.bgMode);
     refreshLocalVideo();
-    await S.mesh?.setTracks(S.micTrack, videoOut());
+    await S.mesh?.setTracks(audioOut(), videoOut());
     return true;
   } catch (_) {
     toast(t("Couldn't switch camera"));
@@ -2423,7 +2467,7 @@ async function useMic(id) {
     S.micTrack = s.getAudioTracks()[0];
     S.micTrack.enabled = S.mic;
     localStorage.setItem("micId", S.micTrack.getSettings().deviceId || id);
-    await S.mesh?.setTracks(S.micTrack, videoOut());
+    await S.mesh?.setTracks(audioOut(), videoOut());
     return true;
   } catch (_) {
     toast(t("Couldn't switch microphone"));
@@ -2758,7 +2802,7 @@ function startRec(opts) {
       screen: t.dataset.id === "me" ? !!S.screen : t.classList.contains("screen"),
       hand: S.hands.has(t.dataset.id),
       overlay: S.an.overlay(t.dataset.id), // drawings on a shared screen
-      stream: t.dataset.id === "me" ? (S.micTrack ? new MediaStream([S.micTrack]) : null) : S.mesh.peers.get(t.dataset.id)?.stream,
+      stream: t.dataset.id === "me" ? (audioOut() ? new MediaStream([audioOut()]) : null) : S.mesh.peers.get(t.dataset.id)?.stream,
     })).concat(S.boardBig && S.panel === "board" ? [{ id: "board", video: $("boardCanvas"), name: t("Board"), screen: true }] : []),
     opts,
   );

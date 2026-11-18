@@ -69,6 +69,7 @@ const DICT = {
     "{name} raised a hand": "{name} levantó la mano",
     "Lower hand": "Bajar la mano",
     "✋ Raise hand": "✋ Levantar la mano",
+    "You're sharing your screen, with its sound": "Estás compartiendo tu pantalla, con su sonido",
     "You're sharing your screen": "Estás compartiendo tu pantalla",
     "Couldn't switch camera": "No se pudo cambiar de cámara",
     "Recording saved to your downloads": "La grabación se guardó en tus descargas",
