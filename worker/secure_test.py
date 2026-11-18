@@ -23,7 +23,8 @@ def check(ok, what):
 
 
 def info(code):
-    with urllib.request.urlopen(f"{BASE}/info/{code}", timeout=10) as r:
+    req = urllib.request.Request(f"{BASE}/info/{code}", headers={"User-Agent": "Mozilla/5.0 (juntos-test)"})
+    with urllib.request.urlopen(req, timeout=10) as r:
         return json.loads(r.read())
 
 
