@@ -5,6 +5,7 @@ import { Recorder } from "./rec.js";
 import { t, translatePage } from "./i18n.js";
 import { Activities } from "./act.js";
 import { Breakout } from "./breakout.js";
+import { Notes } from "./notes.js";
 
 translatePage();
 const t2 = t; // the translator, where "t" is a tile
@@ -43,6 +44,7 @@ const ICON = {
   hand: "M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.08 0-2.1-.43-2.85-1.19L1 14.83s1.26-1.23 1.3-1.25c.22-.19.49-.29.79-.29.22 0 .42.06.6.16.04.01 4.31 2.46 4.31 2.46V4c0-.83.67-1.5 1.5-1.5S11 3.17 11 4v7h1V1.5c0-.83.67-1.5 1.5-1.5S15 .67 15 1.5V11h1V2.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5V11h1V5.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5z",
   undo: "M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z",
   poll: "M10 20h4V4h-4v16zm-6 0h4v-8H4v8zM16 9v11h4V9h-4z",
+  notes: "M14 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z",
   rooms: "M6 13c-2.2 0-4 1.8-4 4s1.8 4 4 4 4-1.8 4-4-1.8-4-4-4zm6-10C9.8 3 8 4.8 8 7s1.8 4 4 4 4-1.8 4-4-1.8-4-4-4zm6 10c-2.2 0-4 1.8-4 4s1.8 4 4 4 4-1.8 4-4-1.8-4-4-4z",
   layout: "M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z",
   cc: "M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z",
@@ -380,6 +382,7 @@ function enterCall(name) {
     if (S.capsOn) mesh.sendTo(e.detail.id, { k: "capwant", on: true });
     if (S.act.any()) mesh.sendTo(e.detail.id, S.act.snapshotFor(e.detail.id));
     S.br.greet(e.detail.id);
+    S.notes.greet(e.detail.id);
   });
   mesh.addEventListener("message", (e) => onMessage(e.detail.from, e.detail.msg));
   S.br.reset();
@@ -387,6 +390,7 @@ function enterCall(name) {
   mesh.connect();
   capReset();
   S.act.reset(S.code);
+  S.notes.reset(S.code);
   callControls();
   window.addEventListener("beforeunload", () => mesh.leave());
 }
@@ -446,6 +450,8 @@ function onMessage(from, m) {
     if (m.on) S.recBy.add(from);
     else S.recBy.delete(from);
     paintRec();
+  } else if (S.notes.receive(from, m)) {
+    // shared notes
   } else if (S.act.receive(from, m)) {
     // polls and Q&A
   } else if (["bitem", "bdel", "bclear", "bstate"].includes(m.k)) {
@@ -880,6 +886,7 @@ function buildBar() {
   rooms.hidden = !S.isHost; // only the host makes rooms (shown once the call says who the host is)
   extra.push(rooms);
   extra.push(button("bAct", "poll", "Polls and Q&A", () => openPanel("act")));
+  extra.push(button("bNotes", "notes", "Notes", () => openPanel("notes")));
   extra.push(button("bLayout", "layout", "Layout", layoutSheet));
   extra.push(button("bCaps", "cc", "Captions", captionsSheet));
   if (pipSupported()) extra.push(button("bPip", "pip", "Small window", openPip));
@@ -933,9 +940,9 @@ function openPanel(which) {
   if (S.panel === which) return closePanel();
   S.panel = which;
   $("panel").hidden = false;
-  $("panelTitle").textContent = t({ chat: "Chat", board: "Board", bg: "Background", people: "People", act: "Polls and Q&A", br: "Breakout rooms" }[which]);
-  for (const p of ["chat", "board", "bg", "people", "act", "br"]) $(`${p}Pane`).hidden = p !== which;
-  $({ chat: "bChat", board: "bBoard", bg: "bBg", people: "bPeople", act: "bAct", br: "bBreak" }[which])?.classList.remove("badge");
+  $("panelTitle").textContent = t({ chat: "Chat", board: "Board", bg: "Background", people: "People", act: "Polls and Q&A", br: "Breakout rooms", notes: "Notes" }[which]);
+  for (const p of ["chat", "board", "bg", "people", "act", "br", "notes"]) $(`${p}Pane`).hidden = p !== which;
+  $({ chat: "bChat", board: "bBoard", bg: "bBg", people: "bPeople", act: "bAct", br: "bBreak", notes: "bNotes" }[which])?.classList.remove("badge");
   $("bChat2")?.classList.remove("badge");
   if (which === "chat") {
     renderChat();
@@ -949,6 +956,7 @@ function openPanel(which) {
   if (which === "bg") renderBackgrounds();
   if (which === "people") renderPeople();
   if (which === "act") S.act.render();
+  if (which === "notes") S.notes.render();
   if (which === "br") S.br.render();
 }
 
@@ -1174,6 +1182,7 @@ function onHost(m) {
     S.act.render();
     if ($("bBreak")) $("bBreak").hidden = !S.isHost;
     S.br.render();
+    S.notes.render();
     S.locked = m.locked;
     S.waiting = false;
     localStorage.removeItem(`juntos.out.${S.code}`);
@@ -2356,6 +2365,8 @@ async function leave(why) {
   save.onclick = saveTranscript;
   $("endedAct").hidden = !S.act.any();
   $("endedAct").onclick = () => S.act.download();
+  $("endedNotes").hidden = !S.notes.any();
+  $("endedNotes").onclick = () => S.notes.download();
   closePanel();
   callNotice(false);
   show("ended");
@@ -2430,6 +2441,25 @@ S.act = new Activities({
   },
 });
 S.act.mount($("actPane"));
+
+// shared notes (notes.js): the whole call writes in one text, in #notesPane
+S.notes = new Notes({
+  t,
+  send: (m) => S.mesh?.broadcast(m),
+  sendTo: (id, m) => S.mesh?.sendTo(id, m),
+  hosts: () => S.mesh?.hosts || new Set(),
+  amHost: () => !!S.isHost,
+  myName: () => localStorage.getItem("name") || "",
+  names: () => [localStorage.getItem("name") || "", ...[...(S.mesh?.peers.values() || [])].map((p) => p.name || "")],
+  notify: toast,
+  badge: () => {
+    if (S.panel !== "notes") {
+      badge("bNotes");
+      badge("bMore");
+    }
+  },
+});
+S.notes.mount($("notesPane"));
 
 // breakout rooms (breakout.js): the host's panel lives in #brPane, the bar and invitation at the top of the call
 function brMoved() {

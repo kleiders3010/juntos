@@ -362,3 +362,14 @@ body.boardBig .grid .tile .label { font-size: 12px; padding: 1px 6px; }
 .brHelpTag { background: #fcd34d; color: #111827; border-radius: 999px; padding: 2px 10px; font-size: 13px; font-weight: 600; }
 .secondary.sure, .secondary.danger { background: var(--danger); color: #fff; }
 body:has(#brBar:not([hidden])) .toasts { top: calc(var(--brH, 60px) + 24px); } /* notices below the breakout bar */
+
+/* shared notes */
+.notesPane { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.notesPane[hidden] { display: none; }
+.notesHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 14px; }
+.notesHead select { font: inherit; color: var(--fg); background: var(--card); border: 1px solid #4b5563; border-radius: 8px; padding: 6px 8px; }
+.notesHead select[hidden], .notesTpl[hidden] { display: none; }
+.notesText { flex: 1; min-height: 200px; font: inherit; line-height: 1.5; color: var(--fg); background: var(--card); border: 1px solid #4b5563; border-radius: 10px; padding: 10px 12px; resize: none; }
+.notesText[readonly] { opacity: .85; }
+.notesWriting { color: var(--muted); font-size: 13px; min-height: 18px; }
+.notesFoot { display: flex; gap: 8px; justify-content: flex-end; }
