@@ -61,14 +61,14 @@
   <main class="stage">
     <div id="grid" class="grid"></div>
     <aside id="panel" class="panel" hidden>
-      <div class="panelHead"><h3 id="panelTitle"></h3><button id="panelClose" class="icon" title="Close">✕</button></div>
+      <div class="panelHead"><h3 id="panelTitle"></h3><button id="boardMax" class="icon" hidden></button><button id="panelClose" class="icon" title="Close">✕</button></div>
       <div id="chatPane" class="pane">
         <div id="chatLog" class="chatLog"></div>
         <form id="chatForm" class="chatForm"><input id="chatText" placeholder="Send a message" autocomplete="off"><button class="primary">Send</button></form>
       </div>
       <div id="boardPane" class="pane">
         <div class="boardTools" id="boardTools"></div>
-        <canvas id="boardCanvas" class="boardCanvas"></canvas>
+        <div class="boardWrap"><canvas id="boardCanvas" class="boardCanvas"></canvas><div id="boardZoom" class="boardZoom"></div></div>
       </div>
       <div id="bgPane" class="pane"><div id="bgChoices" class="bgChoices"></div></div>
       <div id="peoplePane" class="pane"><ul id="peopleList" class="people"></ul></div>

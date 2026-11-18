@@ -1,6 +1,6 @@
 import { Mesh } from "./rtc.js";
 import { Background, BACKGROUNDS } from "./bg.js";
-import { Board, COLORS } from "./board.js";
+import { Board, COLORS, SIZES, TOOLS } from "./board.js";
 import { Recorder } from "./rec.js";
 import { t, translatePage } from "./i18n.js";
 
@@ -32,6 +32,14 @@ const ICON = {
   full: "M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z",
   vol: "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z",
   volOff: "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z",
+  pen: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
+  rect: "M3 3h18v18H3V3zm2 2v14h14V5H5z",
+  ellipse: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16z",
+  arrow: "M4 18.6L15.6 7H9V5h10v10h-2V8.4L5.4 20z",
+  text: "M5 4v3h5.5v12h3V7H19V4z",
+  eraser: "M16.24 3.56l4.95 4.94a2 2 0 0 1 0 2.83L12 20.53A5 5 0 0 1 8.46 22H4.5l-2.12-2.12a2 2 0 0 1 0-2.83L13.4 3.56a2 2 0 0 1 2.84 0zM4.22 15.58l3.54 3.53a3 3 0 0 0 4.24 0l3.53-3.53-4.95-4.95-6.36 6.36z",
+  hand: "M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.08 0-2.1-.43-2.85-1.19L1 14.83s1.26-1.23 1.3-1.25c.22-.19.49-.29.79-.29.22 0 .42.06.6.16.04.01 4.31 2.46 4.31 2.46V4c0-.83.67-1.5 1.5-1.5S11 3.17 11 4v7h1V1.5c0-.83.67-1.5 1.5-1.5S15 .67 15 1.5V11h1V2.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5V11h1V5.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5z",
+  undo: "M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z",
   fullExit: "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z",
 };
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
@@ -308,7 +316,7 @@ function enterCall(name) {
   mesh.addEventListener("channel-open", (e) => {
     // catch the newcomer up: board, chat, how I am
     mesh.sendTo(e.detail.id, { ...myState(), hand: S.hands.has("me") });
-    if (S.board && S.board.strokes.length) mesh.sendTo(e.detail.id, S.board.snapshot());
+    if (S.board && S.board.items.length) mesh.sendTo(e.detail.id, S.board.snapshot());
     if (S.chat.length) mesh.sendTo(e.detail.id, { k: "history", chat: S.chat.slice(-200) });
     if (S.recorder) mesh.sendTo(e.detail.id, { k: "rec", on: true });
   });
@@ -361,11 +369,9 @@ function onMessage(from, m) {
     if (m.on) S.recBy.add(from);
     else S.recBy.delete(from);
     paintRec();
-  } else if (["stroke", "clear", "board"].includes(m.k)) {
+  } else if (["bitem", "bdel", "bclear", "bstate"].includes(m.k)) {
     ensureBoard().receive(m);
-    if (m.k === "stroke" && S.panel !== "board") badge("bBoard");
-  } else if (m.k === "unstroke") {
-    ensureBoard().remove(m.id);
+    if (m.k === "bitem" && S.panel !== "board") badge("bBoard");
   }
 }
 
@@ -599,6 +605,8 @@ function layout() {
   $("grid").style.setProperty("--cols", cols);
   let i = 0;
   for (const tile of $("grid").children) if (!tile.classList.contains("spot")) tile.style.setProperty("--i", i++);
+  let j = 0;
+  for (const tile of $("grid").children) tile.style.setProperty("--b", j++);
 }
 addEventListener("resize", layout);
 document.addEventListener("click", (e) => {
@@ -692,16 +700,22 @@ function openPanel(which) {
     renderChat();
     if (!isPhone) $("chatText").focus();
   }
-  if (which === "board") ensureBoard().resize();
+  $("boardMax").hidden = which !== "board";
+  if (which === "board") {
+    ensureBoard();
+    setBoardBig(!!S.boardBig);
+  } else if (S.boardBig) setBoardBig(false);
   if (which === "bg") renderBackgrounds();
   if (which === "people") renderPeople();
 }
 
 function closePanel() {
+  if (S.boardBig) setBoardBig(false);
   S.panel = null;
   $("panel").hidden = true;
 }
 $("panelClose").onclick = closePanel;
+$("boardMax").onclick = () => setBoardBig(!S.boardBig);
 
 // chat
 function addChat(c) {
@@ -744,28 +758,132 @@ $("chatForm").onsubmit = (e) => {
 // board
 function ensureBoard() {
   if (!S.board) {
-    S.board = new Board($("boardCanvas"), (m) => S.mesh && S.mesh.broadcast(m));
+    const b = (S.board = new Board($("boardCanvas"), (m) => S.mesh && S.mesh.broadcast(m)));
     const tools = $("boardTools");
-    for (const c of COLORS) {
-      const b = document.createElement("button");
-      b.className = "swatch";
-      b.style.background = c;
-      b.title = c === "#ffffff" ? t("Eraser") : t("Pen");
-      b.onclick = () => {
-        S.board.color = c;
-        S.board.erase = c === "#ffffff";
-        for (const x of tools.querySelectorAll(".swatch")) x.classList.toggle("on", x === b);
+    const group = (cls) => {
+      const g = document.createElement("div");
+      g.className = `bGroup ${cls}`;
+      tools.append(g);
+      return g;
+    };
+    const pick = (g, btn) => {
+      for (const x of g.children) x.classList.toggle("on", x === btn);
+    };
+    const names = { pen: "Pen", rect: "Rectangle", ellipse: "Circle", arrow: "Arrow", text: "Text", eraser: "Eraser", hand: "Move the board" };
+    const tg = group("bTools");
+    for (const id of TOOLS) {
+      const x = document.createElement("button");
+      x.className = "bTool";
+      x.dataset.tool = id;
+      x.title = t(names[id]);
+      x.innerHTML = svg(id);
+      x.onclick = () => {
+        b.tool = id;
+        pick(tg, x);
+        $("boardCanvas").dataset.tool = id;
       };
-      tools.append(b);
+      tg.append(x);
     }
-    tools.firstChild.classList.add("on");
+    tg.firstChild.classList.add("on");
+    $("boardCanvas").dataset.tool = b.tool;
+    const cg = group("bColors");
+    for (const c of COLORS) {
+      const x = document.createElement("button");
+      x.className = "swatch";
+      x.style.background = c;
+      x.title = t("Colour");
+      x.onclick = () => {
+        b.color = c;
+        pick(cg, x);
+      };
+      cg.append(x);
+    }
+    cg.firstChild.classList.add("on");
+    const sg = group("bSizes");
+    SIZES.forEach((s, i) => {
+      const x = document.createElement("button");
+      x.className = "bSize";
+      x.title = t(["Thin", "Medium", "Thick"][i]);
+      x.innerHTML = `<i style="width:${4 + i * 5}px;height:${4 + i * 5}px"></i>`;
+      x.onclick = () => {
+        b.size = i;
+        pick(sg, x);
+      };
+      sg.append(x);
+    });
+    sg.children[b.size].classList.add("on");
+    const ag = group("bActions");
+    const undo = document.createElement("button");
+    undo.className = "bTool";
+    undo.title = t("Undo");
+    undo.innerHTML = svg("undo");
+    undo.onclick = () => b.undo();
     const clear = document.createElement("button");
     clear.className = "chip";
     clear.textContent = t("Clear");
-    clear.onclick = () => S.board.clear();
-    tools.append(clear);
+    // clearing wipes everyone's drawings: the first tap asks, the second does it
+    clear.onclick = () => {
+      if (!clear.classList.contains("sure")) {
+        clear.classList.add("sure");
+        clear.textContent = t("Clear for everyone?");
+        clearTimeout(clear.timer);
+        clear.timer = setTimeout(() => {
+          clear.classList.remove("sure");
+          clear.textContent = t("Clear");
+        }, 3000);
+        return;
+      }
+      clearTimeout(clear.timer);
+      clear.classList.remove("sure");
+      clear.textContent = t("Clear");
+      b.clear();
+    };
+    ag.append(undo, clear);
+    // zoom, over the board's corner
+    const zoom = $("boardZoom");
+    const zl = document.createElement("button");
+    zl.className = "zLabel";
+    zl.title = t("Show everything");
+    const zb = (label, title, f) => {
+      const x = document.createElement("button");
+      x.textContent = label;
+      x.title = t(title);
+      x.onclick = f;
+      return x;
+    };
+    zoom.append(zb("−", "Zoom out", () => b.zoom(1 / 1.25)), zl, zb("+", "Zoom in", () => b.zoom(1.25)));
+    zl.onclick = () => b.fit();
+    b.onview = (z) => (zl.textContent = `${Math.round(z * 100)}%`);
+    if (b.view) b.onview(b.view.z);
+    // keys: Ctrl+Z takes back, holding Space moves the board
+    addEventListener("keydown", (e) => {
+      if (S.panel !== "board" || e.target.closest("input, textarea")) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        b.undo();
+      } else if (e.key === " ") {
+        e.preventDefault();
+        b.space = true;
+      }
+    });
+    addEventListener("keyup", (e) => {
+      if (e.key === " ") b.space = false;
+    });
   }
   return S.board;
+}
+
+// The board as the main thing, everyone small and floating over its corner (and the board is what
+// a recording shows, like a shared screen).
+function setBoardBig(on) {
+  S.boardBig = on;
+  document.body.classList.toggle("boardBig", on);
+  $("boardMax").innerHTML = svg(on ? "fullExit" : "full");
+  $("boardMax").title = t(on ? "Back to the side" : "Make the board big");
+  if (on) for (const x of document.querySelectorAll(".tile.spot")) spotlight(x);
+  let i = 0;
+  for (const tile of $("grid").children) tile.style.setProperty("--b", i++);
+  requestAnimationFrame(() => S.board?.resize());
 }
 
 // backgrounds
@@ -1163,7 +1281,7 @@ function startRec(opts) {
       screen: t.dataset.id === "me" ? !!S.screen : t.classList.contains("screen"),
       hand: S.hands.has(t.dataset.id),
       stream: t.dataset.id === "me" ? (S.micTrack ? new MediaStream([S.micTrack]) : null) : S.mesh.peers.get(t.dataset.id)?.stream,
-    })),
+    })).concat(S.boardBig && S.panel === "board" ? [{ id: "board", video: $("boardCanvas"), name: t("Board"), screen: true }] : []),
     opts,
   );
   S.recorder.start();

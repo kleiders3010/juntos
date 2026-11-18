@@ -194,17 +194,19 @@ export class Recorder {
   drawTile(ctx, t, x, y, w, h, font) {
     this.rects.set(t.id, { x, y, w, h });
     const v = t.video;
-    if (v && v.videoWidth && !t.camoff) {
+    const vw0 = v ? v.videoWidth || (v.tagName === "CANVAS" ? v.width : 0) : 0; // a video, or the board's canvas
+    const vh0 = v ? v.videoHeight || (v.tagName === "CANVAS" ? v.height : 0) : 0;
+    if (vw0 && vh0 && !t.camoff) {
       const sx = this.small.getContext("2d");
-      const cr = Math.max(32 / v.videoWidth, 18 / v.videoHeight);
-      sx.drawImage(v, (32 - v.videoWidth * cr) / 2, (18 - v.videoHeight * cr) / 2, v.videoWidth * cr, v.videoHeight * cr);
+      const cr = Math.max(32 / vw0, 18 / vh0);
+      sx.drawImage(v, (32 - vw0 * cr) / 2, (18 - vh0 * cr) / 2, vw0 * cr, vh0 * cr);
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(this.small, x - w * 0.1, y - h * 0.1, w * 1.2, h * 1.2); // past the edges: no grey rim (clipped by the box)
       ctx.fillStyle = "rgba(0,0,0,.45)";
       ctx.fillRect(x, y, w, h);
-      const r = Math.min(w / v.videoWidth, h / v.videoHeight);
-      const vw = v.videoWidth * r;
-      const vh = v.videoHeight * r;
+      const r = Math.min(w / vw0, h / vh0);
+      const vw = vw0 * r;
+      const vh = vh0 * r;
       ctx.drawImage(v, x + (w - vw) / 2, y + (h - vh) / 2, vw, vh);
     } else {
       ctx.fillStyle = "#3c4043";
