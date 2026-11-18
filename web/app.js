@@ -42,6 +42,7 @@ const ICON = {
   undo: "M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z",
   layout: "M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z",
   cc: "M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z",
+  pip: "M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z",
   fullExit: "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z",
 };
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
@@ -860,6 +861,7 @@ function buildBar() {
   extra.push(button("bPeople", "people", "People", () => openPanel("people")));
   extra.push(button("bLayout", "layout", "Layout", layoutSheet));
   extra.push(button("bCaps", "cc", "Captions", captionsSheet));
+  if (pipSupported()) extra.push(button("bPip", "pip", "Small window", openPip));
   if (Recorder.supported()) extra.push(button("bRec", "rec", "Record", toggleRec));
   const react = button("bReact", "more", "React", openReactions);
   react.innerHTML = `<b class="emoji">✋</b><span>${t("Hand / react")}</span>`;
@@ -1600,6 +1602,144 @@ function setCaps(on) {
   capSync();
 }
 
+// ---------- picture-in-picture: the call in a small window over every other window ----------
+// Like Meet's (studied: support.google.com/meet/answer/13665919): a small window you move and resize, with who's
+// talking, captions, notices and the buttons (mic, camera, hand, captions, back to the call, leave), opening by
+// itself when you switch tabs if the browser allows it. Chrome and Edge on computers get the whole small window
+// (Document Picture-in-Picture); other browsers float the video of who's talking (Safari, Firefox, phones).
+const docPip = "documentPictureInPicture" in window;
+const vidPip = !!document.pictureInPictureEnabled;
+function pipSupported() {
+  return docPip || vidPip;
+}
+// who is shown: a shared screen, then who's talking, then the others by how much they talk; me last, small
+function pipTiles() {
+  const all = [...($("grid")?.children || [])];
+  const me = all.find((x) => x.dataset.id === "me");
+  const others = all.filter((x) => x !== me);
+  const rank = (x) => (x.classList.contains("screen") ? 1e9 : 0) + (x === S.speaker ? 1e8 : 0) + (x.classList.contains("camoff") ? 0 : 1e4) + (x.talk || 0);
+  others.sort((a, b) => rank(b) - rank(a));
+  return { main: others.slice(0, 3), me };
+}
+function pipMirror(box, src, cls) {
+  let m = box.querySelector(`.tile[data-id="${CSS.escape(src.dataset.id)}"]`);
+  if (!m) {
+    m = box.ownerDocument.createElement("div");
+    m.innerHTML = `<video autoplay playsinline muted></video><div class="avatar"></div><div class="label"></div>`;
+    m.dataset.id = src.dataset.id;
+  }
+  m.className = [...src.classList].filter((c) => !["main", "spot", "floatMe", "off"].includes(c)).join(" ") + " " + cls;
+  const v = m.querySelector("video");
+  const sv = src.querySelector("video");
+  if (v.srcObject !== sv.srcObject) v.srcObject = sv.srcObject;
+  if (v.paused && v.srcObject) v.play().catch(() => {});
+  m.querySelector(".avatar").textContent = src.querySelector(".avatar").textContent;
+  const lab = src.querySelector(".label").innerHTML;
+  if (m.querySelector(".label").innerHTML !== lab) m.querySelector(".label").innerHTML = lab;
+  return m;
+}
+function pipPaint() {
+  const w = S.pip;
+  if (!w) return;
+  const d = w.document;
+  const { main, me } = pipTiles();
+  const grid = d.getElementById("pipGrid");
+  const keep = [...main.map((x) => pipMirror(grid, x, "")), ...(me ? [pipMirror(grid, me, main.length ? "pipMe" : "")] : [])];
+  for (const x of [...grid.children]) if (!keep.includes(x)) x.remove();
+  keep.forEach((x, i) => grid.children[i] !== x && grid.insertBefore(x, grid.children[i] || null));
+  grid.dataset.n = main.length || 1;
+  const caps = d.getElementById("pipCaps");
+  caps.className = $("captions").className;
+  caps.hidden = $("captions").hidden;
+  if (caps.innerHTML !== $("captions").innerHTML) caps.innerHTML = $("captions").innerHTML;
+  const toasts = d.getElementById("pipToasts");
+  if (toasts.innerHTML !== $("toasts").innerHTML) toasts.innerHTML = $("toasts").innerHTML;
+  for (const [id, on, a, b] of [["qMic", S.mic, "mic", "micOff"], ["qCam", S.cam, "cam", "camOff"]]) {
+    const el = d.getElementById(id);
+    const want = svg(on ? a : b);
+    if (el.dataset.icon !== want) {
+      el.innerHTML = want;
+      el.dataset.icon = want;
+    }
+    el.classList.toggle("danger", !on);
+  }
+  d.getElementById("qHand").classList.toggle("on", S.hands.has("me"));
+  d.getElementById("qCaps").classList.toggle("on", !!S.capsOn);
+}
+async function openPip() {
+  if (!S.mesh) return;
+  if (S.pip) return S.pip.focus?.();
+  if (!docPip) return videoPip();
+  let w;
+  try {
+    w = await documentPictureInPicture.requestWindow({ width: 360, height: 300 });
+  } catch (_) {
+    return videoPip();
+  }
+  S.pip = w;
+  const d = w.document;
+  d.documentElement.lang = document.documentElement.lang;
+  d.title = t("Call on Juntos");
+  for (const l of document.querySelectorAll('link[rel="stylesheet"]')) {
+    const c = d.createElement("link");
+    c.rel = "stylesheet";
+    c.href = l.href;
+    d.head.append(c);
+  }
+  d.body.className = "pipBody";
+  d.body.innerHTML = `<div id="pipToasts" class="toasts"></div><div id="pipGrid" class="pipGrid"></div><div id="pipCaps" class="captions" hidden></div><div class="pipBar"></div>`;
+  const bar = d.querySelector(".pipBar");
+  const btn = (id, icon, label, fn, cls = "") => {
+    const b = d.createElement("button");
+    b.id = id;
+    b.className = `round ${cls}`;
+    b.title = t(label);
+    b.setAttribute("aria-label", t(label));
+    b.innerHTML = icon.startsWith("<") ? icon : svg(icon);
+    b.onclick = () => {
+      fn();
+      pipPaint();
+    };
+    bar.append(b);
+  };
+  btn("qMic", "mic", "Mic", () => setMic(!S.mic));
+  btn("qCam", "cam", "Camera", () => setCam(!S.cam));
+  btn("qHand", '<b class="emoji">✋</b>', "Raise hand", toggleHand);
+  btn("qCaps", "cc", "Captions", () => setCaps(!S.capsOn));
+  btn("qBack", "full", "Back to the call", backFromPip);
+  btn("qLeave", "end", "Leave", () => leave(), "end");
+  pipPaint();
+  S.pipTimer = setInterval(pipPaint, 250);
+  w.addEventListener("pagehide", () => {
+    clearInterval(S.pipTimer);
+    S.pip = null;
+    $("bPip")?.classList.remove("on");
+  });
+  $("bPip")?.classList.add("on");
+}
+function backFromPip() {
+  S.pip?.close();
+  window.focus();
+}
+// other browsers: the video of who's talking floats (the browser's own small window)
+async function videoPip() {
+  if (!vidPip) return;
+  if (document.pictureInPictureElement) return document.exitPictureInPicture().catch(() => {});
+  const { main, me } = pipTiles();
+  const tile = main.find((x) => !x.classList.contains("camoff")) || main[0] || me;
+  const v = tile?.querySelector("video");
+  if (!v?.srcObject) return toast(t("Nobody has a camera on yet"));
+  try {
+    await v.requestPictureInPicture();
+  } catch (_) {
+    toast(t("This browser can't float the call"));
+  }
+}
+function closePip() {
+  S.pip?.close();
+  if (document.pictureInPictureElement) document.exitPictureInPicture().catch(() => {});
+}
+
 function saveTranscript() {
   const pad = (n) => String(n).padStart(2, "0");
   const d = new Date();
@@ -2173,6 +2313,7 @@ async function leave(why) {
   paintKnocks();
   S.mesh?.leave();
   S.mesh = null;
+  closePip();
   capSync();
   const save = $("endedCaps");
   save.hidden = !S.transcript.length;
@@ -2215,6 +2356,10 @@ function callControls() {
     ms.setActionHandler("hangup", () => leave());
     ms.setActionHandler("togglemicrophone", () => setMic(!S.mic));
     ms.setActionHandler("togglecamera", () => setCam(!S.cam));
+  } catch (_) {}
+  // switching tabs opens the small window by itself (Chrome / Edge, once the person allows it for the site)
+  try {
+    ms.setActionHandler("enterpictureinpicture", () => openPip());
   } catch (_) {}
 }
 $("rejoin").onclick = () => enterCall(localStorage.getItem("name"));
