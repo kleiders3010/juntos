@@ -155,6 +155,7 @@ with sync_playwright() as p:
     check(not c.query_selector('input[name="capShare"]') and c.is_visible('input[name="caps"]'), "Carla can still turn on captions to read the others")
     c.check('input[name="caps"]')
     c.click(".capSheet .primary")
+    a.wait_for_function("__S.capWant.size === 2", timeout=10000)  # Carla's ask reached Ana (live network)
     a.evaluate("__say('welcome Carla', true)")
     c.wait_for_function("document.querySelector('#captions')?.textContent.includes('welcome Carla')", timeout=5000)
     check(True, "and she reads Ana")
