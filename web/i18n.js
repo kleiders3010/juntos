@@ -235,6 +235,8 @@ const DICT = {
     "Audio only": "Solo audio",
     "Video paused: weak connection": "Video en pausa: conexión débil",
     "Video paused to save data. Tap to see it": "Video en pausa para ahorrar datos. Tocá para verlo",
+    "Captions hear your default microphone ({name}), not the one picked in Devices": "Los subtítulos escuchan tu micrófono predeterminado ({name}), no el elegido en Dispositivos",
+    "Captions hear your default microphone ({name}), not the one picked in Devices. Make it the default in your computer's sound settings, or use Chrome, where captions follow the picked one.": "Los subtítulos escuchan tu micrófono predeterminado ({name}), no el elegido en Dispositivos. Ponelo como predeterminado en la configuración de sonido de tu computadora, o usá Chrome, donde los subtítulos siguen al elegido.",
     "Your microphone stopped. It's back: {name}": "Tu micrófono se cortó. Ya volvió: {name}",
     "Your microphone stopped working. Check it, or pick another in Devices": "Tu micrófono dejó de funcionar. Revisalo, o elegí otro en Dispositivos",
     "Your camera stopped, so it's off now. Turn it on to try again": "Tu cámara se cortó, así que quedó apagada. Encendela para probar de nuevo",

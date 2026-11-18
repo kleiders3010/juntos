@@ -2003,8 +2003,64 @@ function capSync() {
   }
 }
 
+// Captions follow the microphone picked in Devices where the browser can listen to a given microphone
+// (start(track): Chrome 135+ on computers). A browser that can must refuse a stopped track, one that can't
+// ignores it and listens to the default microphone: that tells them apart, once.
+let capTrackOK = null;
+const MIC_NOTE = "Captions hear your default microphone ({name}), not the one picked in Devices. Make it the default in your computer's sound settings, or use Chrome, where captions follow the picked one.";
+function capByTrack() {
+  if (capTrackOK !== null || !SR || !S.micTrack) return !!capTrackOK;
+  const dead = S.micTrack.clone();
+  dead.stop();
+  const r = new SR();
+  try {
+    r.start(dead);
+    capTrackOK = false;
+    try {
+      r.abort();
+    } catch {}
+  } catch {
+    capTrackOK = true;
+  }
+  return capTrackOK;
+}
+// Elsewhere captions hear the system's default microphone: when that isn't the one the call uses, say so (in the
+// captions sheet, and once as a note) instead of quietly captioning another microphone.
+S.capOtherMic = "";
+async function capCheckMic() {
+  S.capOtherMic = "";
+  if (!SR || capByTrack() || !S.micTrack) return;
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+    const def = devs.find((d) => d.deviceId === "default") || devs[0];
+    const mine = S.micTrack.getSettings();
+    if (def && mine.groupId && def.groupId && def.groupId !== mine.groupId) {
+      S.capOtherMic = (def.label || "").replace(/^(Default|Predeterminado) - /, "") || t("Microphone");
+      if (capOn && !capCheckMic.told) {
+        capCheckMic.told = true;
+        toast(t("Captions hear your default microphone ({name}), not the one picked in Devices", { name: S.capOtherMic }));
+      }
+    }
+  } catch {}
+}
+// the microphone was switched: listen to the new one
+function capRestart() {
+  capCheckMic();
+  if (!capRec) return;
+  const r = capRec;
+  capRec = null;
+  try {
+    r.abort();
+  } catch {}
+  capStart();
+}
+
 function capStart() {
   if (!capOn || capRec) return;
+  if (capCheckMic.at !== S.micTrack) {
+    capCheckMic.at = S.micTrack;
+    capCheckMic();
+  }
   const r = new SR();
   capRec = r;
   r.continuous = true;
@@ -2041,7 +2097,8 @@ function capStart() {
     if (capOn) setTimeout(capStart, Math.min(300 * 2 ** capFails, 15000));
   };
   try {
-    r.start();
+    if (capByTrack() && S.micTrack && S.micTrack.readyState === "live") r.start(S.micTrack);
+    else r.start();
   } catch {
     capRec = null;
   }
@@ -2312,6 +2369,12 @@ function captionsSheet() {
     w.textContent = t(CAP_WHY[S.capBroken]);
     inner.append(w);
   }
+  if (S.capOtherMic) {
+    const w = document.createElement("p");
+    w.className = "small capWarn capMic";
+    w.textContent = t(MIC_NOTE, { name: S.capOtherMic });
+    inner.append(w);
+  }
   if (SR) {
     const ll = document.createElement("p");
     ll.className = "small";
@@ -2472,6 +2535,7 @@ async function useMic(id) {
     S.micTrack.enabled = S.mic;
     localStorage.setItem("micId", S.micTrack.getSettings().deviceId || id);
     await S.mesh?.setTracks(audioOut(), videoOut());
+    capRestart();
     return true;
   } catch (_) {
     toast(t("Couldn't switch microphone"));
