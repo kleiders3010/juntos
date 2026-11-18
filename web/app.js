@@ -137,6 +137,28 @@ function callDetails() {
     },
     devices: S.devKinds || null,
     connections: peers.map((p) => ({ p: who(p.id), state: p.state, ice: p.pc.iceConnectionState, viaRelay: !!p.relayTried })),
+    // how each person's sound is being played here (a voice that arrives but isn't heard)
+    playback: {
+      speakerPicked: !!S.sink,
+      boostContext: S.out ? S.out.state : null,
+      people: peers.map((p) => {
+        const tile = document.querySelector(`.tile[data-id="${p.id}"]`);
+        const v = tile?.querySelector("video");
+        const tr = p.stream?.getAudioTracks()[0];
+        return {
+          p: who(p.id),
+          tile: !!tile,
+          paused: v ? v.paused : null,
+          muted: v ? v.muted : null,
+          volume: v ? v.volume : null,
+          ownSpeaker: v ? !!v.sinkId : null,
+          tapToHear: !!tile?.classList.contains("tapToPlay"),
+          otherRoom: !!tile?.classList.contains("away"),
+          boosted: !!p.boost,
+          sound: tr ? { state: tr.readyState, enabled: tr.enabled, muted: tr.muted } : null,
+        };
+      }),
+    },
     events: DIAG.map(({ at, ev, id, ...x }) => ({ when: ago(at), ev, p: who(id), ...x })),
     measurements: S.netq.log.slice(-120).map((m) => ({ when: ago(m.at), p: who(m.id), rttMs: m.rtt, lossPct: m.loss, jitterMs: m.jitter, kbps: m.kbps, bars: m.bars })),
   };
