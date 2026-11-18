@@ -150,9 +150,10 @@ async function applyBackground(mode) {
   localStorage.setItem("bg", mode);
   if (!S.camTrack) return;
   if (mode === "none") {
-    if (S.bg) S.bg.stop();
+    if (S.bg) await S.bg.set("none"); // back to the live camera (stop() alone left the call on the last drawn picture)
   } else {
     if (!S.bg) S.bg = new Background(S.camTrack);
+    S.bg.onBroken = () => toast(t("Backgrounds don't work on this device"));
     try {
       await S.bg.set(mode);
     } catch (e) {

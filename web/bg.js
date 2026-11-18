@@ -50,6 +50,8 @@ export class Background {
     this.mask = document.createElement("canvas");
     this.out = null;
     this.running = false;
+    this.stats = { ticks: 0, skipped: 0, draws: 0 };
+    window.__juntosBg = this; // read by worker/bg_test.py
   }
 
   get track() {
@@ -90,31 +92,65 @@ export class Background {
     const mctx = this.mask.getContext("2d");
     let maskData = null;
     let last = -1;
-    const frame = () => {
+    let lastDraw = performance.now();
+    let lastMove = performance.now();
+    let fails = 0;
+    let lastTick = 0;
+    const plain = () => this.ctx.drawImage(this.video, 0, 0, w, h); // the camera as it is, no effect
+    const frame = (ev) => {
       if (!this.running) return;
+      this.stats.ticks++;
+      const now = performance.now();
+      // Ticks queue up while a frame is being worked on. Old ones are skipped, or a slow device falls
+      // further and further behind until the picture looks frozen (and the tab runs out of memory).
+      if (performance.timeOrigin + now - ev.data > 30 && now - lastTick < 200) return void this.stats.skipped++;
+      lastTick = now;
+      if (this.video.currentTime !== last) lastMove = now;
+      else if (now - lastMove > 1000) {
+        this.video.play().catch(() => {}); // the browser paused the hidden camera video: wake it
+        lastMove = now;
+      }
       if (this.video.readyState >= 2 && this.video.currentTime !== last) {
         last = this.video.currentTime;
-        seg.segmentForVideo(this.video, performance.now(), (r) => {
-          const m = r.confidenceMasks && r.confidenceMasks[0];
-          if (!m) return;
-          // the mask has its own size (the model's): keep it, and scale it when drawing
-          if (this.mask.width !== m.width || this.mask.height !== m.height || !maskData) {
-            this.mask.width = m.width;
-            this.mask.height = m.height;
-            maskData = mctx.createImageData(m.width, m.height);
+        if (this.broken) {
+          plain();
+          return;
+        }
+        try {
+          seg.segmentForVideo(this.video, performance.now(), (r) => {
+            const m = r.confidenceMasks && r.confidenceMasks[0];
+            if (!m) return;
+            // the mask has its own size (the model's): keep it, and scale it when drawing
+            if (this.mask.width !== m.width || this.mask.height !== m.height || !maskData) {
+              this.mask.width = m.width;
+              this.mask.height = m.height;
+              maskData = mctx.createImageData(m.width, m.height);
+            }
+            const conf = m.getAsFloat32Array();
+            const d = maskData.data;
+            for (let i = 0; i < conf.length; i++) d[i * 4 + 3] = Math.min(255, Math.max(0, (conf[i] - 0.25) * 2 * 255));
+            mctx.putImageData(maskData, 0, 0);
+            this.draw(w, h);
+            this.stats.draws++;
+            lastDraw = performance.now();
+            fails = 0;
+          });
+        } catch (e) {
+          if (++fails === 1) console.error("background", e);
+          if (fails >= 25) {
+            // the effect keeps failing on this device: send the plain camera rather than a still picture
+            this.broken = true;
+            this.onBroken?.();
           }
-          const conf = m.getAsFloat32Array();
-          const d = maskData.data;
-          for (let i = 0; i < conf.length; i++) d[i * 4 + 3] = Math.min(255, Math.max(0, (conf[i] - 0.25) * 2 * 255));
-          mctx.putImageData(maskData, 0, 0);
-          this.draw(w, h);
-        });
+        }
+        // nothing drawn for a second (effect stuck): keep the picture moving with the plain camera
+        if (performance.now() - lastDraw > 1000) plain();
       }
     };
     // A worker's timer keeps running when the tab is in the background (requestAnimationFrame
-    // stops, which would freeze your video for everyone else).
+    // stops, which would freeze your video for everyone else). It sends the time it fired.
     if (!this.ticker) {
-      const src = "setInterval(() => postMessage(0), 40)";
+      const src = "setInterval(() => postMessage(performance.timeOrigin + performance.now()), 40)";
       this.ticker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
     }
     this.ticker.onmessage = frame;
