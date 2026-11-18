@@ -20,7 +20,7 @@ function children(b, d, start, end) {
 }
 const find = (list, t) => list.find((x) => x.type === t);
 
-function box(t, ...parts) {
+export function box(t, ...parts) {
   const len = 8 + parts.reduce((n, p) => n + p.length, 0);
   const out = new Uint8Array(len);
   const d = new DataView(out.buffer);
@@ -30,7 +30,7 @@ function box(t, ...parts) {
   for (const p of parts) { out.set(p, o); o += p.length; }
   return out;
 }
-function full(t, version, flags, words) { // full box whose body is 32-bit words
+export function full(t, version, flags, words) { // full box whose body is 32-bit words
   const p = new Uint8Array(4 + words.length * 4);
   const d = new DataView(p.buffer);
   d.setUint32(0, (version << 24) | flags);
