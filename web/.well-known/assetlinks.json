@@ -4,7 +4,8 @@
     "namespace": "android_app",
     "package_name": "com.jurisgames.juntos",
     "sha256_cert_fingerprints": [
-      "BF:5E:00:28:A7:C8:6F:41:1A:81:F3:25:04:0F:2B:FE:9B:DD:B5:C9:EA:AF:74:35:9A:13:93:8E:36:54:EA:E5"
+      "BF:5E:00:28:A7:C8:6F:41:1A:81:F3:25:04:0F:2B:FE:9B:DD:B5:C9:EA:AF:74:35:9A:13:93:8E:36:54:EA:E5",
+      "4F:A8:64:72:C4:CD:3A:F1:E6:AF:63:30:87:16:80:B7:CA:B4:0D:D1:67:E4:2B:7A:F6:6E:58:2B:30:02:8C:BC"
     ]
   }
 }]

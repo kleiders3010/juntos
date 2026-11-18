@@ -11,6 +11,7 @@ const DICT = {
     "Join": "Unirse",
     "Install app": "Instalar la app",
     "Open source": "Código abierto",
+    "Privacy": "Privacidad",
     "Camera is off": "La cámara está apagada",
     "Microphone": "Micrófono",
     "Camera": "Cámara",

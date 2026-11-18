@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Juntos · Privacy</title>
+<link rel="icon" href="/img/icon-192.png">
+<style>
+  body { font: 16px/1.6 system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: #1f2937; }
+  h1 { font-size: 1.6rem; } h2 { font-size: 1.2rem; margin-top: 2rem; }
+  a { color: #2563eb; }
+</style>
+</head>
+<body>
+<h1>Juntos: privacy</h1>
+<p>Last updated: 18 November 2026. Juntos is free, open-source video calling by Juris Games
+(<a href="https://github.com/kleiders3010/juntos">source code</a>). The Android app opens the same web app
+at meet.jurisgames.com.</p>
+
+<h2>What we collect</h2>
+<p>Nothing that identifies you. There are no accounts, no ads, no analytics and no trackers.</p>
+
+<h2>Your call</h2>
+<ul>
+  <li><b>Camera, microphone, chat and the board</b> go directly between the devices in the call, encrypted
+    (WebRTC). When a network blocks direct connections they pass, still encrypted, through a Cloudflare relay
+    that cannot read them. Nothing of the call is stored on any server.</li>
+  <li><b>Your name</b> is sent to the people in the same call and saved only on your device.</li>
+  <li><b>Recordings</b> are made on your device and saved to your own downloads. Everyone in the call sees
+    when someone records.</li>
+  <li><b>Background pictures</b> you choose stay on your device.</li>
+</ul>
+
+<h2>The server</h2>
+<p>Our server (Cloudflare Workers) only introduces the devices in a call to each other and forgets the call when
+it ends. To keep the free relay fair it counts relay uses per network per day under a scrambled one-way code
+of the network address, never the address itself; those counts are deleted the next day. Cloudflare may keep
+standard security logs.</p>
+
+<h2>Children</h2>
+<p>Juntos is a general-audience tool and is not directed at children.</p>
+
+<h2>Contact</h2>
+<p>hello@jurisgames.com</p>
+
+<hr>
+<h1 lang="es">Juntos: privacidad</h1>
+<div lang="es">
+<p>Juntos es una app de videollamadas gratis y de código abierto. No guarda nada que te identifique: sin cuentas,
+sin anuncios, sin analíticas. La cámara, el micrófono, el chat y la pizarra van directo entre los dispositivos,
+cifrados; si la red no lo permite pasan cifrados por un relé de Cloudflare que no puede leerlos. Tu nombre lo ven
+los de la llamada y se guarda solo en tu dispositivo. Las grabaciones se hacen y se guardan en tu dispositivo, y
+todos ven cuando alguien graba. El servidor solo conecta los dispositivos; para repartir el relé gratis cuenta
+usos por red y por día con un código irreversible (nunca la dirección), que se borra al día siguiente.
+Contacto: hello@jurisgames.com</p>
+</div>
+</body>
+</html>
