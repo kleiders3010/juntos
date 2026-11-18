@@ -15,7 +15,7 @@ export default {
       return env.ROOMS.get(id).fetch(req);
     }
     if (url.pathname === "/health") return new Response("ok");
-    if (url.pathname === "/turn") return turn(env);
+    if (url.pathname === "/turn") return turn(req, env);
     return new Response("not found", { status: 404 });
   },
 };
@@ -24,12 +24,22 @@ export default {
 // allowance is 1,000 GB a month (shared with its SFU); past it, it bills. So the number of
 // credentials handed out per month is capped well below what could reach that.
 const TURN_PER_MONTH = 150;
+// One person can't use up everyone's budget: a few credentials per network per day.
+const TURN_PER_IP_DAY = 6;
 
-async function turn(env) {
+async function ipKey(req) {
+  const ip = req.headers.get("CF-Connecting-IP") || "unknown";
+  const day = new Date().toISOString().slice(0, 10);
+  // Only a hash is kept (never the address), and only until the next day.
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(day + "|juntos|" + ip));
+  return "ip:" + day + ":" + [...new Uint8Array(h).slice(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function turn(req, env) {
   if (!env.TURN_KEY || !env.TURN_KEY_ID) return Response.json({ iceServers: [] });
   const budget = env.ROOMS.get(env.ROOMS.idFromName("~budget"));
-  const ok = await (await budget.fetch("https://budget/take")).json();
-  if (!ok.granted) return Response.json({ iceServers: [], reason: "monthly relay budget used" }, { status: 429 });
+  const ok = await (await budget.fetch("https://budget/take", { headers: { "x-ip-key": await ipKey(req) } })).json();
+  if (!ok.granted) return Response.json({ iceServers: [], reason: ok.reason }, { status: 429 });
   const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
     method: "POST",
     headers: { Authorization: `Bearer ${env.TURN_KEY}`, "Content-Type": "application/json" },
@@ -45,6 +55,14 @@ export class Room {
     this.state = state;
   }
 
+  // Budget object only: drop the per-network counts of past days.
+  async alarm() {
+    const today = "ip:" + new Date().toISOString().slice(0, 10);
+    const old = [...(await this.state.storage.list({ prefix: "ip:" })).keys()].filter((k) => !k.startsWith(today));
+    if (old.length) await this.state.storage.delete(old.slice(0, 128));
+    if (old.length > 128) await this.state.storage.setAlarm(Date.now() + 1000);
+  }
+
   peers() {
     return this.state.getWebSockets().map((ws) => ({ ws, a: ws.deserializeAttachment() || {} })).filter((p) => p.a.id);
   }
@@ -54,8 +72,13 @@ export class Room {
       // the "~budget" object: counts relay credentials per calendar month
       const month = new Date().toISOString().slice(0, 7);
       const used = (await this.state.storage.get(month)) || 0;
-      if (used >= TURN_PER_MONTH) return Response.json({ granted: false, used });
-      await this.state.storage.put(month, used + 1);
+      if (used >= TURN_PER_MONTH) return Response.json({ granted: false, reason: "monthly relay budget used" });
+      // and, per network per day, a hash of the address (deleted by the alarm below)
+      const ipk = req.headers.get("x-ip-key") || "ip:none";
+      const mine = (await this.state.storage.get(ipk)) || 0;
+      if (mine >= TURN_PER_IP_DAY) return Response.json({ granted: false, reason: "daily relay limit for this network" });
+      await this.state.storage.put({ [month]: used + 1, [ipk]: mine + 1 });
+      await this.state.storage.setAlarm(Date.now() + 26 * 3600 * 1000);
       return Response.json({ granted: true, used: used + 1 });
     }
     const pair = new WebSocketPair();
