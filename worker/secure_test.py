@@ -81,7 +81,7 @@ with sync_playwright() as p:
     a.wait_for_function("__S.joined", timeout=15000)
     code = a.evaluate("__S.code")
     check(a.evaluate("__S.isHost && __S.locked && __S.hasPass"), "the call starts locked and with a passcode")
-    check(info(code) == {"pass": True}, "the server only says that a passcode is needed")
+    check(info(code) == {"pass": True, "server": True}, "the server only says that a passcode is needed (and that the call uses the server)")
     plain = f"{BASE}/r/{code}{SIG}"
 
     # --- Beto has the plain link: the lobby asks for the passcode ---
@@ -140,7 +140,7 @@ with sync_playwright() as p:
     people(a)
     a.click('[name="removePass"]')
     o.wait_for_function("!__S.hasPass", timeout=5000)
-    check(info(code) == {"pass": False} and a.query_selector('[name="addPass"]'), "the passcode removed: nobody is asked for one")
+    check(info(code)["pass"] is False and a.query_selector('[name="addPass"]'), "the passcode removed: nobody is asked for one")
 
     # --- a planned call holds its passcode before the host comes ---
     h = page("Host2")
@@ -156,7 +156,7 @@ with sync_playwright() as p:
     check(plan.endswith("#p=9911"), "the planned call's link carries its passcode")
     h.click('.plannedSheet [name="invitation"]')
     h.wait_for_timeout(1000)
-    check(info(pcode) == {"pass": True}, "the planned call has its passcode before its host arrives")
+    check(info(pcode)["pass"] is True and info(pcode)["server"] is True, "the planned call has its passcode before its host arrives")
     e = lobby("Eva", f"{BASE}/r/{pcode}{SIG}")
     try_pass(e, "1234")
     check("isn't right" in msg(e), "early guests without it are refused")

@@ -1,10 +1,17 @@
 import { VIDEO_CAP } from "./net.js";
+import { NostrSignal, NOSTR_OK } from "./nsig.js";
 // Direct (mesh) WebRTC between everyone in a room. The signaling server only passes handshakes;
 // audio, video, chat and the board go device to device.
 //
 // Who offers: the newcomer offers to everyone already there. Every connection carries one audio
 // and one video sender (swapped with replaceTrack, so no renegotiation) and one data channel
 // (negotiated id 0, created by both sides).
+//
+// Finding each other: through public Nostr relays first (nsig.js), so an ordinary call never touches our server
+// and its free daily allowance. The server is used only when the call needs it: the host started it locked or
+// with a passcode, someone was sent out of it, a host uses a host control (then everyone in the call opens the
+// server link and newcomers are told to use it too), or no relay can be reached.
+const MESH_MAX = 16; // same as the server's: big_test.py
 
 const ICE = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
 
@@ -15,8 +22,12 @@ export function randomId() {
 }
 
 export class Mesh extends EventTarget {
-  constructor({ room, name, signalUrl, key, knock, pass, opts }) {
+  constructor({ room, name, signalUrl, key, knock, pass, opts, relays }) {
     super();
+    this.relays = relays; // null: our server only (tests, local development); [] = the public list; or test relays
+    this.viaN = new Set(); // people whose handshake goes through the relays
+    this.helloSeen = new Set();
+    this.srv = false; // using our server
     this.pass = pass || ""; // the call's passcode, if it has one (typed, or from the link)
     this.opts = opts || null; // the host's choices when starting the call: { lock, pass }
     this.key = key || ""; // only the person who started the call has it: host controls
@@ -40,6 +51,90 @@ export class Mesh extends EventTarget {
   }
 
   connect() {
+    // the server decides who comes in: started locked / with a passcode, or I was sent out before
+    if (!NOSTR_OK || this.relays == null || this.knock || this.pass || (this.opts && (this.opts.lock || this.opts.pass))) return this.goServer();
+    this.listen().then((up) => {
+      if (this.closed || this.srv) return;
+      if (!up) return this.goServer();
+      this.emit("signal-open", { relays: up });
+      if (this.key) this.emit("host", { t: "room", locked: false, host: true, owner: true, pass: false, serverless: true });
+      this.hello();
+      this.emit("joined", { count: this.peers.size });
+      // nobody answered: maybe the call uses our server (planned with a passcode or ask-to-join; or the relays
+      // that the people in it use aren't reachable from here). One question to the server, only in that case.
+      setTimeout(async () => {
+        if (this.closed || this.srv || this.peers.size || this.viaN.size || this.key) return;
+        try {
+          const r = await (await fetch(`${this.signalUrl.replace(/^ws/, "http")}/info/${this.room}`, { cache: "no-store" })).json();
+          if (r.server) this.goServer();
+        } catch (_) {}
+      }, 4500);
+    });
+  }
+
+  // listen on the relays (also in a call that uses the server: newcomers there are told to use it)
+  listen() {
+    if (!this.ns) this.ns = new NostrSignal({ room: this.room, relays: this.relays && this.relays.length ? this.relays : null, onMsg: (m) => this.onRelay(m) });
+    return this.ns.ready;
+  }
+
+  // say I'm here: now and twice more (a relay can be slow); later, again while I'm alone, for whoever comes
+  hello() {
+    const say = () => !this.closed && !this.srv && this.ns.send({ t: "hello", from: this.id, name: this.name });
+    say();
+    setTimeout(say, 1500);
+    setTimeout(say, 4000);
+    clearInterval(this.aloneTimer);
+    this.aloneTimer = setInterval(() => !this.peers.size && say(), 20000);
+  }
+
+  onRelay(m) {
+    if (this.closed || !m || typeof m.from !== "string" || m.from === this.id || (m.to && m.to !== this.id)) return;
+    if (!/^[A-Za-z0-9_-]{6,40}$/.test(m.from)) return;
+    const name = typeof m.name === "string" ? m.name.slice(0, 60) : "";
+    if (m.t === "hello") {
+      this.helloSeen.add(m.from);
+      if (this.srv) return void this.ns.send({ t: "srv", from: this.id, to: m.from });
+      if (this.peers.has(m.from)) return;
+      if (this.peers.size + 1 >= MESH_MAX) return void this.ns.send({ t: "full", from: this.id, to: m.from });
+      this.ns.send({ t: "here", from: this.id, to: m.from, name: this.name });
+      this.viaN.add(m.from);
+      this.emit("someone-joining", { id: m.from, name });
+    } else if (m.t === "here") {
+      if (this.srv || this.peers.has(m.from)) return;
+      this.viaN.add(m.from);
+      // two newcomers at once: only the one with the lower id calls
+      if (this.helloSeen.has(m.from) && this.id > m.from) return;
+      if (this.peers.size + 1 >= MESH_MAX) return this.emit("full", { max: MESH_MAX });
+      this.call(m.from, name);
+    } else if (m.t === "srv") {
+      // this call uses our server now (a host control was used, or it started locked or with a passcode)
+      this.goServer();
+    } else if (m.t === "full") {
+      if (!this.peers.size && !this.fullSaid) {
+        this.fullSaid = true;
+        this.emit("full", { max: MESH_MAX });
+      }
+    } else if (m.t === "signal" && this.viaN.has(m.from)) {
+      this.onSignal({ t: "signal", from: m.from, data: m.data });
+    } else if (m.t === "name" && this.peers.has(m.from)) {
+      this.onSignal({ t: "name", id: m.from, name });
+    } else if (m.t === "bye" && this.viaN.has(m.from) && !this.srv) {
+      this.drop(m.from);
+    }
+  }
+
+  // use our server from now on (keeps every connection already made; the server introduces whoever is missing)
+  goServer() {
+    if (this.srv || this.closed) return;
+    this.srv = true;
+    clearInterval(this.aloneTimer);
+    if (this.ns) this.ns.send({ t: "srv", from: this.id });
+    this.connectServer();
+    if (this.relays != null && NOSTR_OK) this.listen(); // newcomers who look on the relays are sent here
+  }
+
+  connectServer() {
     const ws = new WebSocket(`${this.signalUrl}/ws/${this.room}`);
     this.ws = ws;
     ws.onopen = () => {
@@ -61,15 +156,34 @@ export class Mesh extends EventTarget {
   reconnect() {
     // Same identity: connections still up stay as they are; broken ones are called again.
     for (const [id, p] of this.peers) if (p.state === "failed" || p.state === "closed") this.drop(id);
-    this.connect();
+    this.connectServer();
   }
 
   sendSignal(m) {
+    if (m.t === "signal" && this.ns && (this.viaN.has(m.to) || !this.srv)) return this.relaySignal(m);
+    if (m.t === "name" && !this.srv && this.ns) return void this.ns.send({ t: "name", from: this.id, name: m.name });
     if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(m));
+  }
+
+  // through the relays, network routes (ICE candidates) go out together a moment after they're found
+  relaySignal(m) {
+    const d = m.data;
+    if (!d.ice) return void this.ns.send({ t: "signal", from: this.id, to: m.to, data: d });
+    const k = m.to + "|" + d.cid;
+    const b = ((this.iceOut ||= new Map()).get(k) || { list: [] });
+    this.iceOut.set(k, b);
+    b.list.push(d.ice);
+    clearTimeout(b.timer);
+    b.timer = setTimeout(() => {
+      this.iceOut.delete(k);
+      this.ns.send({ t: "signal", from: this.id, to: m.to, data: { ices: b.list, cid: d.cid, for: d.for } });
+    }, 400);
   }
 
   onSignal(m) {
     if (m.t === "peers") {
+      this.admitted = true;
+      for (const c of (this.hostQueue || []).splice(0)) this.sendSignal(c);
       for (const p of m.peers) if (p.host) this.hosts.add(p.id);
       for (const p of m.peers) if (p.role === "host") this.owners.add(p.id);
       for (const p of m.peers) if (!this.peers.has(p.id)) this.call(p.id, p.name);
@@ -151,7 +265,7 @@ export class Mesh extends EventTarget {
       this.emit("peer", { id });
     };
     // told they left while our connection still worked: once it closes, they're gone
-    dc.addEventListener("close", () => p.away && this.peers.get(id) === p && this.drop(id));
+    dc.addEventListener("close", () => (p.away || (this.viaN.has(id) && !this.srv)) && this.peers.get(id) === p && this.drop(id));
     pc.onconnectionstatechange = () => {
       if (this.peers.get(id) !== p) return; // replaced by a newer connection
       p.state = pc.connectionState;
@@ -301,6 +415,8 @@ export class Mesh extends EventTarget {
       for (const c of p.pending || []) if (!c.cid || c.cid === p.rcid) await p.pc.addIceCandidate(c.ice).catch(() => {});
       p.pending = null;
       this.emit("peer", { id: from });
+    } else if (data.ices && p) {
+      for (const ice of data.ices.slice(0, 50)) await this.onPeerSignal(from, { ice, cid: data.cid, for: data.for });
     } else if (data.ice && p) {
       if ((data.for && data.for !== p.cid) || (data.cid && p.rcid && data.cid !== p.rcid)) return; // for an older connection
       if (!p.pc.remoteDescription) (p.pending ||= []).push(data);
@@ -428,10 +544,16 @@ export class Mesh extends EventTarget {
   // host commands: { t: "lock", on } / { t: "admit" | "deny" | "remove", id } / { t: "admit-all" } / { t: "mute", id | "*" } /
   // { t: "pass", pass } (empty: no passcode)
   host(cmd) {
-    this.sendSignal(cmd);
+    // host controls need the server: the call moves to it (once), and the command goes when the link is up
+    if (!this.srv) this.goServer();
+    if (this.ws && this.ws.readyState === 1 && this.admitted) return this.sendSignal(cmd);
+    (this.hostQueue ||= []).push(cmd);
   }
 
   leave() {
+    if (this.ns && !this.srv) this.ns.send({ t: "bye", from: this.id }).finally(() => this.ns.close());
+    else this.ns?.close();
+    clearInterval(this.aloneTimer);
     this.closed = true;
     for (const id of [...this.peers.keys()]) this.drop(id);
     try {

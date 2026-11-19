@@ -159,7 +159,10 @@ export class Room {
     }
     if (new URL(req.url).pathname === "/info") {
       const pass = !!(await this.state.storage.get("pass"));
-      return Response.json({ pass }, { headers: { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" } });
+      // server: this call uses the server (a passcode, ask-to-join, or people already in it through the server);
+      // asked by someone who found nobody through the relays
+      const server = pass || !!(await this.state.storage.get("locked")) || this.peers(true).length > 0;
+      return Response.json({ pass, server }, { headers: { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" } });
     }
     const pair = new WebSocketPair();
     // the room's name (for the passcode hash) and a daily hash of the network (for the wrong-passcode limit)

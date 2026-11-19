@@ -19,6 +19,9 @@ const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 // The page and its signaling share one host (meet.jurisgames.com); ?signal= points elsewhere for testing.
 const SIGNAL = params.get("signal") || (location.protocol === "https:" ? `wss://${location.host}` : "wss://meet.jurisgames.com");
+// Finding each other through public Nostr relays (rtc.js, nsig.js): on by default; a page pointed at a test server
+// (?signal=) uses only that server, unless test relays are given (?relays=ws://...,ws://...)
+const RELAYS = params.get("relays") ? params.get("relays").split(",").filter((u) => /^wss?:\/\//.test(u)) : params.get("signal") ? null : [];
 const isPhone = matchMedia("(max-width: 640px)").matches;
 
 const ICON = {
@@ -418,6 +421,8 @@ async function askPass(msg) {
   if (localStorage.getItem(`juntos.host.${S.code}`)) return;
   // the link already carries the passcode: no need to ask the server (each ask counts against its free daily requests)
   if (box.value) return (box.hidden = false);
+  // through the relays the lobby doesn't ask the server either: a call that needs a passcode says so on joining
+  if (RELAYS) return;
   try {
     const r = await (await fetch(`${SIGNAL.replace(/^ws/, "http")}/info/${S.code}`, { cache: "no-store" })).json();
     box.hidden = !r.pass;
@@ -530,6 +535,7 @@ function enterCall(name) {
     room: S.code,
     name,
     signalUrl: SIGNAL,
+    relays: RELAYS,
     key: localStorage.getItem(`juntos.host.${S.code}`),
     knock: !!localStorage.getItem(`juntos.out.${S.code}`),
     pass: passOf(S.code),
