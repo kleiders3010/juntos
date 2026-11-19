@@ -203,11 +203,15 @@ export class Big {
   async rekey() {
     if (!this.split()) {
       this.mk = this.mkRaw = null;
+      this.mkWait = false;
       return;
     }
+    // from this moment nothing of mine goes out readable: frames wait for the key (dropped until it exists)
+    this.mkWait = true;
     const k = await newKey();
     this.mkRaw = b64u(await rawKey(k));
     this.mk = k;
+    this.mkWait = false;
     this.post({ _mk: this.mkRaw }, null, true);
   }
 
@@ -389,6 +393,7 @@ export class Big {
   // header: kind(1 sound, 2 picture), flags, piece, pieces, u32 seq, f64 timestamp, src length, src, data
   sendMedia(kind, flags, ts, data) {
     const k = this.mk;
+    if (!k && this.mkWait) return; // the rooms just split and my key is being made: never readable
     if (!k) return this.sendFrame(kind, flags, ts, data);
     const copy = data.slice();
     this.mout = this.mout.then(async () => this.sendFrame(kind, flags | ENC, ts, await seal(k, copy))).catch(() => {});

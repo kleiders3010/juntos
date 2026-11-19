@@ -47,7 +47,7 @@ export class Fwd {
     const m = this.m;
     const p = m.peers.get(id);
     const z = m.peers.get(from);
-    if (!p || !z || p.via || p.state === "connected" || !this.asked.has(id) || p.helper) return;
+    if (!p || !z || p.via || p.state === "connected" || !this.asked.has(id) || p.helper || z.dc.readyState !== "open") return;
     p.helper = from;
     z.dc.send(JSON.stringify({ k: "_fwd", id }));
   }
@@ -201,6 +201,7 @@ export class Fwd {
     const pb = m.peers.get(b);
     const key = [a, b].sort().join("|");
     if (!pa || !pb || pa.via || pb.via || this.helping.has(key)) return;
+    if (pa.dc.readyState !== "open" || pb.dc.readyState !== "open") return;
     const h = { a, b, senders: {} };
     this.helping.set(key, h);
     this.stats.helped++;

@@ -72,6 +72,11 @@ with sync_playwright() as p:
             if miss:
                 deaf += 1
                 print(f"    {pgs[i].evaluate('__S.mesh.name')} doesn't hear {miss}", flush=True)
+                if deaf <= 3:
+                    who = {n: s for s, n in ids.items()}
+                    print("      ", pgs[i].evaluate("""(ss) => ss.map(s => { const a = (window.__arr || {})[s];
+                      return [s.slice(0, 4), a ? a[0] : 0, a ? a[1].slice(0, 4) : '-', __S.mesh.route(s), !!__S.mesh.big.mkeys.get(s)] })""",
+                      [who[n] for n in miss[:4]]), "links", pgs[i].evaluate("[...__S.mesh.big.links].map(x => x.slice(0, 4))"), flush=True)
         check(deaf == 0, f"{what}: everyone hears everyone ({len(pgs)} people)")
         return h1, h2
 
@@ -104,6 +109,11 @@ with sync_playwright() as p:
     check(over == 0, f"no device links to more than its parent and the children it offered to feed (most links: {max(links)})")
     ids = {pg.evaluate("__S.mesh.id"): pg.evaluate("__S.mesh.name") for pg in pages}
     host = pages[0].evaluate("__S.mesh.id")
+    for pg in pages:
+        pg.evaluate("""() => { const b = __S.mesh.big, om = b.onMedia.bind(b); window.__arr = {};
+          b.onMedia = (from, buf) => { const u = new Uint8Array(buf);
+            const src = new TextDecoder().decode(u.subarray(17, 17 + u[16]));
+            if (u[0] === 1) __arr[src] = [(__arr[src] || [0])[0] + 1, from]; return om(from, buf) } }""")
     time.sleep(3)
     h1, h2 = hearing(pages, ids, "the tree")
     sees = sum(1 for i, (x, y) in enumerate(zip(h1, h2)) if i == 0 or y.get(host, [0, 0])[1] > x.get(host, [0, 0])[1])
@@ -118,7 +128,7 @@ with sync_playwright() as p:
     wait_all("__S.chat.some(c => c.text === 'hello along the tree')", pages[:N - 1], 15, "a chat message reaches everyone")
     # a message in the host's name with a wrong signature is passed on by nobody and shown by nobody
     forger = pages[N - 2]
-    forger.evaluate("""(h) => { const l = [...__S.mesh.big.links][0];
+    forger.evaluate("""(h) => { const l = [...__S.mesh.big.links].find(x => x !== h); // not the host: it drops its own name unread
       __S.mesh.peers.get(l).dc.send(JSON.stringify({ _r: 1, s: h, n: 987654, to: '', rc: 0, m: { k: 'chat', text: 'forged' }, sig: 'AAAA' })) }""", host)
     time.sleep(4)
     shown = sum(pg.evaluate("__S.chat.some(c => c.text === 'forged')") for pg in pages)
@@ -144,18 +154,22 @@ with sync_playwright() as p:
         pg.evaluate("""([ids, inside]) => { const m = __S.mesh, b = m.big;
           m.__route = m.route; m.route = (id) => ids.includes(id) === inside;
           window.__got = []; m.addEventListener('message', (e) => __got.push(e.detail.msg));
-          window.__seen = { plain: 0, text: 0, sealed: 0 };
+          window.__seen = { plain: 0, late: 0, text: 0, sealed: 0 };
+          if (inside) window.__mseq0 = { ...b.mseq };
           const ls = b.linkSend.bind(b);
           b.linkSend = (x, d, media) => { if (typeof d === 'string' && d.includes('secret')) __seen.text++; return ls(x, d, media) };
           const om = b.onMedia.bind(b);
           b.onMedia = (from, buf) => { const u = new Uint8Array(buf);
             const src = new TextDecoder().decode(u.subarray(17, 17 + u[16]));
-            if (ids.includes(src) && window.__count) __seen[u[1] & 0x80 ? 'sealed' : 'plain']++;
+            if (ids.includes(src) && window.__count) {
+              const seq = new DataView(u.buffer, u.byteOffset).getUint32(4), sent = (window.__split || {})[src];
+              __seen[u[1] & 0x80 ? 'sealed' : sent && seq <= sent[u[0]] ? 'late' : 'plain']++ }
             return om(from, buf) };
           m.reroute() }""", [rids, inside])
     time.sleep(3)
+    split = {pg.evaluate("__S.mesh.id"): pg.evaluate("__mseq0") for pg in room}
     for pg in pages:
-        pg.evaluate("window.__count = 1")
+        pg.evaluate("(s) => { window.__split = s; window.__count = 1 }", split)
     pages[N - 1].evaluate("__S.mesh.roomcast({ k: 'chat', text: 'room secret' })")
     pages[0].evaluate("(id) => __S.mesh.sendTo(id, { k: 'chat', text: 'private secret' })", pages[N - 2].evaluate("__S.mesh.id"))
     time.sleep(6)
@@ -170,7 +184,8 @@ with sync_playwright() as p:
     check(not any(s["text"] for s in seen), f"no device outside passed along readable private or room text ({passed} pieces passed on)")
     sealed = sum(s["sealed"] for s in seen)
     plain = sum(s["plain"] for s in seen)
-    check(sealed > 0 and plain == 0, f"the room's sound reaches devices outside it only encrypted ({sealed} encrypted, {plain} readable)")
+    late = sum(s["late"] for s in seen)
+    check(sealed > 0 and plain == 0, f"the room's sound reaches devices outside it only encrypted ({sealed} encrypted, {plain} readable sent after the split, {late} sent before it and still on the way)")
     hearing(list(room), {i: ids[i] for i in rids}, "inside the breakout room")
     for pg in pages:
         pg.evaluate("__S.mesh.route = __S.mesh.__route; window.__count = 0; __S.mesh.reroute()")
@@ -233,6 +248,12 @@ with sync_playwright() as p:
         if len(small) > 20:
             break
     n = len(small)
+    # the last ones in may still be connecting to everyone (16 browsers on one machine next to the big call)
+    try:
+        h.wait_for_function(f"__S.mesh.peers.size === {n - 1}", timeout=30000)
+    except Exception:
+        pass
+    print("   ", h.evaluate("({ big: !!__S.mesh.big, peers: __S.mesh.peers.size, closed: !!__S.mesh.closed })"), flush=True)
     check(2 <= n <= 20 and h.evaluate(f"!__S.mesh.big && __S.mesh.peers.size === {n - 1} && !__S.mesh.closed"),
           f"a small call with a device that can't do a tree stays small: {n} in, the next one is told it's full, nobody pushed out")
     for b in browsers:
