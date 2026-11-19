@@ -2662,7 +2662,7 @@ function capStart() {
   };
   r.onerror = (e) => {
     if (e.error === "not-allowed" || e.error === "service-not-allowed") capGiveUp("blocked");
-    else if (e.error === "language-not-supported") capWarn("lang", false);
+    else if (e.error === "language-not-supported") capWarn("lang", !!capPick("tk")); // a helper's browser may know it
     else if (e.error !== "no-speech" && e.error !== "aborted") {
       capFails++;
       // keeps failing and has never made text here: say so (the call holding the mic on phones, a speech service
@@ -2834,7 +2834,7 @@ function capHelp(from, on, lang, who) {
 // translation by someone else's browser, for a browser with no translator
 const capTrWait = new Map(); // request id -> answer
 function trVia(text, from, to) {
-  if (captr.CAN) return captr.translate(text, from, to);
+  if (captr.CAN && captr.status(from, to) !== "no") return captr.translate(text, from, to);
   const h = capPick("tr");
   if (!h) return Promise.resolve(null);
   const id = randomId();
@@ -2912,7 +2912,7 @@ function capText(L, s, lang, entry) {
     return;
   }
   // no translator here: a helper's browser translates finished phrases (and the line now and then while it grows)
-  const helped = !captr.CAN;
+  const helped = !captr.CAN || captr.status(lang, to) === "no";
   if (helped && (!capPick("tr") || (!entry && Date.now() - (L.asked || 0) < 1200))) {
     if (!L.trd) L.el.lastChild.textContent = s;
     return;
@@ -2952,6 +2952,7 @@ function capTrNote(lang, r) {
   if (r === "need") S.capNeed.add(l);
   else S.capNeed.delete(l);
   if ((r !== "need" && r !== "no") || capTold.has(`${l}${r}`)) return;
+  if (r === "no" && capPick("tr")) return; // someone in the call translates it instead
   capTold.add(`${l}${r}`);
   const vars = { lang: captr.langName(l, LANG), to: captr.langName(S.capTo, LANG) };
   toast(r === "need" ? t("Captions in {lang}: click anywhere to get their translation", vars) : t("Your browser can't translate {lang} into {to}", vars));
@@ -3281,7 +3282,7 @@ function captionsSheet() {
     w.textContent = t(MIC_NOTE, { name: S.capOtherMic });
     inner.append(w);
   }
-  if (SR) {
+  if (SR || capPick("tk")) {
     const ll = document.createElement("p");
     ll.className = "small";
     ll.textContent = t("I speak");
@@ -3306,8 +3307,15 @@ function captionsSheet() {
       S.capLang = sel.value;
       localStorage.setItem("juntos.caplang", sel.value);
       if (capRec) capRec.stop(); // starts again in the new language
+      if (S.capHelper) S.mesh?.sendTo(S.capHelper, { k: "caphelp", on: true, lang: S.capLang || navigator.language || "en-US" });
     };
     inner.append(ll, sel);
+    if (!SR) {
+      const h = document.createElement("p");
+      h.className = "small capHelpNote";
+      h.textContent = t("Your browser can't make captions, so {name}'s browser makes them for you", { name: capName(capPick("tk")) });
+      inner.append(h);
+    }
     check("capShare", t("Turn my voice into captions for the others"), S.capShare, (on) => {
       S.capShare = on;
       localStorage.setItem("juntos.capshare", on ? "on" : "off");

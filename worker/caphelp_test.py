@@ -114,6 +114,16 @@ with sync_playwright() as p:
     check(True, "and when she ends the sentence")
     check(o.evaluate("__S.transcript.some(x => x.name === 'Carla' && x.text === 'good morning everyone')"), "it's in Beto's transcript as Carla's")
 
+    # Carla's captions sheet: she still picks her language (the helper is told) and sees whose browser helps
+    c.click("#bCaps")
+    c.wait_for_selector(".capSheet")
+    check(c.is_visible('select[name="capLang"]') and "Ana" in c.inner_text(".capHelpNote"), "Carla's sheet has 'I speak' and says Ana's browser makes her captions")
+    c.select_option('select[name="capLang"]', "es-ES")
+    a.wait_for_function("__others().length === 1 && __others()[0].lang === 'es-ES'", timeout=8000)
+    check(True, "Carla picks Spanish: Ana's browser listens for Spanish")
+    c.click(".capSheet .primary")
+    c.wait_for_selector(".capSheet", state="detached")
+
     # the words aren't Ana's: a fake 'capfrom' from someone who isn't Carla's helper is ignored
     o.evaluate("for (const [id] of __S.mesh.peers) __S.mesh.sendTo(id, { k: 'capfrom', text: 'not mine', final: true })")
     o.wait_for_timeout(800)
