@@ -48,6 +48,7 @@ const ICON = {
   flip: "M20 5h-3.17L15 3H9L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-5 11.5V14H9v2.5L5.5 13 9 9.5V12h6V9.5l3.5 3.5-3.5 3.5z",
   gear: "M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z",
   full: "M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z",
+  popOut: "M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z",
   vol: "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z",
   volOff: "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z",
   pen: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
@@ -784,7 +785,7 @@ function makeTile(id, name) {
   const t = document.createElement("div");
   t.className = "tile";
   t.dataset.id = id;
-  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span><button class="bars" hidden><i></i><i></i><i></i><i></i></button></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Full screen")}">${svg("full")}</button>${id === "me" ? "" : `<button class="volBtn" title="${t2("Volume")}"></button><audio autoplay></audio>`}`;
+  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span><button class="bars" hidden><i></i><i></i><i></i><i></i></button></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Full screen")}">${svg("full")}</button>${id === "me" || isPhone ? "" : `<button class="popBtn" name="popOut" title="${t2("Open in new window")}">${svg("popOut")}</button><div class="poppedNote"></div>`}${id === "me" ? "" : `<button class="volBtn" title="${t2("Volume")}"></button><audio autoplay></audio>`}`;
   // the voice plays from its own <audio>: a video element with no picture (camera off, or video not sent to
   // save data) never starts, and its sound would never start with it
   if (id !== "me") t.querySelector("video").muted = true;
@@ -794,7 +795,17 @@ function makeTile(id, name) {
     e.stopPropagation();
     spotlight(t);
   };
+  const pop = t.querySelector(".popBtn");
+  if (pop)
+    pop.onclick = (e) => {
+      e.stopPropagation();
+      popOut(t);
+    };
   t.ondblclick = () => spotlight(t);
+  t.querySelector(".poppedNote")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    dock();
+  });
   // a picture paused to save data: tapping it makes it the big one, which is then shown
   t.onclick = () => {
     if (t.classList.contains("paused") && !t.classList.contains("spot")) spotlight(t);
@@ -968,6 +979,54 @@ function paintPins() {
 addEventListener("keydown", (e) => {
   if (e.key === "Escape" && document.querySelector(".tile.spot")) unpinAll();
 });
+// Like Meet's "Open in new window": someone's shared screen moves to a window of its own (put it on another screen,
+// size it as you like). Closing that window brings it back; it closes by itself when the sharing stops or they leave.
+function popOut(tile) {
+  if (S.popped) dock();
+  const id = tile.dataset.id;
+  const w = window.open("", `juntos-screen-${id}`, "popup,width=1024,height=640");
+  if (!w) return toast(t("Your browser blocked the new window"));
+  const d = w.document;
+  d.title = t("{name}'s screen", { name: S.mesh.peers.get(id)?.name || t("Someone") });
+  d.body.innerHTML = "";
+  d.body.style.cssText = "margin:0;background:#000;overflow:hidden";
+  const v = d.createElement("video");
+  v.autoplay = v.playsInline = v.muted = true; // the sound keeps playing in the call
+  v.style.cssText = "width:100vw;height:100vh;object-fit:contain;display:block";
+  const back = d.createElement("button");
+  back.textContent = t("Back to the call");
+  back.name = "dock";
+  back.style.cssText = "position:fixed;top:12px;right:12px;padding:8px 14px;border:0;border-radius:10px;background:rgba(0,0,0,.6);color:#fff;font:14px system-ui;cursor:pointer";
+  back.onclick = () => dock();
+  d.body.append(v, back);
+  tile.classList.add("popped");
+  tile.querySelector(".poppedNote").textContent = t("Showing in its own window. Click to bring it back.");
+  S.popped = { id, w, v, tile };
+  const follow = () => {
+    const p = S.popped;
+    if (!p || p.w !== w) return clearInterval(p?.timer);
+    if (w.closed || !tile.isConnected || !tile.classList.contains("screen")) return dock();
+    const src = tile.querySelector("video").srcObject;
+    if (v.srcObject !== src) v.srcObject = src; // the picture can be renegotiated
+    if (v.paused && src) v.play().catch(() => {});
+  };
+  follow();
+  S.popped.timer = setInterval(follow, 500);
+  w.addEventListener("pagehide", () => setTimeout(() => S.popped?.w === w && dock(), 0));
+  w.focus();
+  layout();
+}
+function dock() {
+  const p = S.popped;
+  if (!p) return;
+  S.popped = null;
+  clearInterval(p.timer);
+  p.tile.classList.remove("popped");
+  if (!p.w.closed) p.w.close();
+  layout();
+}
+addEventListener("pagehide", () => S.popped && !S.popped.w.closed && S.popped.w.close());
+
 // a host pins people for everyone: everyone's view shows those (each person can still change their own)
 S.pinAll = []; // ids the hosts pinned for everyone
 function tileOf(id) {
@@ -1149,7 +1208,7 @@ function layout() {
   const tiles = [...g.children].filter((x) => !x.classList.contains("away")); // people in other breakout rooms aren't shown
   const me = g.querySelector('.tile[data-id="me"]');
   const alone = tiles.length <= 1;
-  const screen = tiles.find((x) => x.classList.contains("screen") && x.dataset.id !== "me");
+  const screen = tiles.find((x) => x.classList.contains("screen") && !x.classList.contains("popped") && x.dataset.id !== "me");
   let mode = v.layout === "auto" ? (screen ? "sidebar" : "tiled") : v.layout;
   if (document.body.classList.contains("boardBig") || alone) mode = "tiled";
   let main = null;
@@ -3419,6 +3478,7 @@ $("homeBtn").onclick = () => {
   S.micTrack = null;
   S.bg?.stop();
   S.bg = null;
+  dock();
   S.light?.stop();
   S.light = null;
   S.darkWatch?.();
