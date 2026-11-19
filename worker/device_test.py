@@ -32,6 +32,8 @@ with sync_playwright() as p:
     a.goto(f"{BASE}/?signal={WS}")
     a.click("#start")
     a.wait_for_selector("#lobby:not([hidden])")
+    a.wait_for_selector("#lobbyOk.ok:not([hidden])", timeout=5000)
+    check("camera" in a.text_content("#lobbyOk") and "microphone" in a.text_content("#lobbyOk"), f"the lobby says the camera and microphone work: {a.text_content('#lobbyOk')!r}")
     a.fill("#name", "Ana")
     a.click("#enter")
     a.wait_for_selector("#call:not([hidden])")

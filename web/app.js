@@ -588,7 +588,10 @@ function passRefused(m) {
 function lobbyMeter() {
   clearInterval(lobbyMeter.timer);
   const m = $("pMeter");
-  if (!S.micTrack) return (m.parentNode.hidden = true);
+  if (!S.micTrack) {
+    lobbyDevices();
+    return (m.parentNode.hidden = true);
+  }
   m.parentNode.hidden = false;
   const ac = (openDevices.ac ||= new (window.AudioContext || window.webkitAudioContext)());
   const an = ac.createAnalyser();
@@ -611,7 +614,40 @@ function lobbyMeter() {
     for (const b of buf) sum += (b - 128) ** 2;
     m.firstChild.style.width = `${Math.min(100, Math.sqrt(sum / buf.length) * 4)}%`;
     m.classList.toggle("off", !S.mic);
+    lobbyDevices();
   }, 100);
+  lobbyDevices();
+}
+// green when the camera and microphone are live (and a speaker is there, where the browser can tell), amber for
+// what's missing; the lobby message below says why and what to do
+function lobbyDevices() {
+  const el = $("lobbyOk");
+  const live = (tr) => !!tr && tr.readyState === "live";
+  const cam = live(S.camTrack),
+    mic = live(S.micTrack);
+  if (lobbyDevices.spk === undefined) {
+    lobbyDevices.spk = null; // not known yet: Firefox and Safari don't list speakers
+    navigator.mediaDevices
+      ?.enumerateDevices?.()
+      .then((d) => {
+        const outs = d.filter((x) => x.kind === "audiooutput");
+        lobbyDevices.spk = outs.length ? true : null;
+      })
+      .catch(() => {});
+  }
+  const spk = lobbyDevices.spk;
+  let msg, ok;
+  if (cam && mic) {
+    ok = true;
+    msg = spk ? t("Your camera, microphone and speaker work") : t("Your camera and microphone work");
+  } else if (mic) msg = t("Your microphone works. No camera.");
+  else if (cam) msg = t("Your camera works. No microphone: the others won't hear you.");
+  else msg = t("No camera or microphone: you can still watch and chat.");
+  if (el.dataset.msg === msg) return;
+  el.dataset.msg = msg;
+  el.classList.toggle("ok", !!ok);
+  el.lastChild.textContent = msg;
+  el.hidden = false;
 }
 $("pCheck").onclick = openDevices;
 $("pMic").onclick = () => setMic(!S.mic);
@@ -1409,8 +1445,8 @@ function layoutSheet() {
     for (const [id, name, hint] of choices) {
       const b = document.createElement("button");
       b.dataset.v = id;
-      b.innerHTML = `<b></b><small></small>`;
-      b.firstChild.textContent = name;
+      b.innerHTML = `${layoutPic(key, id)}<b></b><small></small>`;
+      b.children[1].textContent = name;
       b.lastChild.textContent = hint;
       b.classList.toggle("on", S.view[key] === id);
       b.onclick = () => {
@@ -1424,10 +1460,10 @@ function layoutSheet() {
   };
   inner.append(
     seg("layout", [
-      ["auto", t2("Auto"), t2("Everyone the same size; a shared screen big")],
-      ["tiled", t2("Tiled"), t2("Everyone the same size")],
-      ["spotlight", t2("Spotlight"), t2("Only who's talking (or a shared screen)")],
-      ["sidebar", t2("Sidebar"), t2("Who's talking big, the others beside")],
+      ["auto", t2("Auto"), ""],
+      ["tiled", t2("Tiled"), ""],
+      ["spotlight", t2("Spotlight"), ""],
+      ["sidebar", t2("Sidebar"), ""],
     ]),
   );
   const p = document.createElement("p");
@@ -1470,6 +1506,34 @@ function layoutSheet() {
     if (e.target === sheet) close(); // a block body: an onclick that returns false cancels the click
   };
   document.body.append(sheet);
+}
+
+// A small picture of a layout choice, drawn like the call: tiles as rounded boxes, who's talking (or a shared
+// screen) in the accent colour, you with a ring. 64x40, the call's shape.
+function layoutPic(key, id) {
+  const R = (x, y, w, h, c = "t") => `<rect class="${c}" x="${x}" y="${y}" width="${w}" height="${h}" rx="2"/>`;
+  const grid = (cols, rows, x0, y0, w, h, mark = {}) => {
+    let s = "";
+    const tw = (w - (cols - 1) * 2) / cols,
+      th = (h - (rows - 1) * 2) / rows;
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) s += R(x0 + c * (tw + 2), y0 + r * (th + 2), tw, th, mark[r * cols + c] || "t");
+    return s;
+  };
+  const P = {
+    layout: {
+      auto: grid(3, 2, 2, 2, 60, 36) + '<path class="a" d="M32 7 L36 16 L45 20 L36 24 L32 33 L28 24 L19 20 L28 16 Z"/>',
+      tiled: grid(3, 2, 2, 2, 60, 36, { 1: "a" }),
+      spotlight: R(2, 2, 60, 36, "a"),
+      sidebar: R(2, 2, 46, 36, "a") + grid(1, 4, 50, 2, 12, 36),
+    },
+    self: {
+      grid: grid(3, 2, 2, 2, 60, 36, { 5: "me" }),
+      float: grid(3, 2, 2, 2, 60, 36) + R(44, 26, 16, 10, "me"),
+      hide: grid(3, 2, 2, 2, 60, 36) + R(44, 21, 18, 17, "gone"),
+    },
+  };
+  const s = P[key]?.[id];
+  return s ? `<svg class="layPic" viewBox="0 0 64 40" aria-hidden="true">${s}</svg>` : "";
 }
 
 addEventListener("resize", layout);
@@ -1713,13 +1777,14 @@ function ensureBoard() {
     sg.children[b.size].classList.add("on");
     const ag = group("bActions");
     const undo = document.createElement("button");
-    undo.className = "bTool";
-    undo.title = t("Undo");
-    undo.innerHTML = svg("undo");
+    undo.className = "chip bUndo";
+    undo.title = t("Undo (Ctrl+Z)");
+    undo.innerHTML = `${svg("undo")}<span></span>`;
+    undo.lastChild.textContent = t("Undo");
     undo.onclick = () => b.undo();
     const clear = document.createElement("button");
     clear.className = "chip";
-    clear.textContent = t("Clear");
+    clear.textContent = t("Clear all");
     // clearing wipes everyone's drawings: the first tap asks, the second does it
     clear.onclick = () => {
       if (!clear.classList.contains("sure")) {
@@ -1728,13 +1793,13 @@ function ensureBoard() {
         clearTimeout(clear.timer);
         clear.timer = setTimeout(() => {
           clear.classList.remove("sure");
-          clear.textContent = t("Clear");
+          clear.textContent = t("Clear all");
         }, 3000);
         return;
       }
       clearTimeout(clear.timer);
       clear.classList.remove("sure");
-      clear.textContent = t("Clear");
+      clear.textContent = t("Clear all");
       b.clear();
     };
     ag.append(undo, clear);

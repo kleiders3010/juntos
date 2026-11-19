@@ -29,10 +29,16 @@ def tiles(pg):
     return {r[0]: r[1:] for r in pg.evaluate(TILES)}
 
 
+pics = []
+
+
 def choose(pg, key, value):
     if not pg.query_selector(".layoutSheet"):
         pg.evaluate("(() => { if (!(document.getElementById('bLayout') || __S.barBtns.bLayout)) document.getElementById('bMore')?.click(); (document.getElementById('bLayout') || __S.barBtns.bLayout).click() })()")
         pg.wait_for_selector(".layoutSheet")
+    if not pics:
+        pics.append(pg.evaluate("[...document.querySelectorAll('.layoutSheet .seg button')].every(b => b.querySelector('svg.layPic rect'))"))
+        check(pics[0], "every layout choice shows a picture of it")
     pg.click(f'.layoutSheet .seg[data-key="{key}"] button[data-v="{value}"]')
     pg.wait_for_timeout(250)
 

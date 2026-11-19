@@ -107,7 +107,7 @@ with sync_playwright() as p:
     a.wait_for_timeout(300)
     check("pen" not in a.evaluate("__S.board.items.map(i => i.t)") and "pen" not in o.evaluate("__S.board.items.map(i => i.t)"), "the eraser removes the line for both")
     before = a.evaluate("__S.board.items.length")
-    a.click('.bTool[title="Undo"]') if a.query_selector('.bTool[title="Undo"]') else a.evaluate("__S.board.undo()")
+    a.click(".bActions .bUndo")
     a.wait_for_timeout(300)
     check(a.evaluate("__S.board.items.length") == before - 1 and o.evaluate("__S.board.items.length") == before - 1, "undo takes back my last drawing, for both")
 
@@ -137,14 +137,14 @@ with sync_playwright() as p:
         a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).click()")
 
     # Clear asks first; the second tap clears for everyone
-    a.click(".bActions .chip")
+    a.click(".bActions .chip:not(.bUndo)")
     check(a.evaluate("__S.board.items.length") > 0, "one tap on Clear only asks")
     c = person("Caro", join)
     c.wait_for_timeout(2500)
     open_board(c)
     check(c.evaluate(ITEMS) == a.evaluate(ITEMS), "a latecomer gets the whole board")
-    a.click(".bActions .chip")
-    a.click(".bActions .chip")
+    a.click(".bActions .chip:not(.bUndo)")
+    a.click(".bActions .chip:not(.bUndo)")
     a.wait_for_timeout(400)
     check(a.evaluate("__S.board.items.length") == 0 and o.evaluate("__S.board.items.length") == 0 and c.evaluate("__S.board.items.length") == 0, "the second tap clears it for everyone")
     a.click("#panelClose")

@@ -214,6 +214,16 @@ a { color: #93c5fd; }
 .seg button { display: flex; flex-direction: column; gap: 2px; text-align: left; padding: 12px; border-radius: 12px; background: var(--card); border: 2px solid transparent; color: inherit; }
 .seg button small { color: var(--muted); font-size: 13px; }
 .seg button.on { border-color: var(--accent); }
+.layPic { width: 64px; height: 40px; margin-bottom: 6px; }
+.layPic rect.t { fill: var(--muted); opacity: .45; }
+.layPic .a { fill: var(--accent); opacity: .9; }
+.layPic rect.me { fill: var(--muted); opacity: .45; stroke: var(--accent); stroke-width: 1.5; }
+.layPic rect.gone { fill: none; stroke: var(--muted); stroke-dasharray: 2 2; opacity: .8; }
+.chip.bUndo { display: inline-flex; align-items: center; gap: 6px; }
+.chip.bUndo svg { width: 16px; height: 16px; fill: currentColor; }
+.devOk { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 0; }
+.devOk i { width: 10px; height: 10px; border-radius: 50%; background: #e8a33d; flex: none; }
+.devOk.ok i { background: #2fb86a; }
 .check { display: flex; align-items: center; gap: 10px; font-size: 16px; padding: 4px 0; }
 .check input { width: 20px; height: 20px; accent-color: var(--accent); }
 .row2 { display: flex; gap: 8px; justify-content: flex-end; }
