@@ -895,7 +895,7 @@ function enterCall(name) {
     if (S.isHost && S.pinAll.length) mesh.sendTo(e.detail.id, { k: "pinall", ids: S.pinAll });
     if (S.board && S.board.items.length) mesh.sendTo(e.detail.id, S.board.snapshot());
     const mainChat = S.chat.filter((c) => !c.room); // a breakout room's chat stays in the room
-    if (mainChat.length) mesh.sendTo(e.detail.id, { k: "history", chat: mainChat.slice(-200) });
+    if (mainChat.length) mesh.sendTo(e.detail.id, { k: "history", chat: mainChat.slice(-200).map(chatOut) });
     if (S.recorder) mesh.sendTo(e.detail.id, { k: "rec", on: true });
     if (S.capsOn) mesh.sendTo(e.detail.id, { k: "capwant", on: true });
     if (S.act.any()) mesh.sendTo(e.detail.id, S.act.snapshotFor(e.detail.id));
@@ -943,16 +943,17 @@ function onMessage(from, m) {
   const who = (p && p.name) || t("Someone");
   if (S.netq.receive(from, m)) return; // what they need from my picture, how their connection is
   // chat, hands, reactions and captions from someone in another breakout room aren't for me
-  if (["chat", "hand", "react", "cap", "caphelp", "capfrom", "trq", "trr", "ana", "and", "anc", "ano", "anp", "ans"].includes(m.k) && !S.br.same(from)) return;
+  if (["chat", "chatre", "hand", "react", "cap", "caphelp", "capfrom", "trq", "trr", "ana", "and", "anc", "ano", "anp", "ans"].includes(m.k) && !S.br.same(from)) return;
   if (S.br.receive(from, m)) {
     // breakout rooms
   } else if (m.k === "chat") {
     if (!may(from, "chat")) return;
-    addChat({ from, name: who, text: String(m.text).slice(0, 2000), at: Date.now() });
+    addChat({ id: chatIdOk(m.id) ? m.id : chatNewId(), from, name: who, text: String(m.text).slice(0, 2000), at: Date.now(), q: chatQuoteIn(m.q), re: {} });
+  } else if (m.k === "chatre") {
+    if (!may(from, "chat")) return;
+    chatReactIn(from, who, m);
   } else if (m.k === "history") {
-    for (const c of m.chat || []) if (!S.chat.some((x) => x.at === c.at && x.text === c.text)) S.chat.push(c);
-    S.chat.sort((a, b) => a.at - b.at);
-    renderChat();
+    chatHistoryIn(from, m.chat);
   } else if (m.k === "state") {
     if (!!m.comp !== S.comps.has(from)) {
       if (m.comp) S.comps.add(from);
@@ -1789,8 +1790,125 @@ $("panelClose").onclick = closePanel;
 $("boardMax").onclick = () => setBoardBig(!S.boardBig);
 
 // chat
+// Reactions and quoted replies on messages, like Meet's chat (studied: Google Chat help "Reply to a message" and the
+// Workspace update "React to messages quickly in Google Chat", 2023-05; Meet's chat is Google Chat since 2025-11):
+// point at a message (tap it on a phone) for quick reactions, your most used first, more emoji, and "Quote in reply";
+// a quote keeps the words as they were. Reactions sit under the message with how many, yours highlighted; tap one to
+// add yours or take it back; pointing at it says who. Who sent the message hears about a reaction if chat is closed.
+const CHAT_EMOJI = ["👍", "❤️", "😂", "👏", "🎉", "😮", "😢", "🙏", "🔥", "✅", "👀", "💯", "🤔", "🙌", "😊", "😍", "🥳", "😅", "👎", "❓", "💡", "☕", "🚀", "👋"];
+const CHAT_QUICK = 6;
+const chatNewId = () => [...crypto.getRandomValues(new Uint32Array(3))].map((x) => x.toString(36)).join("");
+const chatIdOk = (id) => typeof id === "string" && /^[a-z0-9]{1,40}$/.test(id);
+function chatQuoteIn(q) {
+  if (!q || typeof q !== "object") return null;
+  const text = String(q.text ?? "").slice(0, 300);
+  if (!text.trim()) return null;
+  return { id: chatIdOk(q.id) ? q.id : "", name: String(q.name ?? "").slice(0, 60), text };
+}
+function chatReIn(re) {
+  const out = {};
+  if (!re || typeof re !== "object") return out;
+  for (const e of CHAT_EMOJI) {
+    const who = re[e];
+    if (!who || typeof who !== "object") continue;
+    const m = {};
+    for (const [k, v] of Object.entries(who).slice(0, 100)) if (typeof k === "string" && k.length <= 40) m[k === S.mesh?.id ? "me" : k] = String(v ?? "").slice(0, 60);
+    if (Object.keys(m).length) out[e] = m;
+  }
+  return out;
+}
+// a message as another device should hold it: "me" is my id there
+function chatOut(c) {
+  const mine = (k) => (k === "me" ? S.mesh.id : k);
+  const re = {};
+  for (const [e, who] of Object.entries(c.re || {})) {
+    re[e] = {};
+    for (const [k, v] of Object.entries(who)) re[e][mine(k)] = k === "me" ? localStorage.getItem("name") || "" : v;
+  }
+  return { id: c.id, from: mine(c.from), name: c.from === "me" ? localStorage.getItem("name") || "" : c.name, text: c.text, at: c.at, q: c.q || null, re };
+}
+function chatHistoryIn(from, list) {
+  if (!Array.isArray(list)) return;
+  for (const raw of list.slice(-200)) {
+    if (!raw || typeof raw !== "object") continue;
+    const text = String(raw.text ?? "").slice(0, 2000);
+    if (!text) continue;
+    const re = chatReIn(raw.re);
+    const have = chatIdOk(raw.id) ? S.chat.find((x) => x.id === raw.id) : S.chat.find((x) => !x.id && x.at === raw.at && x.text === text);
+    if (have) {
+      // what someone reacted while I wasn't connected to them yet
+      for (const [e, who] of Object.entries(re)) for (const [k, v] of Object.entries(who)) if (k !== "me") (have.re[e] ||= {})[k] = v;
+      continue;
+    }
+    const f = typeof raw.from === "string" ? raw.from.slice(0, 40) : "";
+    S.chat.push({ id: chatIdOk(raw.id) ? raw.id : "", from: f === S.mesh.id ? "me" : f, name: String(raw.name ?? "").slice(0, 60), text, at: +raw.at || Date.now(), q: chatQuoteIn(raw.q), re, room: 0 });
+  }
+  S.chat.sort((a, b) => a.at - b.at);
+  renderChat(true);
+}
+function chatReactIn(from, who, m) {
+  const e = String(m.e ?? "");
+  const c = chatIdOk(m.id) && S.chat.find((x) => x.id === m.id);
+  if (!c || !CHAT_EMOJI.includes(e)) return;
+  c.re ||= {};
+  if (m.on) (c.re[e] ||= {})[from] = who;
+  else if (c.re[e]) {
+    delete c.re[e][from];
+    if (!Object.keys(c.re[e]).length) delete c.re[e];
+  }
+  renderChat(true);
+  if (m.on && c.from === "me" && S.panel !== "chat") toast(t("{name} reacted {emoji} to your message", { name: who, emoji: e }));
+}
+function chatUse() {
+  try {
+    return JSON.parse(localStorage.getItem("chatEmoji") || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+// your most used first (like Chat's quick reactions), then the usual ones
+function chatQuick() {
+  const use = chatUse();
+  return [...CHAT_EMOJI].sort((a, b) => (+use[b] || 0) - (+use[a] || 0) || CHAT_EMOJI.indexOf(a) - CHAT_EMOJI.indexOf(b)).slice(0, CHAT_QUICK);
+}
+function chatReact(c, e) {
+  if (!may("me", "chat")) return toast(t("A host turned off chat"));
+  const on = !c.re?.[e]?.me;
+  c.re ||= {};
+  if (on) {
+    (c.re[e] ||= {}).me = localStorage.getItem("name") || "";
+    const use = chatUse();
+    use[e] = (+use[e] || 0) + 1;
+    localStorage.setItem("chatEmoji", JSON.stringify(use));
+  } else {
+    delete c.re[e].me;
+    if (!Object.keys(c.re[e]).length) delete c.re[e];
+  }
+  S.chatOpen = "";
+  S.mesh.roomcast({ k: "chatre", id: c.id, e, on });
+  renderChat(true);
+}
+function chatQuoteSet(c) {
+  S.chatQuote = c ? { id: c.id, name: c.from === "me" ? localStorage.getItem("name") || "" : c.name, text: c.text.slice(0, 300) } : null;
+  S.chatOpen = "";
+  const bar = $("chatQuote");
+  bar.hidden = !S.chatQuote;
+  if (S.chatQuote) {
+    bar.querySelector("span").textContent = t("Replying to {name}", { name: c.from === "me" ? t("You") : c.name }) + ": " + S.chatQuote.text.slice(0, 120);
+    $("chatText").focus();
+  }
+  renderChat(true);
+}
+$("chatQuoteX").onclick = () => chatQuoteSet(null);
+$("chatText").addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && S.chatQuote) {
+    e.stopPropagation();
+    chatQuoteSet(null);
+  }
+});
 function addChat(c) {
   c.room = S.br?.here || 0;
+  c.re ||= {};
   S.chat.push(c);
   S.recorder?.event({ kind: "chat", name: c.from === "me" ? localStorage.getItem("name") || "" : c.name, text: c.text });
   renderChat();
@@ -1800,23 +1918,117 @@ function addChat(c) {
     if (c.from !== "me") toast(`${c.name}: ${c.text.slice(0, 80)}`);
   }
 }
-function renderChat() {
+function renderChat(keep) {
   const log = $("chatLog");
+  const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  const top = log.scrollTop;
   log.innerHTML = "";
+  const quick = chatQuick();
   for (const c of S.chat) {
     if ((c.room || 0) !== (S.br?.here || 0)) continue; // each breakout room has its own chat
     const d = document.createElement("div");
-    d.className = "msg" + (c.from === "me" ? " mine" : "");
+    d.className = "msg" + (c.from === "me" ? " mine" : "") + (c.id && S.chatOpen === c.id ? " open" : "");
+    if (c.id) d.dataset.id = c.id;
     const who = document.createElement("b");
     who.textContent = c.from === "me" ? t("You") : c.name;
     const tm = document.createElement("time");
     tm.textContent = new Date(c.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    d.append(who, tm);
+    if (c.q) {
+      const q = document.createElement("blockquote");
+      q.className = "quote";
+      const qb = document.createElement("b");
+      qb.textContent = c.q.name;
+      const qt = document.createElement("span");
+      qt.textContent = c.q.text;
+      q.append(qb, qt);
+      q.onclick = (ev) => {
+        ev.stopPropagation();
+        const orig = c.q.id && log.querySelector(`.msg[data-id="${c.q.id}"]`);
+        if (!orig) return;
+        orig.scrollIntoView({ block: "center", behavior: "smooth" });
+        orig.classList.add("flash");
+        setTimeout(() => orig.classList.remove("flash"), 1200);
+      };
+      d.append(q);
+    }
     const tx = document.createElement("p");
     tx.textContent = c.text;
-    d.append(who, tm, tx);
+    d.append(tx);
+    const res = Object.entries(c.re || {}).filter(([, w]) => Object.keys(w).length);
+    if (res.length) {
+      const row = document.createElement("div");
+      row.className = "msgRe";
+      for (const [e, w] of res) {
+        const b = document.createElement("button");
+        b.className = "reChip" + (w.me !== undefined ? " on" : "");
+        b.dataset.e = e;
+        b.textContent = `${e} ${Object.keys(w).length}`;
+        b.title = Object.entries(w).map(([k, v]) => (k === "me" ? t("You") : v || t("Someone"))).join(", ");
+        b.onclick = (ev) => {
+          ev.stopPropagation();
+          chatReact(c, e);
+        };
+        row.append(b);
+      }
+      d.append(row);
+    }
+    if (c.id) {
+      const act = document.createElement("div");
+      act.className = "msgAct";
+      for (const e of quick) {
+        const b = document.createElement("button");
+        b.className = "reQuick";
+        b.textContent = e;
+        b.title = t("React {emoji}", { emoji: e });
+        b.onclick = (ev) => {
+          ev.stopPropagation();
+          chatReact(c, e);
+        };
+        act.append(b);
+      }
+      const more = document.createElement("button");
+      more.className = "reMore";
+      more.name = "reMore";
+      more.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 11.5A8.5 8.5 0 1 1 12.5 3.05"/><path d="M8.5 14.5c.9 1.2 2.1 1.8 3.5 1.8s2.6-.6 3.5-1.8"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/><path d="M19 2v6M16 5h6"/></svg>';
+      more.title = t("More emoji");
+      const grid = document.createElement("div");
+      grid.className = "reGrid";
+      grid.hidden = true;
+      for (const e of CHAT_EMOJI) {
+        const b = document.createElement("button");
+        b.textContent = e;
+        b.title = t("React {emoji}", { emoji: e });
+        b.onclick = (ev) => {
+          ev.stopPropagation();
+          chatReact(c, e);
+        };
+        grid.append(b);
+      }
+      more.onclick = (ev) => {
+        ev.stopPropagation();
+        grid.hidden = !grid.hidden;
+      };
+      const reply = document.createElement("button");
+      reply.className = "reReply";
+      reply.name = "quote";
+      reply.textContent = "↩";
+      reply.title = t("Quote in reply");
+      reply.onclick = (ev) => {
+        ev.stopPropagation();
+        chatQuoteSet(c);
+      };
+      act.append(more, reply, grid);
+      d.append(act);
+      // a phone has no pointing: a tap opens the same actions
+      d.onclick = () => {
+        S.chatOpen = S.chatOpen === c.id ? "" : c.id;
+        renderChat(true);
+      };
+    }
     log.append(d);
   }
-  log.scrollTop = log.scrollHeight;
+  log.scrollTop = keep && !atEnd ? top : log.scrollHeight;
 }
 $("chatForm").onsubmit = (e) => {
   e.preventDefault();
@@ -1824,8 +2036,10 @@ $("chatForm").onsubmit = (e) => {
   if (!text) return;
   if (!may("me", "chat")) return toast(t("A host turned off chat"));
   $("chatText").value = "";
-  const c = { from: "me", name: localStorage.getItem("name"), text, at: Date.now() };
-  S.mesh.roomcast({ k: "chat", text });
+  const q = S.chatQuote;
+  const c = { id: chatNewId(), from: "me", name: localStorage.getItem("name"), text, at: Date.now(), q, re: {} };
+  S.mesh.roomcast(q ? { k: "chat", text, id: c.id, q } : { k: "chat", text, id: c.id });
+  if (q) chatQuoteSet(null);
   addChat(c);
 };
 

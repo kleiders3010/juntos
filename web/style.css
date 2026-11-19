@@ -143,6 +143,25 @@ a { color: #93c5fd; }
 .msg b { font-size: 14px; margin-right: 8px; }
 .msg time { font-size: 12px; color: var(--muted); }
 .msg p { margin: 2px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg { position: relative; padding: 4px 6px; margin: 0 -6px; border-radius: 8px; transition: background .3s; }
+.msg.flash { background: #3b82f633; }
+.msg .quote { margin: 4px 0 0; padding: 4px 8px; border-left: 3px solid var(--muted); background: var(--card); border-radius: 6px; font-size: 14px; cursor: pointer; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.msg .quote b { margin-right: 6px; font-size: 13px; }
+.msgRe { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.reChip { font-size: 13px; padding: 1px 8px; border-radius: 999px; background: var(--card); border: 1px solid #4b5563; }
+.reChip.on { border-color: var(--accent); background: #3b82f62e; }
+.msgAct { display: none; position: absolute; right: 2px; top: 0; z-index: 2; background: var(--bg2); border: 1px solid #4b5563; border-radius: 999px; padding: 2px 4px; box-shadow: 0 2px 8px #0008; }
+.msg:hover .msgAct, .msg:focus-within .msgAct, .msg.open .msgAct { display: flex; align-items: center; }
+.msgAct > button { width: 30px; height: 30px; border-radius: 50%; font-size: 17px; line-height: 1; }
+.msgAct > button:hover { background: var(--card); }
+.msgAct .reMore, .msgAct .reReply { font-size: 16px; color: var(--muted); display: grid; place-items: center; }
+.reGrid { position: absolute; right: 0; top: 36px; display: grid; grid-template-columns: repeat(6, 32px); gap: 2px; background: var(--bg2); border: 1px solid #4b5563; border-radius: 12px; padding: 6px; }
+.reGrid[hidden] { display: none; }
+.reGrid button { width: 32px; height: 32px; border-radius: 8px; font-size: 18px; }
+.reGrid button:hover { background: var(--card); }
+.chatQuote { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); border-left: 3px solid var(--accent); padding: 2px 4px 2px 8px; }
+.chatQuote span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chatQuote[hidden] { display: none; }
 .chatForm { display: flex; gap: 8px; }
 .boardTools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid #6b7280; }
