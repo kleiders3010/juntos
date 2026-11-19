@@ -1,0 +1,9 @@
+{
+  "name": "juntos-room-server",
+  "private": true,
+  "type": "module",
+  "description": "Juntos's second room server (the same Room code as the Cloudflare Worker) for the game host on Kinetic",
+  "main": "server.mjs",
+  "scripts": { "pack": "node pack.mjs", "start": "node pack.mjs && node server.mjs" },
+  "dependencies": { "ws": "^8.18.0" }
+}

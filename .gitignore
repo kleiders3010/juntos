@@ -7,3 +7,5 @@ android/app/build/
 android/local.properties
 *.jks
 dist/
+kinetic/room.mjs
+kinetic/data/

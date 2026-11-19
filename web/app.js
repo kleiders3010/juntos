@@ -20,6 +20,8 @@ const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 // The page and its signaling share one host (meet.jurisgames.com); ?signal= points elsewhere for testing.
 const SIGNAL = params.get("signal") || (location.protocol === "https:" ? `wss://${location.host}` : "wss://meet.jurisgames.com");
+// the second room server (the game host, same room code): used when the first can't be reached; tests: ?signal2=
+const SIGNAL2 = params.get("signal2") || (params.get("signal") ? null : "wss://games.jurisgames.com/juntos");
 // Finding each other through public Nostr relays (rtc.js, nsig.js): on by default; a page pointed at a test server
 // (?signal=) uses only that server, unless test relays are given (?relays=ws://...,ws://...)
 const RELAYS = params.get("relays") ? params.get("relays").split(",").filter((u) => /^wss?:\/\//.test(u)) : params.get("signal") ? null : [];
@@ -220,12 +222,14 @@ const schedOpts = () => ({ t, toast, isPhone, newHost, claim: claimRoom, changed
 // A planned call with a passcode or "ask to join": its host claims the room right away (so the passcode holds before
 // the host arrives), then hangs up. Nobody else is in a room made a second ago.
 function claimRoom(code, key, opts) {
-  try {
-    const ws = new WebSocket(`${SIGNAL}/ws/${code}`);
-    ws.onopen = () => ws.send(JSON.stringify({ t: "hello", id: randomId(), name: "", key, claim: true, opts }));
-    ws.onmessage = (e) => JSON.parse(e.data).t === "room" && ws.close();
-    setTimeout(() => ws.close(), 15000);
-  } catch {}
+  // on both room servers: the passcode holds whichever one the call ends up using
+  for (const url of [SIGNAL, SIGNAL2].filter(Boolean))
+    try {
+      const ws = new WebSocket(`${url}/ws/${code}`);
+      ws.onopen = () => ws.send(JSON.stringify({ t: "hello", id: randomId(), name: "", key, claim: true, opts }));
+      ws.onmessage = (e) => JSON.parse(e.data).t === "room" && ws.close();
+      setTimeout(() => ws.close(), 15000);
+    } catch {}
 }
 $("schedule").onclick = () => scheduleSheet(schedOpts());
 $("joinForm").onsubmit = (e) => {
@@ -528,6 +532,7 @@ function enterCall(name) {
     room: S.code,
     name,
     signalUrl: SIGNAL,
+    backupUrl: SIGNAL2,
     relays: RELAYS,
     key: localStorage.getItem(`juntos.host.${S.code}`),
     knock: !!localStorage.getItem(`juntos.out.${S.code}`),

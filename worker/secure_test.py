@@ -10,7 +10,8 @@ sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
-WS = BASE.replace("http", "ws", 1)
+# JUNTOS_SIGNAL: another room server (the Kinetic one: kinetic/server.mjs) with the same protocol
+WS = __import__("os").environ.get("JUNTOS_SIGNAL") or BASE.replace("http", "ws", 1)
 SIG = "" if BASE.startswith("https://meet.") else f"?signal={WS}"
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 errors = []
@@ -23,7 +24,7 @@ def check(ok, what):
 
 
 def info(code):
-    req = urllib.request.Request(f"{BASE}/info/{code}", headers={"User-Agent": "Mozilla/5.0 (juntos-test)"})
+    req = urllib.request.Request(f"{WS.replace('ws', 'http', 1)}/info/{code}", headers={"User-Agent": "Mozilla/5.0 (juntos-test)"})
     with urllib.request.urlopen(req, timeout=10) as r:
         return json.loads(r.read())
 

@@ -24,7 +24,7 @@ export function randomId() {
 }
 
 export class Mesh extends EventTarget {
-  constructor({ room, name, signalUrl, key, knock, pass, opts, relays }) {
+  constructor({ room, name, signalUrl, backupUrl, key, knock, pass, opts, relays }) {
     super();
     this.relays = relays; // null: our server only (tests, local development); [] = the public list; or test relays
     this.viaN = new Set(); // people whose handshake goes through the relays
@@ -38,7 +38,16 @@ export class Mesh extends EventTarget {
     this.owners = new Set(); // which of them started the call
     this.room = room;
     this.name = name;
-    this.signalUrl = signalUrl;
+    this.signalUrl = signalUrl; // Cloudflare's (also hands out relay credentials)
+    // the room servers: Cloudflare's and the one on the game host, both running the same room code. Each call
+    // uses one, picked from its code (so the load is shared and every device of a call picks the same); when it
+    // can't be reached, the other. Kleider, 2026-11-18: "all parts of the app should work even if one the pieces
+    // break down".
+    this.servers = [signalUrl, backupUrl].filter(Boolean);
+    let h = 0;
+    for (const c of room) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    this.si = this.servers.length > 1 ? h % this.servers.length : 0;
+    this.fails = 0; // servers that failed to open in a row
     this.id = randomId();
     this.peers = new Map(); // id -> { pc, dc, name, stream, audio, video }
     this.audioTrack = null;
@@ -106,10 +115,15 @@ export class Mesh extends EventTarget {
       // that the people in it use aren't reachable from here). One question to the server, only in that case.
       setTimeout(async () => {
         if (this.closed || this.srv || this.peers.size || this.viaN.size || this.key || this.waitingN) return;
-        try {
-          const r = await (await fetch(`${this.signalUrl.replace(/^ws/, "http")}/info/${this.room}`, { cache: "no-store" })).json();
-          if (r.server) this.goServer();
-        } catch (_) {}
+        for (const i of this.servers.map((_, k) => (this.si + k) % this.servers.length))
+          try {
+            const r = await (await fetch(`${this.servers[i].replace(/^ws/, "http")}/info/${this.room}`, { cache: "no-store" })).json();
+            if (r.server) {
+              this.si = i;
+              this.goServer();
+            }
+            break;
+          } catch (_) {}
       }, 4500);
     });
   }
@@ -153,7 +167,7 @@ export class Mesh extends EventTarget {
     const name = typeof m.name === "string" ? m.name.slice(0, 60) : "";
     if (m.t === "hello") {
       this.helloSeen.add(m.from);
-      if (this.srv) return void this.ns.send({ t: "srv", from: this.id, to: m.from });
+      if (this.srv) return void this.ns.send({ t: "srv", from: this.id, to: m.from, url: this.srvUrl || this.servers[this.si] });
       if (this.peers.has(m.from)) return;
       if (typeof m.ck === "string" && /^[0-9a-f]{64}$/.test(m.ck)) this.cks.set(m.from, m.ck);
       const st = this.hd.doc;
@@ -202,8 +216,18 @@ export class Mesh extends EventTarget {
     } else if (m.t === "hs") {
       if (!this.srv && m.hs) this.takeHs(m.hs);
     } else if (m.t === "srv") {
-      // this call uses our server now (a host control was used, or it started locked or with a passcode)
-      this.goServer();
+      // this call uses a room server now (a passcode, a big call, the relays failing): the same one as the others
+      const i = typeof m.url === "string" ? this.servers.indexOf(m.url) : -1;
+      if (!this.srv) {
+        if (i >= 0) this.si = i;
+        return this.goServer();
+      }
+      // they moved to the other server (theirs failed): follow if mine isn't working either
+      if (i >= 0 && i !== this.si && !(this.ws && this.ws.readyState === 1)) {
+        this.si = i;
+        this.fails = 0;
+        this.reconnect();
+      }
     } else if (m.t === "full") {
       if (!this.peers.size && !this.fullSaid) {
         this.fullSaid = true;
@@ -224,25 +248,42 @@ export class Mesh extends EventTarget {
     if (this.srv || this.closed) return;
     this.srv = true;
     clearInterval(this.aloneTimer);
-    const d = this.hd.doc;
-    if (this.selfHost && d) {
-      const q = (this.hostQueue ||= []);
-      if (d.locked) q.push({ t: "lock", on: true });
-      if (!d.perms.talk) q.push({ t: "talk", id: "*", on: false });
-      for (const k of ["share", "chat", "caps"]) if (!d.perms[k]) q.push({ t: "perm", key: k, on: false });
-      for (const [id, on] of Object.entries(d.talk)) q.push({ t: "talk", id, on });
-      for (const id of Object.keys(d.cos)) q.push({ t: "cohost", id, on: true });
-    }
-    if (this.ns) this.ns.send({ t: "srv", from: this.id });
+    if (this.selfHost && this.hd.doc) this.replayHost(false);
+    if (this.ns) this.ns.send({ t: "srv", from: this.id, url: this.servers[this.si] });
     this.connectServer();
     if (this.relays != null && NOSTR_OK) this.listen(); // newcomers who look on the relays are sent here
   }
 
   connectServer() {
-    const ws = new WebSocket(`${this.signalUrl}/ws/${this.room}`);
+    const url = this.servers[this.si];
+    let ws;
+    try {
+      ws = new WebSocket(`${url}/ws/${this.room}`);
+    } catch (_) {
+      return void setTimeout(() => !this.closed && this.serverFailed(null), 500);
+    }
     this.ws = ws;
+    let opened = false;
+    // a server that doesn't answer in a few seconds counts as down
+    const slow = setTimeout(() => {
+      if (opened || this.ws !== ws || this.closed) return;
+      this.ws = null;
+      try {
+        ws.close();
+      } catch (_) {}
+      this.serverFailed(ws);
+    }, 6000);
     ws.onopen = async () => {
+      opened = true;
+      clearTimeout(slow);
       this.tries = 0;
+      this.fails = 0;
+      // the others in the call (and newcomers looking on the relays) hear which server this call uses now
+      if (this.srvUrl && this.srvUrl !== url) {
+        if (this.ns) this.ns.send({ t: "srv", from: this.id, url });
+        this.replayHost(true);
+      }
+      this.srvUrl = url;
       await this.keysP;
       if (this.ws !== ws || ws.readyState !== 1) return;
       this.emit("signal-open");
@@ -250,13 +291,26 @@ export class Mesh extends EventTarget {
     };
     ws.onmessage = (e) => this.onSignal(JSON.parse(e.data));
     ws.onclose = () => {
+      clearTimeout(slow);
       if (this.closed || this.ws !== ws) return; // an old link closing after a new one opened
+      if (!opened) return this.serverFailed(ws);
       // The signaling link only matters for new handshakes; calls in progress go on.
       this.emit("signal-lost");
       this.lost = (this.lost || 0) + 1;
       const wait = Math.min(15000, 1000 * 2 ** (this.tries = (this.tries || 0) + 1));
       setTimeout(() => !this.closed && this.reconnect(), wait);
     };
+  }
+
+  // this server couldn't be reached: the other one at once; when both failed, wait a little longer each time
+  serverFailed() {
+    if (this.closed) return;
+    this.fails++;
+    if (this.servers.length > 1) this.si = (this.si + 1) % this.servers.length;
+    if (this.fails < this.servers.length) return this.connectServer();
+    this.emit("signal-lost");
+    const wait = Math.min(15000, 1000 * 2 ** Math.min(4, this.fails - this.servers.length + 1));
+    setTimeout(() => !this.closed && this.reconnect(), wait);
   }
 
   reconnect() {
@@ -321,6 +375,9 @@ export class Mesh extends EventTarget {
       // host controls: who may come in, mute, remove, the passcode (the server checks who is the host)
       if (m.t === "denied" || m.t === "removed" || m.t === "passcode") this.closed = true;
       if (m.t === "pass") this.pass = m.pass || "";
+      // what the call had on its server, for moving it to the other one
+      if (m.t === "room" || m.t === "lock") this.srvState = { ...this.srvState, locked: !!(m.t === "room" ? m.locked : m.on) };
+      if (m.t === "perms") this.srvState = { ...this.srvState, perms: m.perms, talk: m.talk };
       if (m.t === "room") this.meHost = !!m.host;
       if (m.t === "role" && m.id === this.id) this.meHost = !!m.role;
       if (m.t === "role" && m.id !== this.id) {
@@ -431,6 +488,7 @@ export class Mesh extends EventTarget {
       // in a big call messages come signed and are passed along the tree
       if (this.big && msg && msg._r) return this.big.onRelay(id, e.data, msg);
       if (msg && msg.k === "_hs") return void (!this.srv && this.takeHs(msg.hs));
+      if (msg && msg.k === "_pass") return void (typeof msg.pass === "string" && !this.srv && (this.pass = msg.pass.slice(0, 10)));
       this.emit("message", { from: id, msg });
     };
     this.emit("peer", { id });
@@ -438,6 +496,24 @@ export class Mesh extends EventTarget {
   }
 
   // ---- host controls without the server ----
+
+  // the host gives a room server the call's choices: moving from the devices' signed document to a server, or
+  // from one server to the other (with the passcode then)
+  replayHost(withPass) {
+    if (!this.key) return;
+    const d = this.hd.doc;
+    const st = this.srvState || {};
+    const perms = (d ? d.perms : st.perms) || {};
+    const talk = (d ? d.talk : st.talk) || {};
+    const q = [];
+    if (d ? d.locked : st.locked) q.push({ t: "lock", on: true });
+    if (withPass && this.pass) q.push({ t: "pass", pass: this.pass });
+    if (perms.talk === false) q.push({ t: "talk", id: "*", on: false });
+    for (const k of ["share", "chat", "caps"]) if (perms[k] === false) q.push({ t: "perm", key: k, on: false });
+    for (const [id, on] of Object.entries(talk)) q.push({ t: "talk", id, on });
+    for (const id of d ? Object.keys(d.cos) : [...this.hosts].filter((x) => !this.owners.has(x))) q.push({ t: "cohost", id, on: true });
+    this.hostQueue = [...q, ...(this.hostQueue || [])];
+  }
 
   async signedHost(cmd) {
     const me = this.selfHost;
@@ -846,6 +922,9 @@ export class Mesh extends EventTarget {
   host(cmd) {
     // a call without the server whose code proves its host: the devices keep the signed choices
     if (!this.srv && this.canSign && this.hd.doc && cmd.t !== "pass") return void this.signedHost(cmd);
+    // a passcode moves the call to a room server: the people already in it get it first (the server would refuse
+    // whoever gets there after it is set; the server gives it to everyone in the call anyway)
+    if (!this.srv && cmd.t === "pass" && cmd.pass) this.broadcast({ k: "_pass", pass: cmd.pass });
     // host controls need the server: the call moves to it (once), and the command goes when the link is up
     if (!this.srv) this.goServer();
     if (this.ws && this.ws.readyState === 1 && this.admitted) return this.sendSignal(cmd);

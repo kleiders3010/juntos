@@ -1,0 +1,222 @@
+// Juntos's second room server, for the game host on Kinetic (GeneralGames, next to Chess Tactics).
+//
+// Kleider, 2026-11-18: "I don't want the app relaying forever onto the same service, all parts of the app should work
+// even if one the pieces break down". The room server (worker/src/index.js) runs on Cloudflare as a Durable Object;
+// this runs the very same Room class on Node, with a small stand-in for the Durable Object parts it uses (its
+// websockets with their attachments and tags, its storage, its alarm). Same code, same protocol: the app uses one
+// server or the other and nothing else changes.
+//
+// Game host contract (ChessTactics/docs/HOSTING.md "Adding a future game"): listen on PORT; keep files in
+// DATA_DIR; stop on "stop" read from the input; GET /api/health as JSON. The host strips the public path
+// (/juntos), so this sees /ws/<room> and /info/<room>, and passes the visitor's address in x-forwarded-for.
+//
+// Not here: relay (TURN) credentials (/turn), which only Cloudflare hands out.
+import http from "node:http";
+import { webcrypto, createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync, renameSync } from "node:fs";
+import { join } from "node:path";
+import { WebSocketServer } from "ws";
+
+if (!globalThis.crypto) globalThis.crypto = webcrypto;
+if (typeof Response.json !== "function")
+  Response.json = (d, init = {}) => new Response(JSON.stringify(d), { ...init, headers: { ...(init.headers || {}), "content-type": "application/json" } });
+
+const { Room } = await import(process.env.JUNTOS_ROOM || "./room.mjs");
+
+const PORT = Number(process.env.PORT) || 8799;
+const BIND = process.env.BIND || "0.0.0.0";
+const DATA = process.env.DATA_DIR || join(process.cwd(), "data");
+const MAX_ROOMS = 5000; // rooms held in memory at once (a room with nobody in it is put away after IDLE_MS)
+const IDLE_MS = 10 * 60 * 1000;
+const MAX_SOCKETS = 3000;
+const MAX_MSG = 64 * 1024;
+mkdirSync(DATA, { recursive: true });
+
+// ---- the Durable Object stand-in ----
+
+const fileOf = (name) => join(DATA, createHash("sha256").update(name).digest("hex").slice(0, 32) + ".json");
+const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+
+class Storage {
+  constructor(name) {
+    this.name = name;
+    this.file = fileOf(name);
+    try {
+      this.map = new Map(Object.entries(JSON.parse(readFileSync(this.file, "utf8"))));
+    } catch (_) {
+      this.map = new Map();
+    }
+  }
+  save() {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      try {
+        if (!this.map.size) return void unlinkSync(this.file);
+        writeFileSync(this.file + ".tmp", JSON.stringify(Object.fromEntries(this.map)));
+        renameSync(this.file + ".tmp", this.file);
+      } catch (_) {}
+    }, 200);
+  }
+  async get(k) {
+    if (Array.isArray(k)) return new Map(k.filter((x) => this.map.has(x)).map((x) => [x, clone(this.map.get(x))]));
+    return clone(this.map.get(k));
+  }
+  async put(k, v) {
+    if (typeof k === "object") for (const [a, b] of Object.entries(k)) this.map.set(a, clone(b));
+    else this.map.set(k, clone(v));
+    this.save();
+  }
+  async delete(k) {
+    const ks = Array.isArray(k) ? k : [k];
+    let n = 0;
+    for (const x of ks) n += this.map.delete(x) ? 1 : 0;
+    this.save();
+    return Array.isArray(k) ? n : n > 0;
+  }
+  async deleteAll() {
+    this.map.clear();
+    this.save();
+  }
+  async list({ prefix = "" } = {}) {
+    return new Map([...this.map].filter(([k]) => k.startsWith(prefix) && k !== "__alarm").map(([k, v]) => [k, clone(v)]));
+  }
+  async setAlarm(t) {
+    this.map.set("__alarm", Number(t));
+    this.save();
+  }
+  async getAlarm() {
+    return this.map.get("__alarm") ?? null;
+  }
+}
+
+class State {
+  constructor(name) {
+    this.storage = new Storage(name);
+    this.sockets = new Set();
+  }
+  acceptWebSocket(ws, tags) {
+    ws.tags = tags || [];
+    this.sockets.add(ws);
+  }
+  getWebSockets() {
+    return [...this.sockets];
+  }
+  getTags(ws) {
+    return ws.tags || [];
+  }
+}
+
+const rooms = new Map(); // name -> { room, state, idle }
+
+function roomOf(name) {
+  let r = rooms.get(name);
+  if (!r) {
+    if (rooms.size >= MAX_ROOMS) sweep(true);
+    const state = new State(name);
+    r = { name, state, room: new Room(state, process.env), idle: Date.now() };
+    rooms.set(name, r);
+  }
+  return r;
+}
+
+// due alarms run; rooms nobody is in are put away (their storage stays on disk)
+async function sweep(force) {
+  const now = Date.now();
+  for (const [name, r] of rooms) {
+    const due = r.state.storage.map.get("__alarm");
+    if (due && due <= now) {
+      r.state.storage.map.delete("__alarm");
+      try {
+        await r.room.alarm();
+      } catch (_) {}
+    }
+    if (!r.state.sockets.size && (force || now - r.idle > IDLE_MS)) rooms.delete(name);
+  }
+  // rooms on disk only: their alarms (a room forgotten a month after it was last used)
+  if (!force)
+    for (const f of readdirSync(DATA)) {
+      if (!f.endsWith(".json")) continue;
+      try {
+        const m = JSON.parse(readFileSync(join(DATA, f), "utf8"));
+        if (m.__alarm && m.__alarm <= now && m.seen && now - m.seen > 31 * 24 * 3600 * 1000) unlinkSync(join(DATA, f));
+      } catch (_) {}
+    }
+}
+setInterval(sweep, 60 * 1000).unref();
+
+async function ipKey(req) {
+  const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
+  const day = new Date().toISOString().slice(0, 10);
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(day + "|juntos|" + ip));
+  return "ip:" + day + ":" + [...new Uint8Array(h).slice(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ---- http and websockets ----
+
+const ROOM_PATH = /^\/(ws|info)\/([a-z0-9-]{4,64})$/;
+let sockets = 0;
+const started = Date.now();
+
+const server = http.createServer(async (req, res) => {
+  const path = (req.url || "/").split("?")[0];
+  const cors = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" };
+  if (path === "/api/health" || path === "/health") {
+    res.writeHead(200, { "content-type": "application/json", ...cors });
+    return res.end(JSON.stringify({ ok: true, rooms: rooms.size, people: sockets, upMinutes: Math.round((Date.now() - started) / 60000) }));
+  }
+  const m = path.match(ROOM_PATH);
+  if (m && m[1] === "info") {
+    try {
+      const r = await roomOf(m[2]).room.fetch(new Request("https://room/info"));
+      res.writeHead(200, { "content-type": "application/json", ...cors });
+      return res.end(await r.text());
+    } catch (_) {
+      res.writeHead(500, cors);
+      return res.end();
+    }
+  }
+  res.writeHead(m ? 426 : 404, { "content-type": "text/plain", ...cors });
+  res.end(m ? "expected a websocket" : "not found");
+});
+
+const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MSG + 1024 });
+server.on("upgrade", async (req, socket, head) => {
+  const m = (req.url || "").split("?")[0].match(ROOM_PATH);
+  if (!m || m[1] !== "ws" || sockets >= MAX_SOCKETS) return socket.destroy();
+  const ip = await ipKey(req);
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    const r = roomOf(m[2]);
+    sockets++;
+    let att = null;
+    ws.serializeAttachment = (v) => (att = clone(v));
+    ws.deserializeAttachment = () => clone(att);
+    r.state.acceptWebSocket(ws, [m[2], ip]);
+    // one room's messages are handled one at a time, in order (a Durable Object does the same)
+    const run = (f) => (r.chain = (r.chain || Promise.resolve()).then(f).catch((e) => console.error("juntos room error:", e && e.message)));
+    ws.on("message", (data, binary) => {
+      if (binary) return;
+      run(() => r.room.webSocketMessage(ws, data.toString()));
+    });
+    ws.on("close", () => {
+      sockets--;
+      run(async () => {
+        await r.room.webSocketClose(ws);
+        r.state.sockets.delete(ws);
+        r.idle = Date.now();
+      });
+    });
+    ws.on("error", () => {});
+  });
+});
+
+server.listen(PORT, BIND, () => console.log(`Juntos room server on ${BIND}:${PORT}`));
+
+process.stdin.on("data", (d) => {
+  const cmd = String(d).trim();
+  if (cmd === "stop") {
+    console.log("stopping");
+    for (const r of rooms.values()) r.state.storage.save();
+    setTimeout(() => process.exit(0), 400);
+  } else if (cmd === "status") console.log(`rooms ${rooms.size}, people ${sockets}, up ${Math.round((Date.now() - started) / 60000)} min`);
+});
+process.stdin.resume();
