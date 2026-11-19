@@ -384,6 +384,11 @@ body.boardBig .grid .tile .label { font-size: 12px; padding: 1px 6px; }
 
 /* breakout rooms */
 .tile.away { display: none !important; }
+/* Companion mode (Meet's): a second device in the same room, no sound; hidden from the grid unless its camera or screen is on */
+.tile.compHid { display: none !important; }
+#lobby #enterComp { align-self: center; }
+.compBox { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: #e8a33d; }
+.compBox[hidden] { display: none; }
 .brBar { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); z-index: 24; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center;
   background: var(--bg); border-radius: 999px; padding: 6px 8px 6px 16px; box-shadow: 0 6px 24px rgba(0,0,0,.45); max-width: calc(100vw - 24px); }
 .brBar.invite { border-radius: var(--radius); padding: 10px 12px 10px 16px; }

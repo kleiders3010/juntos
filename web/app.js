@@ -120,6 +120,7 @@ const S = {
   board: null,
   chat: [], // { from, name, text, at }
   hands: new Set(),
+  comps: new Set(), // ids of people in Companion mode
   recorder: null,
   panel: null,
   facing: "user",
@@ -400,7 +401,7 @@ function may(id, key) {
 }
 // my voice goes out only while my own switch is on and I'm allowed to speak
 function micLive() {
-  return !!S.mic && may("me", "talk");
+  return !!S.mic && !S.comp && may("me", "talk");
 }
 // not allowed to speak: say so and raise my hand to ask (my own switch stays as it is)
 function askToSpeak() {
@@ -413,10 +414,11 @@ function askToSpeak() {
 // how I am, for the others (and for their recordings: a shared screen leads the picture)
 function myState() {
   // ct / cx: my browser can make captions from someone else's voice / translate captions, for those who can't
-  return { k: "state", mic: micLive(), cam: S.cam, screen: !!S.screen, ct: canCapTrack(), cx: captr.CAN };
+  return { k: "state", mic: micLive(), cam: S.cam, screen: !!S.screen, ct: canCapTrack(), cx: captr.CAN, comp: !!S.comp };
 }
 
 function setMic(on) {
+  if (on && S.comp && S.mesh) return toast(t("Companion mode has no sound. Tap Use my audio to talk."));
   // not allowed to speak: the mic button asks to speak; my own switch stays as I left it
   if (S.mesh && !may("me", "talk")) return askToSpeak();
   S.mic = on;
@@ -457,7 +459,10 @@ function paintToggles() {
   $("bMic")?.classList.toggle("blocked", noTalk);
   if (noTalk) $("bMic")?.setAttribute("title", t("A host hasn't allowed you to speak"));
   const meTile = document.querySelector('.tile[data-id="me"]');
-  if (meTile) meTile.classList.toggle("muted", !S.mic);
+  if (meTile) {
+    meTile.classList.toggle("muted", !micLive());
+    meTile.classList.toggle("compHid", !!S.comp && !S.cam && !S.screen);
+  }
 }
 
 // ---------- lobby ----------
@@ -725,7 +730,11 @@ $("pBg").onclick = () => {
 };
 $("pDev").onclick = openDevices;
 $("name").addEventListener("keydown", (e) => e.key === "Enter" && $("enter").click());
-$("enter").onclick = async () => {
+$("enter").onclick = () => join(false);
+// Companion mode (Meet's "Use Companion mode"): a second device in the same room joins with no microphone and no
+// sound (no echo) and the camera off, for chat, hand, polls, the board and sharing a screen
+$("enterComp").onclick = () => join(true);
+async function join(comp) {
   const name = $("name").value.trim();
   if (!name) {
     $("name").focus();
@@ -753,13 +762,44 @@ $("enter").onclick = async () => {
   askNotices();
   await (S.mediaReady ||= getMedia());
   $("enter").disabled = false;
+  S.comp = comp;
   enterCall(name);
+}
+function companion(on) {
+  S.comp = on;
+  $("compBox").hidden = !on;
+  if (on) {
+    S.compWas = { mic: S.mic };
+    S.mic = false;
+    S.cam = false;
+    if (S.camTrack) S.camTrack.enabled = false;
+  } else if (S.compWas) S.mic = S.compWas.mic;
+  if (S.micTrack) S.micTrack.enabled = micLive();
+  for (const tile of document.querySelectorAll("#grid .tile")) {
+    const p = S.mesh?.peers.get(tile.dataset.id);
+    if (p) applyVolume(tile, p);
+  }
+  refreshLocalVideo();
+  paintToggles();
+  if (S.mesh) {
+    S.mesh.setTracks(audioOut(), videoOut());
+    S.mesh.broadcast(myState());
+    capSync();
+    layout();
+  }
+}
+// "Leave and rejoin to use your audio" in Meet; here it switches in place
+$("compOff").onclick = () => {
+  companion(false);
+  toast(S.mic ? t("Sound and microphone on") : t("Sound on. Your microphone is off."));
 };
 
 // ---------- the call ----------
 function enterCall(name) {
   show("call");
   $("roomCode").textContent = S.code;
+  if (S.comp) companion(true);
+  else $("compBox").hidden = true;
   buildBar();
   buildGrid();
   S.isHost = false;
@@ -914,6 +954,11 @@ function onMessage(from, m) {
     S.chat.sort((a, b) => a.at - b.at);
     renderChat();
   } else if (m.k === "state") {
+    if (!!m.comp !== S.comps.has(from)) {
+      if (m.comp) S.comps.add(from);
+      else S.comps.delete(from);
+      renderPeer(from);
+    }
     if ("ct" in m || "cx" in m) {
       S.capCan.set(from, { tk: !!m.ct, tr: !!m.cx });
       capSync();
@@ -925,6 +970,7 @@ function onMessage(from, m) {
       tile.classList.toggle("muted", !m.mic || !may(from, "talk"));
       tile.classList.toggle("camoff", (!m.cam && !scr) || (!!m.screen && !scr)); // their shared screen shows even with their camera off
       tile.classList.toggle("screen", scr);
+      tile.classList.toggle("compHid", !!m.comp && !m.cam && !scr);
       layout();
     }
     if (m.hand !== undefined) setHand(from, m.hand, who, true);
@@ -1072,7 +1118,7 @@ function volFor(name) {
 function applyVolume(tile, p) {
   const v = tile.querySelector("audio");
   // in another breakout room, or not allowed to speak: not heard
-  const pct = tile.classList.contains("away") || !may(tile.dataset.id, "talk") ? 0 : volFor(p.name);
+  const pct = S.comp || tile.classList.contains("away") || !may(tile.dataset.id, "talk") ? 0 : volFor(p.name);
   const tr = p.stream.getAudioTracks()[0];
   if (pct > 100 && tr) {
     const ctx = (S.out ||= new (window.AudioContext || window.webkitAudioContext)());
@@ -1301,7 +1347,7 @@ function renderPeer(id) {
     $("grid").appendChild(tile);
     layout();
   }
-  tile.querySelector(".nm").textContent = p.name || "Joining…";
+  tile.querySelector(".nm").textContent = (p.name || "Joining…") + (S.comps.has(id) ? ` ${t("(Companion)")}` : "");
   tile.querySelector(".avatar").textContent = (p.name || "?").trim().charAt(0).toUpperCase();
   const v = tile.querySelector("video");
   if (v.srcObject !== p.stream && p.stream.getTracks().length) {
@@ -1420,7 +1466,7 @@ function layout() {
   S.an?.update(); // drawing on shared screens: which tiles show one
   const g = $("grid");
   const v = S.view;
-  const tiles = [...g.children].filter((x) => !x.classList.contains("away")); // people in other breakout rooms aren't shown
+  const tiles = [...g.children].filter((x) => !x.classList.contains("away") && !x.classList.contains("compHid")); // people in other breakout rooms (and companions with nothing to show) aren't shown
   const me = g.querySelector('.tile[data-id="me"]');
   const alone = tiles.length <= 1;
   const screen = tiles.find((x) => x.classList.contains("screen") && !x.classList.contains("popped") && x.dataset.id !== "me");
@@ -2345,12 +2391,12 @@ function renderPeople() {
     ul.append(li);
   };
   handsRow(ul);
-  add(`${localStorage.getItem("name")} ${t("(you)")}`, S.hands.has("me") ? "✋" : "", null);
+  add(`${localStorage.getItem("name")} ${t("(you)")}${S.comp ? ` ${t("(Companion)")}` : ""}`, S.hands.has("me") ? "✋" : "", null);
   // hosts first, then raised hands (they may be asking to speak), then everyone else as they came
   const order = (p) => (roleOf(p.id) === "host" ? 0 : roleOf(p.id) ? 1 : S.hands.has(p.id) ? 2 : 3);
   for (const p of [...S.mesh.peers.values()].sort((a, b) => order(a) - order(b)))
     add(
-      p.name || t("Joining…"),
+      (p.name || t("Joining…")) + (S.comps.has(p.id) ? ` ${t("(Companion)")}` : ""),
       (S.hands.has(p.id) ? "✋ " : "") + (p.state === "connected" ? "" : t("· connecting")) + (S.br.roomOf(p.id) ? ` · ${S.br.room(S.br.roomOf(p.id))}` : ""),
       p.id,
     );
@@ -2541,7 +2587,7 @@ function watchMuted() {
       stop();
       return clearInterval(watchMuted.timer);
     }
-    if (S.mic || !S.micTrack || S.ptt) {
+    if (S.mic || S.comp || !S.micTrack || S.ptt) {
       if (S.mic) $("mutedNote").hidden = true;
       return stop();
     }
@@ -2602,7 +2648,7 @@ addEventListener("keydown", (e) => {
     const tgt = e.target.checkVisibility?.() === false ? document.body : e.target;
     if (S.panel === "board" || (tgt !== document.body && !tgt.closest("#bar, #grid"))) return;
     e.preventDefault();
-    if (e.repeat || S.mic || S.ptt || !S.micTrack) return;
+    if (e.repeat || S.mic || S.comp || S.ptt || !S.micTrack) return;
     if (!may("me", "talk")) return askToSpeak();
     S.ptt = true;
     $("mutedNote").hidden = true;

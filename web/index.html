@@ -49,6 +49,7 @@
       <input id="name" placeholder="Your name" maxlength="60" autocomplete="name">
       <input id="passcode" placeholder="Passcode" maxlength="10" autocomplete="off" autocapitalize="off" spellcheck="false" hidden>
       <button id="enter" class="primary big">Join now</button>
+      <button id="enterComp" class="linkBtn" title="A second device in the same room: no microphone or sound, so no echo">Companion mode (no sound)</button>
       <div id="lobbyDevs" class="lobbyDevs">
         <div class="ldRow" data-k="mic"><span class="ldIc"></span><select id="ldMic" aria-label="Microphone"></select><div id="pMeter" class="meter"><i></i></div></div>
         <div class="ldRow" data-k="spk"><span class="ldIc"></span><select id="ldSpk" aria-label="Speaker"></select><button id="ldTest" class="chip">Test</button></div>
@@ -66,6 +67,7 @@
   <header class="top">
     <span id="roomCode" class="code"></span>
     <button id="invite" class="chip">Invite people</button>
+    <span id="compBox" class="compBox" hidden><span>Companion mode</span><button id="compOff" class="chip">Use my audio</button></span>
     <span id="netState" class="netState" hidden></span>
     <span id="recDot" class="rec" hidden>● Recording</span>
   </header>
