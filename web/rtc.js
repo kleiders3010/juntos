@@ -67,6 +67,9 @@ export class Mesh extends EventTarget {
     this.signer = newSigner();
     this.cks = new Map(); // id -> their key for this visit (a co-host signs with it)
     this.knocking = new Map(); // id -> name: asking to join while the call is locked
+    // the host's proof for its hellos and answers: made now, so nothing goes out without it (the relays replay old
+    // hellos at once; an answer without the proof is ignored by a locked call, and then nobody calls)
+    this.hproofP = this.selfHost ? helloProof(this.key, this.room, this.id).then((p) => (this.hproof = p)).catch(() => "") : Promise.resolve("");
   }
 
   // I started this call and its code proves it: my host controls need no server
@@ -106,8 +109,8 @@ export class Mesh extends EventTarget {
       if (this.closed || this.srv) return;
       if (!up) return this.goServer();
       this.emit("signal-open", { relays: up });
-      if (this.selfHost) await this.takeHs(await this.hd.next((d) => ((d.locked = !!(this.opts && this.opts.lock)), (d.host = this.id)), { hostSk: this.key, name: this.name }).catch(() => null));
-      if (this.selfHost) this.hproof = await helloProof(this.key, this.room, this.id).catch(() => "");
+      // (a host coming back may already have the call's document, through the relays: that one stays)
+      if (this.selfHost && !this.hd.doc) await this.takeHs(await this.hd.next((d) => ((d.locked = !!(this.opts && this.opts.lock)), (d.host = this.id)), { hostSk: this.key, name: this.name }).catch(() => null));
       if (this.key && !this.hd.doc) this.emit("host", { t: "room", locked: false, host: true, owner: true, pass: false, serverless: true });
       this.hello();
       this.emit("joined", { count: this.peers.size });
@@ -135,7 +138,8 @@ export class Mesh extends EventTarget {
   }
 
   // say I'm here: now and twice more (a relay can be slow); later, again while I'm alone, for whoever comes
-  hello() {
+  async hello() {
+    await this.hproofP;
     const say = () => this.sayHello();
     say();
     setTimeout(say, 1500);
@@ -167,6 +171,7 @@ export class Mesh extends EventTarget {
     const name = typeof m.name === "string" ? m.name.slice(0, 60) : "";
     if (m.t === "hello") {
       this.helloSeen.add(m.from);
+      await this.hproofP;
       if (this.srv) return void this.ns.send({ t: "srv", from: this.id, to: m.from, url: this.srvUrl || this.servers[this.si] });
       if (this.peers.has(m.from)) return;
       if (typeof m.ck === "string" && /^[0-9a-f]{64}$/.test(m.ck)) this.cks.set(m.from, m.ck);
@@ -577,7 +582,11 @@ export class Mesh extends EventTarget {
     const wasHost = this.meHost;
     this.meHost = this.selfHost || d.cos[this.id] === this.signer.pub;
     // the host came back (a new id each visit): say who the host is now
-    if (this.selfHost && d.host !== this.id) setTimeout(() => this.host({ t: "_here" }), 0);
+    // (after the call's documents stop arriving: the relays replay older ones to a newcomer, in a burst)
+    if (this.selfHost && d.host !== this.id) {
+      clearTimeout(this.hereTimer);
+      this.hereTimer = setTimeout(() => !this.closed && this.hd.doc && this.hd.doc.host !== this.id && this.host({ t: "_here" }), 1500);
+    }
     if (d.out.includes(this.id) || d.deny.includes(this.id)) {
       if (this.selfHost) return;
       this.closed = true;

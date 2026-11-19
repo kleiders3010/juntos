@@ -110,7 +110,11 @@ export class HostDocs {
       return null;
     }
     if (!d) return null;
-    if (ownsCode(d.by, this.code)) return d.cv === 0 && (await sigOk(w, d.by)) ? d : null;
+    if (ownsCode(d.by, this.code)) {
+      if (d.cv !== 0 || !(await sigOk(w, d.by))) return null;
+      this.maxHv = Math.max(this.maxHv || 0, d.hv); // the host's next one is numbered above every one seen
+      return d;
+    }
     // a co-host's: built on a host-signed document that lists their key, keeping its co-hosts and host
     if (depth) return null;
     const b = await this.read(w.base, 1);
@@ -128,6 +132,8 @@ export class HostDocs {
     const prev = this.doc;
     this.doc = d;
     this.wire = w;
+    (this.log ||= []).push([d.hv, d.cv, d.locked, d.host.slice(0, 4), same ? "same" : "new"]);
+    if (this.log.length > 30) this.log.shift();
     if (d.cv === 0) this.hostWire = w;
     return { prev, doc: d };
   }
@@ -140,7 +146,7 @@ export class HostDocs {
     for (const k of ["out", "deny", "admit"]) d[k] = [...new Set(d[k])].slice(-LIST);
     d.name = name;
     if (hostSk) {
-      d.hv = cur ? cur.hv + 1 : 1;
+      d.hv = Math.max(cur ? cur.hv : 0, this.maxHv || 0) + 1;
       d.cv = 0;
       d.by = pubOf(typeof hostSk === "string" ? hostSk : hex(hostSk));
       return signDoc(d, hostSk);

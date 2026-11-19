@@ -6,7 +6,8 @@
 # - both room servers down: an ordinary call still works through the relays.
 # The two room servers here are two copies of kinetic/server.mjs (the same room code Cloudflare runs: host, roles
 # and secure tests pass on it with JUNTOS_SIGNAL), so this test can stop them. The pages come from wrangler dev.
-# Run: python failover_test.py [base-url]
+# Run: python failover_test.py [base-url]   (an https base: the live site; only the first part, against the real
+# servers: Cloudflare's and the game host's, each with the other one unreachable)
 import asyncio
 import json
 import os
@@ -110,9 +111,13 @@ def info(port, code):
     return json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/info/{code}", timeout=3).read())
 
 
-for pt in PORTS:
-    start(pt)
+LIVE = BASE.startswith("https://")
+if not LIVE:
+    for pt in PORTS:
+        start(pt)
 S1, S2 = (f"ws://127.0.0.1:{pt}" for pt in PORTS)
+if LIVE:
+    S1, S2 = "wss://meet.jurisgames.com", "wss://games.jurisgames.com/juntos"
 time.sleep(0.5)
 
 try:
@@ -144,48 +149,51 @@ try:
                 return False
 
         # 1. the relays down and one room server down: the other one carries the call, whichever is first
-        for first, second, what in ((DEAD, S1, "the first room server down"), (S1, DEAD, "the second room server down")):
+        cases = ((DEAD, S2, "Cloudflare's room server down"), (S1, DEAD, "the game host's room server down")) if LIVE else (
+            (DEAD, S1, "the first room server down"), (S1, DEAD, "the second room server down"))
+        for first, second, what in cases:
             q = f"signal={first}&signal2={second}&relays=ws://127.0.0.1:8810"
             a = person("Ana", f"{BASE}/?{q}")
             link = a.url.split("?")[0] + "?" + q
             o = person("Beto", link)
             ok = wait(a, full, f"relays down and {what}: Ana and Beto meet through the other server", arg=1, secs=30)
             if ok:
-                check(a.evaluate("__S.mesh.srvUrl") == S1, f"  (through {a.evaluate('__S.mesh.srvUrl')})")
+                check(a.evaluate("__S.mesh.srvUrl") == (second if first == DEAD else first), f"  (through {a.evaluate('__S.mesh.srvUrl')})")
             a.context.close()
             o.context.close()
 
-        # 2. a call on a room server (it has a passcode) whose server dies
-        q = f"signal={S1}&signal2={S2}&relays={RELAY}"
-        a = person("Ana", f"{BASE}/?{q}")
-        link = a.url.split("?")[0] + "?" + q
-        o = person("Beto", link)
-        wait(a, full, "Ana and Beto meet through the relays", arg=1)
-        a.evaluate("__S.mesh.host({ t: 'pass', pass: '482916' })")
-        wait(o, "__S.mesh.srv && __S.mesh.ws && __S.mesh.ws.readyState === 1", "Ana sets a passcode: the call moves to a room server")
-        code = a.evaluate("__S.code")
-        used = a.evaluate("__S.mesh.srvUrl")
-        port = int(used.rsplit(":", 1)[1])
-        other = [pt for pt in PORTS if pt != port][0]
-        check(o.evaluate("__S.mesh.srvUrl") == used and info(port, code)["pass"], f"both on the server the call's code picked ({port}), the passcode there")
-        cid = a.evaluate("[...__S.mesh.peers.values()][0].cid")
-        stop(port)
-        print(f"  server {port} stopped", flush=True)
-        wait(a, f"__S.mesh.srvUrl === 'ws://127.0.0.1:{other}' && __S.mesh.ws.readyState === 1", "Ana moves to the other server", secs=40)
-        wait(o, f"__S.mesh.srvUrl === 'ws://127.0.0.1:{other}' && __S.mesh.ws.readyState === 1", "so does Beto", secs=40)
-        time.sleep(2)
-        check(a.evaluate("[...__S.mesh.peers.values()][0].cid") == cid and a.evaluate(full, 1), "their connection stayed up the whole time")
-        check(info(other, code)["pass"] is True, "the passcode holds on the other server too (Ana gave it the call's choices)")
-        d = person("Dan", link, wait=False)
-        wait(d, "!__S.mesh && !document.querySelector('#lobby').hidden", "Dan looks on the relays, is sent to the working server, and is asked for the passcode", secs=30)
+        if not LIVE:  # the servers can only be stopped here
+            # 2. a call on a room server (it has a passcode) whose server dies
+            q = f"signal={S1}&signal2={S2}&relays={RELAY}"
+            a = person("Ana", f"{BASE}/?{q}")
+            link = a.url.split("?")[0] + "?" + q
+            o = person("Beto", link)
+            wait(a, full, "Ana and Beto meet through the relays", arg=1)
+            a.evaluate("__S.mesh.host({ t: 'pass', pass: '482916' })")
+            wait(o, "__S.mesh.srv && __S.mesh.ws && __S.mesh.ws.readyState === 1", "Ana sets a passcode: the call moves to a room server")
+            code = a.evaluate("__S.code")
+            used = a.evaluate("__S.mesh.srvUrl")
+            port = int(used.rsplit(":", 1)[1])
+            other = [pt for pt in PORTS if pt != port][0]
+            check(o.evaluate("__S.mesh.srvUrl") == used and info(port, code)["pass"], f"both on the server the call's code picked ({port}), the passcode there")
+            cid = a.evaluate("[...__S.mesh.peers.values()][0].cid")
+            stop(port)
+            print(f"  server {port} stopped", flush=True)
+            wait(a, f"__S.mesh.srvUrl === 'ws://127.0.0.1:{other}' && __S.mesh.ws.readyState === 1", "Ana moves to the other server", secs=40)
+            wait(o, f"__S.mesh.srvUrl === 'ws://127.0.0.1:{other}' && __S.mesh.ws.readyState === 1", "so does Beto", secs=40)
+            time.sleep(2)
+            check(a.evaluate("[...__S.mesh.peers.values()][0].cid") == cid and a.evaluate(full, 1), "their connection stayed up the whole time")
+            check(info(other, code)["pass"] is True, "the passcode holds on the other server too (Ana gave it the call's choices)")
+            d = person("Dan", link, wait=False)
+            wait(d, "!__S.mesh && !document.querySelector('#lobby').hidden", "Dan looks on the relays, is sent to the working server, and is asked for the passcode", secs=30)
 
-        # 3. both room servers down: an ordinary call still works through the relays
-        stop(PORTS[0])
-        stop(PORTS[1])
-        q = f"signal={S1}&signal2={S2}&relays={RELAY}"
-        e = person("Eve", f"{BASE}/?{q}")
-        f = person("Fay", e.url.split("?")[0] + "?" + q)
-        wait(e, full, "both room servers down: Eve and Fay still meet through the relays", arg=1, secs=30)
+            # 3. both room servers down: an ordinary call still works through the relays
+            stop(PORTS[0])
+            stop(PORTS[1])
+            q = f"signal={S1}&signal2={S2}&relays={RELAY}"
+            e = person("Eve", f"{BASE}/?{q}")
+            f = person("Fay", e.url.split("?")[0] + "?" + q)
+            wait(e, full, "both room servers down: Eve and Fay still meet through the relays", arg=1, secs=30)
         b.close()
 finally:
     for pr in procs.values():

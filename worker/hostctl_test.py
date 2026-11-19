@@ -72,9 +72,13 @@ async def relay_conn(ws):
         subs.pop(ws, None)
 
 
+async def slow_open(connection, request):
+    await asyncio.sleep(2)  # a relay that takes a while to answer: the app waits for it, meanwhile the fast one replays
+
+
 def run_relay():
     async def main():
-        async with websockets.serve(relay_conn, "127.0.0.1", RELAY_PORT, max_size=2**20):
+        async with websockets.serve(relay_conn, "127.0.0.1", RELAY_PORT, max_size=2**20),                 websockets.serve(relay_conn, "127.0.0.1", RELAY_PORT + 1, max_size=2**20, process_request=slow_open):
             await asyncio.Future()
     asyncio.run(main())
 
@@ -103,7 +107,7 @@ with sync_playwright() as p:
         return pg
 
     LIVE = BASE.startswith("https://")  # the live site: the public relays, no test parameters
-    Q = "" if LIVE else f"signal={WS}&relays={RELAY}"
+    Q = "" if LIVE else f"signal={WS}&relays={RELAY},ws://127.0.0.1:{RELAY_PORT + 1}"
     full = "(n) => __S.mesh && __S.mesh.peers.size === n && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')"
 
     def wait(pg, js, what, arg=None, secs=15):
@@ -113,7 +117,7 @@ with sync_playwright() as p:
             return True
         except Exception:
             check(False, what)
-            print("   ", pg.evaluate("() => __S.mesh ? { id: __S.mesh.id, w: __S.mesh.waitingN, shown: __S.mesh.hsShown, seen: [...__S.mesh.helloSeen].map(x => x.slice(0, 4)), viaN: [...__S.mesh.viaN].map(x => x.slice(0, 4)), peers: [...__S.mesh.peers.values()].map(p => p.name + ':' + p.id.slice(0, 4) + ':' + p.state + '/' + p.dc.readyState) } : 'out'"), flush=True)
+            print("   ", pg.evaluate("() => __S.mesh ? { host: __S.isHost, owner: __S.isOwner, locked: __S.locked, talk: __S.perms.talk, hv: __S.mesh.hd.doc && [__S.mesh.hd.doc.hv, __S.mesh.hd.doc.cv, __S.mesh.hd.doc.host.slice(0, 4), __S.mesh.hd.doc.locked], log: __S.mesh.hd.log, id: __S.mesh.id, w: __S.mesh.waitingN, shown: __S.mesh.hsShown, seen: [...__S.mesh.helloSeen].map(x => x.slice(0, 4)), viaN: [...__S.mesh.viaN].map(x => x.slice(0, 4)), peers: [...__S.mesh.peers.values()].map(p => p.name + ':' + p.id.slice(0, 4) + ':' + p.state + '/' + p.dc.readyState) } : 'out'"), flush=True)
             return False
 
     a = person("Ana", f"{BASE}/?{Q}")
@@ -181,6 +185,10 @@ with sync_playwright() as p:
     check(all(pg.evaluate("__S.mesh.peers.size === 2") for pg in (a, o, d)), "nobody else is disturbed")
 
     # the host drops out and comes back (a new id, same device key): straight in, host again, the choices kept
+    # (a choice made just before: the relays replay that document to her when she comes back, before she has
+    # even said hello; it must not be overwritten by a fresh-call one)
+    a.evaluate("__S.mesh.host({ t: 'perm', key: 'caps', on: false })")
+    wait(d, "__S.perms.caps === false", "Ana turns captions off for everyone")
     code = a.evaluate("__S.code")
     key = a.evaluate("localStorage.getItem('juntos.host.' + __S.code)")
     a.context.close()
@@ -193,8 +201,9 @@ with sync_playwright() as p:
     a2.goto(link)
     a2.fill("#name", "Ana")
     a2.click("#enter")
-    wait(a2, full, "Ana comes back to the locked call: straight in, without asking", arg=2, secs=25)
-    wait(a2, "__S.isHost && __S.isOwner && __S.locked === true && __S.perms.talk === false", "she is the host again and the call's choices are kept")
+    if not wait(a2, full, "Ana comes back to the locked call: straight in, without asking", arg=2, secs=25):
+        print("    Beto:", o.evaluate("() => ({ knocks: [...__S.mesh.knocking.keys()].map(x => x.slice(0, 4)), seen: [...__S.mesh.helloSeen].map(x => x.slice(0, 4)), viaN: [...__S.mesh.viaN].map(x => x.slice(0, 4)), peers: [...__S.mesh.peers.values()].map(p => p.name + ':' + p.id.slice(0, 4) + ':' + p.state + '/' + p.dc.readyState), log: __S.mesh.hd.log.slice(-4) })"), flush=True)
+    wait(a2, "__S.isHost && __S.isOwner && __S.locked === true && __S.perms.talk === false && __S.perms.caps === false", "she is the host again and the call's choices are kept")
     ida2 = a2.evaluate("__S.mesh.id")
     wait(d, "(id) => __S.mesh.owners.has(id)", "Dan sees the new Ana as the host", ida2)
     a2.evaluate("__S.mesh.host({ t: 'lock', on: false })")

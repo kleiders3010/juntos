@@ -100,7 +100,12 @@ with sync_playwright() as p:
     a.click(".knock .chip")
     c.wait_for_selector("#ended:not([hidden])", timeout=5000)
     check("let you in" in c.evaluate("document.getElementById('endedMsg').textContent"), "denied: Caro is told nobody let her in")
-    check(not a.query_selector(".knock"), "the card goes away")
+    try:  # (the host hears "gone" from the server a moment after Caro hears "no")
+        a.wait_for_function("!document.querySelector('.knock')", timeout=5000)
+        gone = True
+    except Exception:
+        gone = False
+    check(gone, "the card goes away")
     c.click("#rejoin")
     a.wait_for_selector(".knock", timeout=10000)
     a.click(".knock .primary")
