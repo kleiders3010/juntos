@@ -29,6 +29,8 @@ SEEN = """(sel) => { const v = document.querySelector(sel); if (!v || !v.videoWi
   const c = document.createElement('canvas'); c.width = 32; c.height = 24; const x = c.getContext('2d');
   x.drawImage(v, 0, 0, 32, 24); const d = x.getImageData(0, 0, 32, 24).data; let s = 0;
   for (let i = 0; i < d.length; i += 4) s += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; return s / (d.length / 4) }"""
+TOP = SEEN.replace("let s = 0;", "const ys = [];").replace("s += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]; return s / (d.length / 4)",
+                                                       "ys.push(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]); ys.sort((p, q) => p - q); return ys[Math.floor(ys.length * 0.95)]")
 errors = []
 
 
@@ -70,6 +72,12 @@ with sync_playwright() as p:
     after = o.evaluate(SEEN, OTHER)
     o.locator(".tile:not([data-id=\"me\"])").first.screenshot(path=os.path.join(os.environ.get("TEMP", "."), "juntos_light_after.png"))
     check(after > before + 30, f"she turns it on: Beto sees her brighter ({before:.0f} -> {after:.0f})")
+    top = o.evaluate(TOP, OTHER)
+    check(top < 235, f"without burning out the brightest part (the face: {top:.0f}, white is 255)")
+    plan = a.evaluate("import('/light.js').then(m => m.plan({ mean: 60, top: 252 }))")
+    check(plan["mul"] == 1 and plan["screen"] > 0.5, f"a window behind you: the dark parts are lifted, nothing is multiplied ({plan})")
+    plan = a.evaluate("import('/light.js').then(m => m.plan({ mean: 140, top: 230 }))")
+    check(plan == {"mul": 1, "screen": 0}, "a well lit picture is left alone")
     check(a.evaluate("localStorage.getItem('juntos.light')") == "on", "it is remembered")
     check(a.query_selector('#toasts [name="lightOn"]') is None, "the suggestion goes away")
 
