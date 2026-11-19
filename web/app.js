@@ -1,5 +1,4 @@
 import { Mesh, randomId } from "./rtc.js";
-import { watchDirect } from "./direct.js";
 import { newHost } from "./hostauth.js";
 import { Background, BACKGROUNDS } from "./bg.js";
 import { Light, watchDark } from "./light.js";
@@ -20,7 +19,9 @@ translatePage();
 const t2 = t; // the translator, where "t" is a tile
 
 // ---------- small helpers ----------
-const $ = (id) => document.getElementById(id);
+// the bar's buttons, also those under More (not in the page while the sheet is closed)
+const BARBTNS = {};
+const $ = (id) => document.getElementById(id) || BARBTNS[id] || null;
 const params = new URLSearchParams(location.search);
 // The page and its signaling share one host (meet.jurisgames.com); ?signal= points elsewhere for testing.
 // where the page itself is served from: "/" on meet.jurisgames.com, "/juntos/" on the copy on GitHub Pages
@@ -29,13 +30,7 @@ const BASE = new URL("./", import.meta.url).pathname;
 const MIRROR = location.hostname.endsWith(".github.io");
 const SIGNAL = params.get("signal") || (location.protocol === "https:" && !MIRROR ? `wss://${location.host}` : "wss://meet.jurisgames.com");
 // the second room server (the game host, same room code): used when the first can't be reached; tests: ?signal2=
-let SIGNAL2 = params.get("signal2") || (params.get("signal") ? null : "wss://games.jurisgames.com/juntos");
-// Cloudflare down: the game host straight (direct.js), for new calls and for the call going on
-watchDirect(SIGNAL2, (url) => {
-  const list = S.mesh?.servers, i = list ? list.indexOf(SIGNAL2) : -1;
-  if (i >= 0) list[i] = url;
-  SIGNAL2 = url;
-});
+const SIGNAL2 = params.get("signal2") || (params.get("signal") ? null : "wss://games.jurisgames.com/juntos");
 // Finding each other through public Nostr relays (rtc.js, nsig.js): on by default; a page pointed at a test server
 // (?signal=) uses only that server, unless test relays are given (?relays=ws://...,ws://...)
 const RELAYS = params.get("relays") ? params.get("relays").split(",").filter((u) => /^wss?:\/\//.test(u)) : params.get("signal") ? null : [];
@@ -57,6 +52,7 @@ const ICON = {
   flip: "M20 5h-3.17L15 3H9L7.17 5H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-5 11.5V14H9v2.5L5.5 13 9 9.5V12h6V9.5l3.5 3.5-3.5 3.5z",
   gear: "M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z",
   full: "M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z",
+  pin: "M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z",
   popOut: "M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z",
   vol: "M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z",
   volOff: "M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z",
@@ -536,6 +532,7 @@ function switched(from, tok) {
 
 async function openLobby() {
   show("lobby");
+  $("lobbyCode").textContent = S.code || "";
   $("name").value = S.switchName || localStorage.getItem("name") || "";
   askPass();
   paintSwitch();
@@ -728,7 +725,7 @@ function enterCall(name) {
     if (S.capWant.delete(e.detail.id)) capSync();
     layout();
     paintNet();
-    if (e.detail.name) toast(t("{name} left", { name: e.detail.name }));
+    if (e.detail.name && S.mesh === mesh) toast(t("{name} left", { name: e.detail.name }));
     renderPeople();
   });
   mesh.addEventListener("someone-joining", (e) => toast(t("{name} joined", { name: e.detail.name || t("Someone") })));
@@ -789,7 +786,7 @@ function paintNet() {
     cls = "bad";
   } else if (S.waiting) text = t("Asking to join. Someone in the call will let you in.");
   else if (!S.joined) text = t("Connecting…");
-  else if (!S.mesh.peers.size) text = t("Waiting for others. Invite them with the link.");
+  else if (!S.mesh.peers.size) text = t("Waiting for others");
   else if (S.netq.note()) {
     text = S.netq.note();
     cls = "warn";
@@ -876,7 +873,10 @@ function onMessage(from, m) {
     // polls and Q&A
   } else if (["bitem", "bdel", "bclear", "bstate"].includes(m.k)) {
     ensureBoard().receive(m);
-    if (m.k === "bitem" && S.panel !== "board") badge("bBoard");
+    if (m.k === "bitem" && S.panel !== "board") {
+      badge("bBoard");
+      badge("bMore");
+    }
   }
 }
 
@@ -898,7 +898,7 @@ function makeTile(id, name) {
   const t = document.createElement("div");
   t.className = "tile";
   t.dataset.id = id;
-  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span><button class="bars" hidden><i></i><i></i><i></i><i></i></button></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Full screen")}">${svg("full")}</button>${id === "me" || isPhone ? "" : `<button class="popBtn" name="popOut" title="${t2("Open in new window")}">${svg("popOut")}</button><div class="poppedNote"></div>`}${id === "me" ? "" : `<button class="volBtn" title="${t2("Volume")}"></button><audio autoplay></audio>`}`;
+  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span><button class="bars" hidden><i></i><i></i><i></i><i></i></button></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Pin")}">${svg("pin")}</button>${id === "me" || isPhone ? "" : `<button class="popBtn" name="popOut" title="${t2("Open in new window")}">${svg("popOut")}</button><div class="poppedNote"></div>`}${id === "me" ? "" : `<button class="volBtn" title="${t2("Volume")}"></button><audio autoplay></audio>`}`;
   // the voice plays from its own <audio>: a video element with no picture (camera off, or video not sent to
   // save data) never starts, and its sound would never start with it
   if (id !== "me") t.querySelector("video").muted = true;
@@ -1084,8 +1084,9 @@ function paintPins() {
     const b = x.querySelector(".fsBtn");
     if (!b) continue;
     const on = x.classList.contains("spot");
-    b.innerHTML = svg(on ? "fullExit" : "full");
-    b.title = on ? t2("Unpin") : any ? t2("Pin too") : t2("Full screen");
+    b.innerHTML = svg("pin");
+    b.classList.toggle("on", on);
+    b.title = on ? t2("Unpin") : any ? t2("Pin too") : t2("Pin");
   }
   layout();
 }
@@ -1519,13 +1520,30 @@ function buildBar() {
   const react = button("bReact", "more", "React", openReactions);
   react.innerHTML = `<b class="emoji">✋</b><span>${t("Hand / react")}</span>`;
   extra.push(react);
+  for (const k of Object.keys(BARBTNS)) delete BARBTNS[k];
+  for (const b of extra) BARBTNS[b.id] = b;
+  S.barBtns = BARBTNS;
   if (isPhone) {
     bar.append(button("bChat2", "chat", "Chat", () => openPanel("chat")));
     bar.append(button("bMore", "more", "More", () => openMore(extra)));
+    bar.append(button("bLeave", "end", "Leave", leave, "end"));
   } else {
-    bar.append(...extra);
+    // like Meet's bar (its help page "Learn about the Meet layout for your computer"): the call's own controls in the
+    // middle, the rest under More, People and Chat at the right; one row instead of two
+    const pick = (ids) => ids.map((id) => S.barBtns[id]).filter(Boolean);
+    const main = pick(["bScreen", "bCaps", "bReact"]);
+    const side = pick(["bPeople", "bChat"]);
+    const rest = extra.filter((b) => !main.includes(b) && !side.includes(b));
+    const mid = document.createElement("div");
+    mid.className = "barMid";
+    mid.append(button("bMic", "mic", "Mic", () => setMic(!S.mic)), button("bCam", "cam", "Camera", () => setCam(!S.cam)), ...main, button("bMore", "more", "More", () => openMore(rest)), button("bLeave", "end", "Leave", leave, "end"));
+    const right = document.createElement("div");
+    right.className = "barSide";
+    right.append(...side);
+    bar.innerHTML = "";
+    bar.classList.add("pc");
+    bar.append(document.createElement("div"), mid, right);
   }
-  bar.append(button("bLeave", "end", "Leave", leave, "end"));
   paintToggles();
 }
 
@@ -1542,13 +1560,15 @@ function openMore(items) {
     };
     inner.append(it);
   }
-  const flip = button("bFlip", "flip", "Switch camera", flipCamera);
-  const fo = flip.onclick;
-  flip.onclick = () => {
-    sheet.remove();
-    fo();
-  };
-  inner.append(flip);
+  if (isPhone) {
+    const flip = button("bFlip", "flip", "Switch camera", flipCamera);
+    const fo = flip.onclick;
+    flip.onclick = () => {
+      sheet.remove();
+      fo();
+    };
+    inner.append(flip);
+  }
   sheet.append(inner);
   sheet.onclick = (e) => {
     if (e.target === sheet) sheet.remove(); // a block: an onclick that returns false cancels the click (checkboxes stopped working)
@@ -1557,7 +1577,7 @@ function openMore(items) {
 }
 
 function badge(id) {
-  $(id)?.classList.add("badge");
+  ($(id) || S.barBtns?.[id])?.classList.add("badge");
 }
 
 // ---------- side panel ----------
@@ -1811,7 +1831,7 @@ function onHost(m) {
     S.isHost = m.host;
     S.isOwner = !!m.owner;
     S.act.render();
-    if ($("bBreak")) $("bBreak").hidden = !S.isHost;
+    if (S.barBtns?.bBreak) S.barBtns.bBreak.hidden = !S.isHost;
     S.br.render();
     S.notes.render();
     S.locked = m.locked;
@@ -1870,7 +1890,7 @@ function onHost(m) {
 // what the host side shows changed (I became or stopped being a co-host)
 function hostViews() {
   S.act.render();
-  if ($("bBreak")) $("bBreak").hidden = !S.isHost;
+  if (S.barBtns?.bBreak) S.barBtns.bBreak.hidden = !S.isHost;
   S.br.render();
   S.notes.render();
 }
@@ -3234,6 +3254,7 @@ function captionsSheet() {
   to.disabled = !captr.CAN && !trBy;
   const tn = document.createElement("p");
   tn.className = "small capTrNote";
+  tn.hidden = captr.CAN && !S.capTo;
   tn.textContent = captr.CAN
     ? t("Your browser translates them on this device; nothing is sent anywhere to translate.")
     : trBy
@@ -3260,6 +3281,7 @@ function captionsSheet() {
   };
   to.onchange = () => {
     S.capTo = to.value;
+    tn.hidden = captr.CAN && !S.capTo;
     localStorage.setItem("juntos.capto", to.value);
     S.capNeed.clear();
     if (captr.CAN) for (const l of S.capSeen) captr.prepare(l, to.value, true).then((r) => {
@@ -3339,7 +3361,7 @@ function captionsSheet() {
   inner.append(save);
   const note = document.createElement("p");
   note.className = "small";
-  note.textContent = t("Each person's browser turns their own voice into text. Chrome, Edge and Safari may send the sound to Google, Microsoft or Apple to do it; Firefox does it on the device.");
+  note.textContent = t("Chrome, Edge and Safari may send the sound to Google, Microsoft or Apple to make captions.");
   inner.append(note);
   const done = document.createElement("button");
   done.className = "primary";
@@ -3844,6 +3866,7 @@ async function leave(why) {
   S.att?.end();
   S.mesh?.leave();
   S.mesh = null;
+  $("toasts").replaceChildren();
   S.br.reset();
   S.chat = S.chat.filter((c) => !c.room);
   closePip();

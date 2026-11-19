@@ -47,7 +47,7 @@ with sync_playwright() as p:
     o.evaluate(PORTRAIT)
     o.evaluate("document.getElementById('bMic').click()")  # Beto mutes: only Ana talks
     a.wait_for_function(f"document.querySelector('{OTHER} video').videoHeight > document.querySelector('{OTHER} video').videoWidth", timeout=10000)
-    a.evaluate("document.getElementById('bRec').click()")
+    a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).click()")
     a.click('#recGo')  # the sheet that says what is recorded
     a.wait_for_timeout(3000)
     first = a.evaluate("__S.recorder.main")
@@ -65,7 +65,7 @@ with sync_playwright() as p:
     check(a.evaluate("__S.recorder.floats.length === 1 && __S.recorder.chats.length === 1"), "the reaction and the chat message reach the recording")
     a.wait_for_timeout(900)
     with a.expect_download(timeout=20000) as dl:
-        a.evaluate("document.getElementById('bRec').click()")
+        a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).click()")
     path = os.path.join(OUT, "layout.mp4")
     dl.value.save_as(path)
     b.close()

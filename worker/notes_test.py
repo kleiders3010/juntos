@@ -72,7 +72,8 @@ with sync_playwright() as p:
 
     def notes(pg):
         if pg.is_hidden("#notesPane"):
-            pg.click("#bNotes")
+            pg.click("#bMore")
+            pg.click(".sheet #bNotes")
         pg.wait_for_selector(TA)
 
     a = page("Ana")
@@ -97,7 +98,7 @@ with sync_playwright() as p:
     text = value(o)
     check(all(s in text for s in ["Notes · ", "Attendees: Beto, Ana", "Action items", "[ ] "]), "the template has the date, who is in the call, notes and action items")
     a.wait_for_function("[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('Beto is taking notes'))", timeout=5000)
-    check(a.evaluate("document.querySelector('#bNotes').classList.contains('badge')"), "Ana is told Beto is taking notes (notice and a dot on the button)")
+    check(a.evaluate("__S.barBtns.bNotes.classList.contains('badge') && document.querySelector('#bMore').classList.contains('badge')"), "Ana is told Beto is taking notes (notice and a dot on the button)")
     notes(a)
     check(value(a) == text, "Ana sees the same notes")
     check(o.evaluate("document.activeElement.matches('#notesPane textarea') && document.activeElement.selectionStart") == text.index("- ") + 2,

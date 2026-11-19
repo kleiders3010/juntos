@@ -31,7 +31,7 @@ def tiles(pg):
 
 def choose(pg, key, value):
     if not pg.query_selector(".layoutSheet"):
-        pg.evaluate("(() => { if (!document.getElementById('bLayout')) document.getElementById('bMore')?.click(); document.getElementById('bLayout').click() })()")
+        pg.evaluate("(() => { if (!(document.getElementById('bLayout') || __S.barBtns.bLayout)) document.getElementById('bMore')?.click(); (document.getElementById('bLayout') || __S.barBtns.bLayout).click() })()")
         pg.wait_for_selector(".layoutSheet")
     pg.click(f'.layoutSheet .seg[data-key="{key}"] button[data-v="{value}"]')
     pg.wait_for_timeout(250)
@@ -153,7 +153,7 @@ with sync_playwright() as p:
     # the big board still floats everyone, whatever the layout
     choose(a, "layout", "spotlight")
     close_sheet(a)
-    a.evaluate("(() => { if (!document.getElementById('bBoard')) document.getElementById('bMore')?.click(); document.getElementById('bBoard').click() })()")
+    a.evaluate("(() => { if (!(document.getElementById('bBoard') || __S.barBtns.bBoard)) document.getElementById('bMore')?.click(); (document.getElementById('bBoard') || __S.barBtns.bBoard).click() })()")
     a.wait_for_selector("#boardPane:not([hidden]) .bTool")
     a.click("#boardMax")
     a.wait_for_timeout(400)

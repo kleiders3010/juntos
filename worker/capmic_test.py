@@ -74,7 +74,7 @@ with sync_playwright() as p:
     check(a.evaluate("__sr[0].track === __S.micTrack"), "Ana's captions listen to the call's own microphone")
 
     # Ana switches microphone in Devices: captions follow
-    a.evaluate("document.getElementById('bDev').click()")
+    a.evaluate("(document.getElementById('bDev') || __S.barBtns.bDev).click()")
     a.wait_for_selector(".devRow")
     n = a.evaluate(f"{MIC_SELECT}.options.length")
     old = a.evaluate("__S.micTrack.id")

@@ -12,7 +12,7 @@ from playwright.sync_api import sync_playwright
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
-OPEN_SWITCH = "(() => { if (!document.getElementById('bSwitch')) document.getElementById('bMore')?.click(); document.getElementById('bSwitch').click() })()"
+OPEN_SWITCH = "(() => { if (!(document.getElementById('bSwitch') || __S.barBtns.bSwitch)) document.getElementById('bMore')?.click(); (document.getElementById('bSwitch') || __S.barBtns.bSwitch).click() })()"
 errors = []
 
 

@@ -58,7 +58,7 @@ with sync_playwright() as p:
     check(not a.evaluate("document.getElementById('grid').classList.contains('hasSpot')"), "Esc goes back to everyone")
 
     # devices: the sheet lists them; switching the microphone sends the new one to Beto
-    a.evaluate("document.getElementById('bDev').click()")
+    a.evaluate("(document.getElementById('bDev') || __S.barBtns.bDev).click()")
     a.wait_for_selector(".devices select")
     rows = a.evaluate("[...document.querySelectorAll('.devRow')].map(r => r.firstChild.textContent + ':' + r.querySelector('select').options.length)")
     check(any(r.startswith("Camera") for r in rows) and any(r.startswith("Microphone") for r in rows), f"devices sheet: {rows}")
@@ -86,20 +86,20 @@ with sync_playwright() as p:
     a.mouse.click(5, 5)
     check(not a.evaluate("!!document.querySelector('.volPop')"), "a tap elsewhere closes the volume box")
     # first a sheet says what will be recorded; the choices made there are remembered next time
-    a.evaluate("document.getElementById('bRec').click()")
+    a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).click()")
     check(not a.evaluate("!!__S.recorder"), "Record first shows what will be recorded (not recording yet)")
     before = a.evaluate(SHEET)
     a.click('.seg button[data-layout="grid"]')
     a.uncheck('.recSheet input[name="chat"]')
     a.click(".recSheet .ghost")
-    a.evaluate("document.getElementById('bRec').click()")
+    a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).click()")
     check(a.evaluate(SHEET) == before, "Cancel keeps the old choices")
     a.click('.seg button[data-layout="grid"]')
     a.uncheck('.recSheet input[name="chat"]')
     a.click("#recGo")
     check(a.evaluate("__S.recorder.opts.layout === 'grid' && !__S.recorder.opts.chat"), "the recording uses what was chosen")  # pinned: layout ids speaker/grid are stored on devices
     a.wait_for_timeout(2500)
-    check(a.evaluate("document.getElementById('bRec').classList.contains('recording')"), "record button turns red")
+    check(a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).classList.contains('recording')"), "record button turns red")
     dot = a.evaluate("document.getElementById('recDot').hidden ? '' : document.getElementById('recDot').textContent")
     a.wait_for_timeout(1200)
     dot2 = a.evaluate("document.getElementById('recDot').textContent")
@@ -109,11 +109,11 @@ with sync_playwright() as p:
     with a.expect_download(timeout=20000):
         a.evaluate("document.getElementById('recDot').click()")
     o.wait_for_function("document.getElementById('recDot').hidden", timeout=5000)
-    a.evaluate("document.getElementById('bRec').click()")
+    a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).click()")
     check(a.evaluate(SHEET)[0] == "grid" and a.evaluate("!document.querySelector('.recSheet input[name=\"chat\"]').checked"),
           "next time the sheet remembers the choices")  # pinned: layout ids speaker/grid are stored on devices
     a.click(".recSheet .ghost")
-    check(a.evaluate("document.getElementById('recDot').hidden && !document.getElementById('bRec').classList.contains('recording')"), "tapping the timer stops and saves")
+    check(a.evaluate("document.getElementById('recDot').hidden && !(document.getElementById('bRec') || __S.barBtns.bRec).classList.contains('recording')"), "tapping the timer stops and saves")
 
     # a connection that gave up shows Try again, and Try again reconnects
     a.evaluate("(() => { const p = [...__S.mesh.peers.values()][0]; p.state = 'failed'; __S.mesh.giveUp(p) })()")

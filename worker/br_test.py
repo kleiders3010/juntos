@@ -68,10 +68,11 @@ with sync_playwright() as p:
         connected(pg, 3)
     ids = {n: pg.evaluate("__S.mesh.id") for n, pg in (("Ana", a), ("Beto", o), ("Carla", c), ("Dani", d))}
 
-    check(a.is_visible("#bBreak") and not o.is_visible("#bBreak"), "only the host has the breakout rooms button")
+    check(not a.evaluate("__S.barBtns.bBreak.hidden") and o.evaluate("__S.barBtns.bBreak.hidden"), "only the host has the breakout rooms button")
 
     # ---- set up and open ----
-    a.click("#bBreak")
+    a.click("#bMore")
+    a.click(".sheet #bBreak")
     a.wait_for_selector("#brPane select[name=move]")
     # (people joined after the host's panel was first drawn: they must still be spread, not left in the main call)
     check(a.locator("#brPane .brRoom[data-room='0']").count() == 0 and a.locator("#brPane .brRoom select").count() == 3,

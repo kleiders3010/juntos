@@ -37,7 +37,8 @@ with sync_playwright() as p:
 
     def panel(pg, tab):
         if pg.is_hidden("#actPane"):
-            pg.click("#bAct")
+            pg.click("#bMore")
+            pg.click(".sheet #bAct")
         pg.click(f'#actPane .actTabs [data-v="{tab}"]')
 
     def poll_card(pg, q):
@@ -77,7 +78,7 @@ with sync_playwright() as p:
     o.locator('#pollDraft input[name="opt"]').nth(2).fill("Both")
     o.click("#pollDraft .primary")
     a.wait_for_function("[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('Pizza or tacos?'))", timeout=5000)
-    check(a.evaluate("document.querySelector('#bAct').classList.contains('badge')"), "Ana is told Beto started a poll (notice and a dot on the button)")
+    check(a.evaluate("__S.barBtns.bAct.classList.contains('badge') && document.querySelector('#bMore').classList.contains('badge')"), "Ana is told Beto started a poll (notice and a dot on the button)")
     panel(a, "polls")
     card = poll_card(a, "Pizza or tacos?")
     card.locator("label", has_text="Tacos").click()

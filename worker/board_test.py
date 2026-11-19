@@ -35,7 +35,7 @@ def drag(pg, tool, a, b, steps=8):
 
 
 def open_board(pg):
-    pg.evaluate("(() => { if (!document.getElementById('bBoard')) document.getElementById('bMore')?.click(); document.getElementById('bBoard').click() })()")
+    pg.evaluate("(() => { if (!(document.getElementById('bBoard') || __S.barBtns.bBoard)) document.getElementById('bMore')?.click(); (document.getElementById('bBoard') || __S.barBtns.bBoard).click() })()")
     pg.wait_for_selector("#boardPane:not([hidden]) .bTool")
     pg.wait_for_timeout(300)
 
@@ -129,12 +129,12 @@ with sync_playwright() as p:
     o.wait_for_timeout(400)
     o.screenshot(path=f"{OUT}/phone-board-big.png")
     # recording while the board is big: the board is the main picture
-    a.evaluate("document.getElementById('bRec').click()")
+    a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).click()")
     a.click("#recGo")
     a.wait_for_timeout(800)
     check(a.evaluate("__S.recorder.main") == "board", "recording with the big board shows the board")  # pinned: the board's pseudo-tile id in recordings
     with a.expect_download(timeout=20000):
-        a.evaluate("document.getElementById('bRec').click()")
+        a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).click()")
 
     # Clear asks first; the second tap clears for everyone
     a.click(".bActions .chip")

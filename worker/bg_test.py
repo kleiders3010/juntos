@@ -23,7 +23,7 @@ with sync_playwright() as p:
     o = person(); o.goto(f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}"); o.fill("#name", "Beto"); o.click("#enter")
     o.wait_for_selector(OTHER, timeout=20000); o.wait_for_timeout(3000)
     assert o.evaluate(FRAMES, OTHER) >= 20, "no picture before any background"
-    a.evaluate("document.getElementById('bBg').click()"); a.wait_for_timeout(500)
+    a.evaluate("(document.getElementById('bBg') || __S.barBtns.bBg).click()"); a.wait_for_timeout(500)
     for label in ["Green", "None", "Warm", "Blur", "None"]:
         a.evaluate(f"[...document.querySelectorAll('.bgChoice')].find(e => e.title === '{label}').click()")
         if label != "None":  # the first switch loads the model (a few seconds on a software GPU)

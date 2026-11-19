@@ -82,7 +82,7 @@ with sync_playwright() as p:
     check(a.query_selector('#toasts [name="lightOn"]') is None, "the suggestion goes away")
 
     # under a background effect the brightened picture is the one used
-    a.evaluate("document.getElementById('bBg').click()")
+    a.evaluate("(document.getElementById('bBg') || __S.barBtns.bBg).click()")
     a.wait_for_timeout(500)
     a.evaluate("[...document.querySelectorAll('.bgChoice')].find(e => e.title === 'Blur').click()")
     a.wait_for_function("(window.__juntosBg?.stats.draws || 0) > 5", timeout=30000)
@@ -92,7 +92,7 @@ with sync_playwright() as p:
     a.keyboard.press("Escape")
 
     # turned off in the settings
-    a.evaluate("document.getElementById('bDev').click()")
+    a.evaluate("(document.getElementById('bDev') || __S.barBtns.bDev).click()")
     a.wait_for_selector("input[name=light]", timeout=5000)
     check(a.is_checked("input[name=light]"), "the settings show it on")
     a.click("input[name=light]", force=True)

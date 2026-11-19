@@ -55,10 +55,11 @@ with sync_playwright() as p:
     a.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
     a.wait_for_function("document.querySelector('.tile[data-id]:not([data-id=\"me\"]) video')?.srcObject", timeout=30000)
 
-    check(a.is_visible("#bPip"), "the call has a small window button")
+    check(a.evaluate("!!__S.barBtns.bPip"), "the call has a small window button")
     has_doc = a.evaluate("'documentPictureInPicture' in window")
     check(has_doc, "this Edge has the small window (Document Picture-in-Picture)")
-    a.click("#bPip")
+    a.click("#bMore")
+    a.click(".sheet #bPip")
     a.wait_for_function("window.__S.pip && __S.pip.document.querySelectorAll('#pipGrid .tile').length === 2", timeout=10000)
     w = "__S.pip.document"
     first = a.evaluate(f"{w}.querySelector('#pipGrid .tile:first-child .nm').textContent")
@@ -67,7 +68,7 @@ with sync_playwright() as p:
     a.wait_for_function(f"{w}.querySelector('#pipGrid .tile:first-child video').videoWidth > 0", timeout=10000)
     check(True, "Beto's video plays in it")
     check(a.evaluate(f"{w}.querySelector('#pipGrid video').muted"), "the small window adds no second copy of the sound")
-    check(a.evaluate("document.querySelector('#bPip').classList.contains('on')"), "the button shows the small window is open")
+    check(a.evaluate("__S.barBtns.bPip.classList.contains('on')"), "the button shows the small window is open")
 
     # the buttons in the small window
     a.evaluate(f"{w}.getElementById('qMic').click(); 0")
@@ -95,13 +96,14 @@ with sync_playwright() as p:
     # back to the call
     a.evaluate(f"{w}.getElementById('qBack').click(); 0")
     a.wait_for_function("!__S.pip", timeout=5000)
-    check(not a.evaluate("document.querySelector('#bPip').classList.contains('on')"), "Back to the call closes the small window")
+    check(not a.evaluate("__S.barBtns.bPip.classList.contains('on')"), "Back to the call closes the small window")
 
     # switching tabs is wired to open it
     check(a.evaluate("typeof __ms.enterpictureinpicture === 'function'"), "switching tabs can open the small window")  # pinned: the browser API name
 
     # leaving closes it
-    a.click("#bPip")
+    a.click("#bMore")
+    a.click(".sheet #bPip")
     a.wait_for_function("!!__S.pip", timeout=10000)
     a.click("#bLeave")
     a.wait_for_selector("#ended:not([hidden])")
@@ -112,7 +114,8 @@ with sync_playwright() as p:
     c = page("Carla", NO_DOC_PIP)
     enter(c, "Carla", join)
     c.wait_for_function("document.querySelector('.tile[data-id]:not([data-id=\"me\"]) video')?.videoWidth > 0", timeout=30000)
-    c.click("#bPip")
+    c.click("#bMore")
+    c.click(".sheet #bPip")
     c.wait_for_timeout(1500)
     el = c.evaluate("document.pictureInPictureElement ? document.pictureInPictureElement.closest('.tile').dataset.id : (document.querySelector('.toast')?.textContent || 'none')")
     check(el not in ("me", "none"), f"without the small window: someone else's video floats, or a clear note ({el})")
