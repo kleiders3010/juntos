@@ -675,6 +675,14 @@ function onMessage(from, m) {
     if (m.hand !== undefined) setHand(from, m.hand, who, true);
   } else if (m.k === "hand") {
     setHand(from, m.on, who);
+  } else if (m.k === "lowerhand") {
+    if (!roleOf(from) || typeof m.id !== "string") return;
+    if ((m.id === "*" || m.id === S.mesh.id) && S.hands.has("me")) {
+      toggleHand();
+      toast(t("{name} lowered your hand", { name: who }));
+    }
+    if (m.id === "*") for (const h of [...S.hands]) h !== "me" && setHand(h, false, "", true);
+    else if (m.id !== S.mesh.id) setHand(m.id, false, "", true);
   } else if (m.k === "react") {
     react(from, m.e);
   } else if (m.k === "cap") {
@@ -973,6 +981,11 @@ function watchMe() {
       loud = Math.sqrt(sum / buf.length) > 6;
     }
     tile.classList.toggle("speaking", loud);
+    // like Meet: a raised hand goes down once its owner has spoken a little
+    if (loud && S.hands.has("me") && (S.handTalk = (S.handTalk || 0) + 150) > 2500) {
+      toggleHand();
+      toast(t("Your hand was lowered because you spoke"));
+    }
     if (capOn && loud) {
       capTalk += 150;
       if (capTalk > 12000) capWarn("silent", false); // 12 s of talking and not one word of text
@@ -1872,6 +1885,7 @@ function renderPeople() {
     if (id && S.isHost && role !== "host" && (role !== "co" || S.isOwner)) li.append(sureButton(t("Remove"), t("Remove?"), () => S.mesh.host({ t: "remove", id })));
     ul.append(li);
   };
+  handsRow(ul);
   add(`${localStorage.getItem("name")} ${t("(you)")}`, S.hands.has("me") ? "✋" : "", null);
   // hosts first, then raised hands (they may be asking to speak), then everyone else as they came
   const order = (p) => (roleOf(p.id) === "host" ? 0 : roleOf(p.id) ? 1 : S.hands.has(p.id) ? 2 : 3);
@@ -1885,10 +1899,55 @@ function renderPeople() {
   S.br.refresh();
 }
 
+// Raised hands, like Meet's: in the order they went up; hosts lower one or all
+function handsRow(ul) {
+  if (!S.hands.size) return;
+  const li = document.createElement("li");
+  li.className = "handsRow";
+  const head = document.createElement("div");
+  head.className = "handsHead";
+  head.textContent = t("Raised hands ({n})", { n: S.hands.size });
+  li.append(head);
+  if (S.isHost && S.hands.size > 1) {
+    const all = document.createElement("button");
+    all.className = "chip";
+    all.name = "lowerAll";
+    all.textContent = t("Lower all");
+    all.onclick = () => lowerHand("*");
+    head.append(all);
+  }
+  const ol = document.createElement("ol");
+  for (const id of S.hands) {
+    const row = document.createElement("li");
+    const nm = document.createElement("span");
+    nm.textContent = id === "me" ? `${localStorage.getItem("name")} ${t("(you)")}` : S.mesh.peers.get(id)?.name || "";
+    row.append(nm);
+    if (id === "me" || S.isHost) {
+      const b = document.createElement("button");
+      b.className = "chip";
+      b.name = "lowerHand";
+      b.textContent = t("Lower hand");
+      b.onclick = () => (id === "me" ? toggleHand() : lowerHand(id));
+      row.append(b);
+    }
+    ol.append(row);
+  }
+  li.append(ol);
+  ul.append(li);
+}
+// a host lowers someone's hand ("*": everyone's); each person lowers their own when told
+function lowerHand(id) {
+  S.mesh.roomcast({ k: "lowerhand", id });
+  if (id === "*") for (const h of [...S.hands]) h !== "me" && setHand(h, false, "", true);
+  else setHand(id, false, "", true);
+  if (id === "*" && S.hands.has("me")) toggleHand();
+}
+
 // hand and reactions
 function setHand(id, on, who, quiet) {
   if (on) S.hands.add(id);
   else S.hands.delete(id);
+  if (id === "me") S.handTalk = 0;
   const tile = document.querySelector(`.tile[data-id="${id}"]`);
   if (tile) tile.querySelector(".hand").hidden = !on;
   if (on && !quiet && id !== "me") toast(t("{name} raised a hand", { name: who }));

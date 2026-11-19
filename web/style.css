@@ -481,3 +481,8 @@ body:has(#brBar:not([hidden])) .toasts { top: calc(var(--brH, 60px) + 24px); } /
 #bCaps.warn { box-shadow: 0 0 0 2px #f59e0b; }
 #bCaps.warn::after { content: "!"; position: absolute; top: -4px; right: -4px; width: 16px; height: 16px; border-radius: 50%; background: #f59e0b; color: #111; font: 700 11px/16px system-ui; text-align: center; }
 .capWarn { color: #fde68a; font-weight: 600; }
+.people .handsRow { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; border-bottom: 1px solid #374151; }
+.people .handsHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); }
+.people .handsRow ol { margin: 0; padding-left: 1.6em; display: flex; flex-direction: column; gap: 4px; }
+.people .handsRow ol li { display: list-item; }
+.people .handsRow ol li > * { vertical-align: middle; margin-right: 8px; }
