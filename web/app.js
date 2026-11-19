@@ -1,6 +1,7 @@
 import { Mesh, randomId } from "./rtc.js";
 import { newHost } from "./hostauth.js";
 import { Background, BACKGROUNDS } from "./bg.js";
+import { Light, watchDark } from "./light.js";
 import { Board, COLORS, SIZES, TOOLS } from "./board.js";
 import { Recorder } from "./rec.js";
 import { t, translatePage } from "./i18n.js";
@@ -67,12 +68,23 @@ const ICON = {
 };
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
 
-function toast(text) {
+function toast(text, action) {
   const t = document.createElement("div");
   t.className = "toast";
   t.textContent = text;
+  if (action) {
+    const b = document.createElement("button");
+    b.className = "toastBtn";
+    b.name = action.name || "";
+    b.textContent = action.label;
+    b.onclick = () => {
+      t.remove();
+      action.run();
+    };
+    t.append(b);
+  }
   $("toasts").appendChild(t);
-  setTimeout(() => t.remove(), 4000);
+  setTimeout(() => t.remove(), action ? 10000 : 4000);
 }
 
 function show(page) {
@@ -277,11 +289,48 @@ async function getMedia() {
   }
 }
 
+// the camera picture before any background: brightened when "Adjust video lighting" is on
+function camSrc() {
+  if (!S.camTrack) return null;
+  if (!S.lightOn) return S.camTrack;
+  if (S.light?.camera !== S.camTrack) {
+    S.light?.stop();
+    S.light = new Light(S.camTrack);
+  }
+  return S.light.track;
+}
+// turning the adjustment on or off: the background effect is rebuilt on the new picture
+async function setLight(on) {
+  S.lightOn = on;
+  localStorage.setItem("juntos.light", on ? "on" : "off");
+  if (!on) {
+    S.light?.stop();
+    S.light = null;
+  } else S.darkWatch?.();
+  if (S.bg) {
+    S.bg.stop();
+    S.bg = null;
+  }
+  if (S.bgMode !== "none" && S.camTrack) await applyBackground(S.bgMode);
+  refreshLocalVideo();
+  await S.mesh?.setTracks(audioOut(), videoOut());
+}
+// like Meet: while it is off, a picture that stays too dark gets the suggestion to turn it on (once per call)
+function suggestLight() {
+  S.darkWatch?.();
+  S.darkWatch = null;
+  if (S.lightOn || !S.camTrack || localStorage.getItem("juntos.light") === "off") return;
+  S.darkWatch = watchDark(S.camTrack, () => {
+    S.darkWatch = null;
+    if (!S.lightOn && S.cam) toast(t("You look dark"), { label: t("Adjust lighting"), name: "lightOn", run: () => setLight(true) });
+  });
+}
+
 // what my picture is: a shared screen goes out whether or not the camera is on
 function videoOut() {
   if (S.screen) return S.screen;
   if (!S.cam) return null;
-  return (S.bg && S.bg.track) || S.camTrack;
+  return S.bg && S.bgMode !== "none" ? S.bg.track : camSrc();
 }
 
 async function applyBackground(mode) {
@@ -291,7 +340,11 @@ async function applyBackground(mode) {
   if (mode === "none") {
     if (S.bg) await S.bg.set("none"); // back to the live camera (stop() alone left the call on the last drawn picture)
   } else {
-    if (!S.bg) S.bg = new Background(S.camTrack);
+    if (S.bg && S.bg.camera !== camSrc()) {
+      S.bg.stop();
+      S.bg = null;
+    }
+    if (!S.bg) S.bg = new Background(camSrc());
     S.bg.onBroken = () => toast(t("Backgrounds don't work on this device"));
     try {
       await S.bg.set(mode);
@@ -305,7 +358,7 @@ async function applyBackground(mode) {
 }
 
 function refreshLocalVideo() {
-  const t = S.screen || (S.bg && S.bgMode !== "none" ? S.bg.track : S.camTrack);
+  const t = S.screen || (S.bg && S.bgMode !== "none" ? S.bg.track : camSrc());
   const stream = t ? new MediaStream([t]) : null;
   const pv = $("previewVideo");
   if (pv.srcObject?.getVideoTracks()[0] !== t) pv.srcObject = stream;
@@ -532,6 +585,7 @@ function enterCall(name) {
   S.knocks = new Map();
   paintKnocks();
   watchMuted();
+  suggestLight();
   S.mesh = new Mesh({
     room: S.code,
     name,
@@ -1566,7 +1620,11 @@ function renderBackgrounds() {
 $("bgFile").onchange = async (e) => {
   const f = e.target.files[0];
   if (!f || !S.camTrack) return;
-  if (!S.bg) S.bg = new Background(S.camTrack);
+  if (S.bg && S.bg.camera !== camSrc()) {
+    S.bg.stop();
+    S.bg = null;
+  }
+  if (!S.bg) S.bg = new Background(camSrc());
   await S.bg.setImage(f);
   S.bgMode = "img:custom";
   refreshLocalVideo();
@@ -2869,6 +2927,7 @@ async function useCamera(video) {
     if (S.bgMode !== "none") await applyBackground(S.bgMode);
     refreshLocalVideo();
     await S.mesh?.setTracks(audioOut(), videoOut());
+    if (S.darkWatch) suggestLight();
     return true;
   } catch (_) {
     toast(t("Couldn't switch camera"));
@@ -2943,6 +3002,7 @@ function useSpeaker(id) {
 }
 S.sink = localStorage.getItem("sinkId") || "";
 S.noise = localStorage.getItem("juntos.noise") !== "off"; // the browser's own noise reduction (on unless turned off)
+S.lightOn = localStorage.getItem("juntos.light") === "on"; // off until chosen, like Meet (which suggests it when you look dark)
 
 // a short two-note chime as a WAV, so it can be played on the chosen speaker
 function chime() {
@@ -3037,6 +3097,13 @@ async function openDevices() {
     startMeter();
   };
   inner.append(noise);
+  const light = document.createElement("label");
+  light.className = "check";
+  light.innerHTML = `<input type="checkbox" name="light"><span></span>`;
+  light.lastChild.textContent = t("Adjust video lighting (may slow down older devices)");
+  light.firstChild.checked = S.lightOn;
+  light.firstChild.onchange = () => setLight(light.firstChild.checked);
+  inner.append(light);
   inner.append(S.netq.section());
   const tests = document.createElement("div");
   tests.className = "devTests";
@@ -3352,6 +3419,10 @@ $("homeBtn").onclick = () => {
   S.micTrack = null;
   S.bg?.stop();
   S.bg = null;
+  S.light?.stop();
+  S.light = null;
+  S.darkWatch?.();
+  S.darkWatch = null;
   history.pushState({}, "", BASE);
   route();
 };
