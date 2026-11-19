@@ -6,6 +6,7 @@ import { Board, COLORS, SIZES, TOOLS } from "./board.js";
 import { Recorder } from "./rec.js";
 import { t, translatePage, LANG } from "./i18n.js";
 import * as captr from "./captr.js";
+import { Attendance } from "./attend.js";
 import { Activities } from "./act.js";
 import { Breakout } from "./breakout.js";
 import { Notes } from "./notes.js";
@@ -607,6 +608,15 @@ function enterCall(name) {
   });
   const mesh = S.mesh;
   diag("enter");
+  // attendance, for the hosts (People > Save attendance, and after leaving)
+  S.att ||= new Attendance();
+  S.att.start(S.code, name);
+  S.wasHost = false;
+  mesh.addEventListener("peer", (e) => {
+    const p = mesh.peers.get(e.detail.id);
+    if (p?.name) S.att.came(e.detail.id, p.name);
+  });
+  mesh.addEventListener("left", (e) => S.att.went(e.detail.id));
   navigator.mediaDevices?.enumerateDevices?.().then((l) => (S.devKinds = l.reduce((o, d) => ((o[d.kind] = (o[d.kind] || 0) + 1), o), {}))).catch(() => {});
   const states = new Map();
   for (const ev of ["signal-open", "signal-lost", "joined", "full"]) mesh.addEventListener(ev, (e) => diag(ev, e.detail?.count != null ? { count: e.detail.count } : undefined));
@@ -1997,15 +2007,22 @@ function renderPeople() {
     ul.append(li);
   }
   if (S.isHost) {
+    S.wasHost = true;
     const li = document.createElement("li");
     li.className = "hostRow";
+    const att = document.createElement("button");
+    att.className = "chip";
+    att.name = "attSave";
+    att.textContent = t("Save attendance (.csv)");
+    att.title = t("Who came, when they joined and left, and how long they stayed (from when you joined)");
+    att.onclick = () => S.att.download(t);
     const lock = document.createElement("button");
     lock.className = "chip" + (S.locked ? " on" : "");
     lock.id = "lockBtn";
     lock.textContent = S.locked ? t("Unlock the call") : t("Lock the call");
     lock.title = t("When locked, new people ask to join and you let them in.");
     lock.onclick = () => S.mesh.host({ t: "lock", on: !S.locked });
-    li.append(lock);
+    li.append(lock, att);
     ul.append(li);
     ul.append(passRow());
     ul.append(permRow());
@@ -3522,6 +3539,7 @@ async function leave(why) {
   S.knocks?.clear();
   paintKnocks();
   S.netq.stop();
+  S.att?.end();
   S.mesh?.leave();
   S.mesh = null;
   S.br.reset();
@@ -3536,6 +3554,8 @@ async function leave(why) {
   $("endedAct").onclick = () => S.act.download();
   $("endedNotes").hidden = !S.notes.any();
   $("endedNotes").onclick = () => S.notes.download();
+  $("endedAtt").hidden = !(S.wasHost && S.att?.any());
+  $("endedAtt").onclick = () => S.att.download(t);
   closePanel();
   callNotice(false);
   show("ended");

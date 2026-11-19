@@ -76,7 +76,7 @@ with sync_playwright() as p:
     people(o)
     o.wait_for_selector("input[name='perm-chat']")
     check(not o.query_selector(".coBtn"), "a co-host can't make co-hosts")
-    check(not o.evaluate(f"!!({row('Ana')})?.querySelector('.sure, .chip')"), "nor remove or silence the host")
+    check(not o.evaluate(f"!!({row('Ana')})?.querySelector('.sure, .chip:not([name=pinAll])')"), "nor remove or silence the host (pinning the host for everyone is allowed, like Meet)")
     o.evaluate(f"__S.mesh.host({{ t: 'cohost', id: '{caro}', on: true }})")
     a.wait_for_timeout(800)
     check(not c.evaluate("__S.isHost"), "and his made-up co-host command does nothing")
