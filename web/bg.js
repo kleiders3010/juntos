@@ -26,9 +26,9 @@ export const BACKGROUNDS = [
   { id: "none", label: "None" },
   { id: "blur", label: "Blur" },
   { id: "blur-strong", label: "Strong blur" },
-  { id: "img:room", label: "Warm", src: "/img/bg-room.jpg" },
-  { id: "img:plants", label: "Green", src: "/img/bg-plants.jpg" },
-  { id: "img:office", label: "Cool", src: "/img/bg-office.jpg" },
+  { id: "img:room", label: "Warm", src: new URL("img/bg-room.jpg", import.meta.url).pathname },
+  { id: "img:plants", label: "Green", src: new URL("img/bg-plants.jpg", import.meta.url).pathname },
+  { id: "img:office", label: "Cool", src: new URL("img/bg-office.jpg", import.meta.url).pathname },
 ];
 
 /**

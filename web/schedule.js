@@ -95,7 +95,7 @@ export function passOf(code) {
 // "#" never reaches any server, the page reads it and fills the passcode in.
 export function callUrl(code) {
   const p = passOf(code);
-  return `${location.origin}/r/${code}` + (p ? `#p=${encodeURIComponent(p)}` : "");
+  return new URL(`r/${code}`, import.meta.url).href + (p ? `#p=${encodeURIComponent(p)}` : "");
 }
 export function newPass() {
   const a = new Uint32Array(1);
@@ -456,7 +456,7 @@ export function paintUpcoming(box, o) {
     const row = el("div", { className: "upItem" });
     const info = el("button", { className: "upInfo", name: "details" }, el("b", { textContent: c.title || t("Juntos call") }), el("span", { textContent: when(at, c.dur, t, true) }));
     info.onclick = () => plannedSheet(c, o);
-    const open = el("a", { className: "chip", name: "open", href: `/r/${c.code}`, textContent: at - now < 15 * 60000 ? t("Join now") : t("Open") });
+    const open = el("a", { className: "chip", name: "open", href: new URL(`r/${c.code}`, import.meta.url).pathname, textContent: at - now < 15 * 60000 ? t("Join now") : t("Open") });
     const del = el("button", { className: "upDel", name: "remove", title: t("Remove from this list"), textContent: "×" });
     del.onclick = () => {
       store(load().filter((x) => x.code !== c.code));

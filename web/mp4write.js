@@ -12,7 +12,7 @@ function loadLame() {
   if (window.lamejs) return Promise.resolve();
   lamePromise ||= new Promise((ok, fail) => {
     const s = document.createElement("script");
-    s.src = "/vendor/lamejs/lame.min.js";
+    s.src = new URL("vendor/lamejs/lame.min.js", import.meta.url).href;
     s.onload = ok;
     s.onerror = fail;
     document.head.appendChild(s);

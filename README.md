@@ -32,6 +32,13 @@ install, open source.
 Audio, video, chat and the board go directly between the people in the call (WebRTC). A tiny Cloudflare Worker
 (`worker/`) only introduces people to each other when they join a room. Per room it keeps only a hash of the host's key, whether the call is locked, a hash of its passcode if it has one, what the hosts let everyone do, and (by the random per-visit id, no names) co-hosts, speaking choices and who was let in; deleted a month after the room was last used.
 
+No piece has to be up for a call to work; each job has a second way:
+- Finding each other: public Nostr relays (`web/nsig.js`, encrypted with a key made from the call code); if none answers, the room server.
+- The room server (passcodes, calls over 16 people, older calls): the Cloudflare Worker, or the same code on Node (`kinetic/`, runs on our game host at `wss://games.jurisgames.com/juntos`); each call picks one by its code and moves to the other after 6 s without an answer.
+- Host controls (lock, mute, co-hosts, remove): a document signed by the host's key (`web/hostauth.js`) that every device checks, so no server has to.
+- The site: meet.jurisgames.com, and the same pages on GitHub Pages at https://kleiders3010.github.io/juntos/ (`tools/mirror.mjs`, built by `.github/workflows/pages.yml` on every push). Calls work across both.
+- Tests that take a piece away: `worker/failover_test.py`, `worker/serverless_test.py`, `worker/hostctl_test.py`, `worker/mirror_test.py`.
+
 ## Run locally
     cd worker && npx wrangler dev --port 8787
     # serve web/ with any static server that falls back to index.html, then open

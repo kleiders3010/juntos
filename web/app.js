@@ -19,7 +19,11 @@ const t2 = t; // the translator, where "t" is a tile
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 // The page and its signaling share one host (meet.jurisgames.com); ?signal= points elsewhere for testing.
-const SIGNAL = params.get("signal") || (location.protocol === "https:" ? `wss://${location.host}` : "wss://meet.jurisgames.com");
+// where the page itself is served from: "/" on meet.jurisgames.com, "/juntos/" on the copy on GitHub Pages
+const BASE = new URL("./", import.meta.url).pathname;
+// the copy on GitHub Pages (used when Cloudflare is down) has no room server of its own
+const MIRROR = location.hostname.endsWith(".github.io");
+const SIGNAL = params.get("signal") || (location.protocol === "https:" && !MIRROR ? `wss://${location.host}` : "wss://meet.jurisgames.com");
 // the second room server (the game host, same room code): used when the first can't be reached; tests: ?signal2=
 const SIGNAL2 = params.get("signal2") || (params.get("signal") ? null : "wss://games.jurisgames.com/juntos");
 // Finding each other through public Nostr relays (rtc.js, nsig.js): on by default; a page pointed at a test server
@@ -174,7 +178,7 @@ function feedback() {
 
 // ---------- routing ----------
 function route() {
-  const m = location.pathname.match(/^\/r\/([a-z0-9-]{4,64})$/);
+  const m = location.pathname.slice(BASE.length - 1).match(/^\/r\/([a-z0-9-]{4,64})$/);
   if (m) {
     S.code = m[1];
     // a link with the passcode in it (".../r/code#p=123456"): keep it, and take it off the address bar
@@ -183,7 +187,7 @@ function route() {
       try {
         localStorage.setItem(`juntos.pass.${S.code}`, hp[1]);
       } catch {}
-      history.replaceState(history.state, "", `/r/${S.code}${location.search}`);
+      history.replaceState(history.state, "", `${BASE}r/${S.code}${location.search}`);
     }
     openLobby();
   } else {
@@ -214,7 +218,7 @@ $("start").onclick = () => {
     localStorage.setItem(`juntos.host.${code}`, key);
   } catch {}
   keepSecurity(code, sec);
-  history.pushState({}, "", `/r/${code}`);
+  history.pushState({}, "", `${BASE}r/${code}`);
   route();
 };
 // planned calls: "Schedule for later" and the list of calls planned on this device
@@ -236,7 +240,7 @@ $("joinForm").onsubmit = (e) => {
   e.preventDefault();
   const code = codeFrom($("joinCode").value);
   if (!code) return toast(t("That code doesn't look right"));
-  history.pushState({}, "", `/r/${code}`);
+  history.pushState({}, "", `${BASE}r/${code}`);
   route();
 };
 
@@ -3141,7 +3145,7 @@ $("feedbackHome").onclick = $("endedFeedback").onclick = (e) => {
   e.preventDefault();
   feedback();
 };
-$("invite").onclick = () => inviteSheet(S.hasPass ? callUrl(S.code) : `${location.origin}/r/${S.code}`, { t, toast, isPhone, locked: S.locked, pass: S.hasPass ? passOf(S.code) : "" });
+$("invite").onclick = () => inviteSheet(S.hasPass ? callUrl(S.code) : `${location.origin}${BASE}r/${S.code}`, { t, toast, isPhone, locked: S.locked, pass: S.hasPass ? passOf(S.code) : "" });
 
 async function leave(why) {
   // why: set when the call ended you (removed, not let in); a click passes an event
@@ -3173,7 +3177,7 @@ async function leave(why) {
 // ---------- "you're in a call" while the app is in the background (phones) ----------
 // A quiet notification while you're in another app (tap it to come back), and the phone's call
 // controls (mute, camera, hang up) where the system shows them.
-const swReady = "serviceWorker" in navigator ? navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready).catch(() => null) : Promise.resolve(null);
+const swReady = "serviceWorker" in navigator ? navigator.serviceWorker.register(`${BASE}sw.js`).then(() => navigator.serviceWorker.ready).catch(() => null) : Promise.resolve(null);
 async function callNotice(show) {
   const reg = await swReady;
   if (!reg) return;
@@ -3183,8 +3187,8 @@ async function callNotice(show) {
   reg.showNotification(t("You're in a call"), {
     tag: "juntos-call",
     body: n ? t("With {n} more. Tap to go back.", { n }) : t("Tap to go back."),
-    icon: "/img/icon-192.png",
-    badge: "/img/icon-192.png",
+    icon: `${BASE}img/icon-192.png`,
+    badge: `${BASE}img/icon-192.png`,
     silent: true,
     requireInteraction: true,
     data: { url: location.href },
@@ -3199,7 +3203,7 @@ function callControls() {
   const ms = navigator.mediaSession;
   if (!ms) return;
   try {
-    ms.metadata = new MediaMetadata({ title: t("Call on Juntos"), artist: S.code, artwork: [{ src: "/img/icon-512.png", sizes: "512x512", type: "image/png" }] });
+    ms.metadata = new MediaMetadata({ title: t("Call on Juntos"), artist: S.code, artwork: [{ src: `${BASE}img/icon-512.png`, sizes: "512x512", type: "image/png" }] });
     ms.setActionHandler("hangup", () => leave());
     ms.setActionHandler("togglemicrophone", () => setMic(!S.mic));
     ms.setActionHandler("togglecamera", () => setCam(!S.cam));
@@ -3218,7 +3222,7 @@ $("homeBtn").onclick = () => {
   S.micTrack = null;
   S.bg?.stop();
   S.bg = null;
-  history.pushState({}, "", "/");
+  history.pushState({}, "", BASE);
   route();
 };
 
