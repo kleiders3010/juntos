@@ -4,7 +4,8 @@ import { Background, BACKGROUNDS } from "./bg.js";
 import { Light, watchDark } from "./light.js";
 import { Board, COLORS, SIZES, TOOLS } from "./board.js";
 import { Recorder } from "./rec.js";
-import { t, translatePage } from "./i18n.js";
+import { t, translatePage, LANG } from "./i18n.js";
+import * as captr from "./captr.js";
 import { Activities } from "./act.js";
 import { Breakout } from "./breakout.js";
 import { Notes } from "./notes.js";
@@ -745,7 +746,9 @@ function onMessage(from, m) {
   } else if (m.k === "react") {
     react(from, m.e);
   } else if (m.k === "cap") {
-    if (S.capsOn) showCap(from, who, String(m.text || "").slice(0, 500), !!m.final);
+    const lang = typeof m.lang === "string" ? m.lang.slice(0, 20) : "";
+    if (lang) S.capSeen.add(captr.base(lang));
+    if (S.capsOn) showCap(from, who, String(m.text || "").slice(0, 500), !!m.final, false, lang);
   } else if (m.k === "capwant") {
     capWanted(from, !!m.on && may(from, "caps"), who);
   } else if (m.k === "capno") {
@@ -2359,6 +2362,9 @@ S.capsOn = localStorage.getItem("juntos.captions") === "on";
 S.capShare = localStorage.getItem("juntos.capshare") !== "off";
 S.capSize = localStorage.getItem("juntos.capsize") || "large";
 S.capLang = localStorage.getItem("juntos.caplang") || "";
+S.capTo = captr.CAN ? localStorage.getItem("juntos.capto") || "" : ""; // translate the others' captions into this
+S.capSeen = new Set(); // the languages the others' captions came in
+S.capNeed = new Set(); // languages whose translation the browser downloads only after a click
 S.capWant = new Set(); // who in the call wants captions (peer ids)
 S.capLines = new Map(); // speaker id -> the line they're saying now: { el, done, note, entry, timer, pause }
 S.transcript = []; // { at, name, text }: one per caption line
@@ -2553,7 +2559,7 @@ function capStart() {
 
 function capSend(text, final) {
   text = text.slice(0, 500);
-  const m = { k: "cap", text, final };
+  const m = { k: "cap", text, final, lang: S.capLang || navigator.language || "en-US" };
   for (const id of S.capWant) if (S.br.same(id)) S.mesh?.sendTo(id, m);
   if (S.capsOn) showCap("me", t("You"), text, final);
 }
@@ -2601,7 +2607,61 @@ function capEndLine(id, L) {
   L.timer = setTimeout(() => L.el.remove(), CAP_GONE);
 }
 
-function showCap(id, name, text, final, note) {
+// the words on screen: translated when I translate captions and they came in another language. The first words show
+// as said until their translation is there; after that a line only changes when its new translation is ready.
+function capText(L, s, lang, entry) {
+  const to = S.capTo;
+  L.s = s;
+  if (!to || !lang || captr.base(lang) === captr.base(to)) {
+    L.el.lastChild.textContent = s;
+    return;
+  }
+  const st = captr.status(lang, to);
+  if (st !== "ok") {
+    L.el.lastChild.textContent = s;
+    // ready in a moment: the line on screen gets translated then, not only the next words
+    if (!st)
+      captr.prepare(lang, to).then((r) => {
+        capTrNote(lang, r);
+        if (r === "ok" && L.el.isConnected && S.capTo === to) capText(L, L.s, lang, null);
+      });
+    return;
+  }
+  if (!L.trd) L.el.lastChild.textContent = s;
+  const n = (L.seq = (L.seq || 0) + 1);
+  captr.translate(s, lang, to).then((x) => {
+    if (x == null || L.seq !== n) return;
+    L.trd = true;
+    L.el.lastChild.textContent = x;
+    L.el.classList.add("tr");
+  });
+  if (entry) {
+    const src = entry.text;
+    captr.translate(src, lang, to).then((x) => {
+      if (x != null && entry.text === src) Object.assign(entry, { tr: x, to });
+    });
+  }
+}
+
+// a translation the browser can't make yet (it downloads after a click) or at all: said once per language
+const capTold = new Set();
+function capTrNote(lang, r) {
+  const l = captr.base(lang);
+  if (r === "need") S.capNeed.add(l);
+  else S.capNeed.delete(l);
+  if ((r !== "need" && r !== "no") || capTold.has(`${l}${r}`)) return;
+  capTold.add(`${l}${r}`);
+  const vars = { lang: captr.langName(l, LANG), to: captr.langName(S.capTo, LANG) };
+  toast(r === "need" ? t("Captions in {lang}: click anywhere to get their translation", vars) : t("Your browser can't translate {lang} into {to}", vars));
+}
+// any click or key is the go-ahead the browser wants before it downloads a translation
+for (const ev of ["pointerdown", "keydown"])
+  addEventListener(ev, () => {
+    if (!S.capTo) return;
+    for (const l of S.capNeed) captr.prepare(l, S.capTo, true).then((r) => capTrNote(l, r));
+  }, true);
+
+function showCap(id, name, text, final, note, lang) {
   let L = S.capLines.get(id);
   if (L && (note || L.note || !L.el.isConnected)) {
     capEndLine(id, L);
@@ -2622,7 +2682,7 @@ function showCap(id, name, text, final, note) {
   }
   let s = final ? L.done : `${L.done} ${text}`.trim();
   if (s.length > 2 * CAP_LINE) s = "… " + s.slice(-2 * CAP_LINE).replace(/^\S*\s/, ""); // one breath with no pause
-  L.el.lastChild.textContent = s;
+  capText(L, s, note ? "" : lang, final && !note ? L.entry : null);
   clearTimeout(L.timer);
   L.timer = setTimeout(() => {
     L.el.remove();
@@ -2794,6 +2854,7 @@ function saveTranscript() {
       lines.push(`[${pad(a.getHours())}:${pad(a.getMinutes())}] ${x.name}`);
     }
     lines.push(x.text);
+    if (x.tr) lines.push(`  (${captr.langName(x.to, LANG)}) ${x.tr}`);
     last = x;
   }
   const head = `Juntos ${S.code || ""}, ${d.toLocaleDateString()}`;
@@ -2847,6 +2908,56 @@ function captionsSheet() {
   sl.className = "small";
   sl.textContent = t("Text size");
   inner.append(sl, size);
+  // translated captions (only this device's view; nobody else is told)
+  const tl = document.createElement("p");
+  tl.className = "small";
+  tl.textContent = t("Translate captions into");
+  const to = document.createElement("select");
+  to.name = "capTo";
+  for (const v of ["", ...captr.TARGETS]) {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = v ? captr.langName(v, LANG) : t("Don't translate");
+    o.selected = S.capTo === v;
+    to.append(o);
+  }
+  to.disabled = !captr.CAN;
+  const tn = document.createElement("p");
+  tn.className = "small capTrNote";
+  tn.textContent = captr.CAN
+    ? t("Your browser translates them on this device; nothing is sent anywhere to translate.")
+    : t("Translated captions need Chrome or Edge on a computer.");
+  const gets = document.createElement("div");
+  const paintGets = () => {
+    gets.replaceChildren();
+    if (!S.capTo) return;
+    for (const l of S.capNeed) {
+      const b = document.createElement("button");
+      b.className = "chip";
+      b.name = "capGet";
+      b.textContent = t("Translate from {lang} (download)", { lang: captr.langName(l, LANG) });
+      b.onclick = () => {
+        b.disabled = true;
+        captr.prepare(l, S.capTo, true).then((r) => {
+          capTrNote(l, r);
+          paintGets();
+        });
+      };
+      gets.append(b);
+    }
+  };
+  to.onchange = () => {
+    S.capTo = to.value;
+    localStorage.setItem("juntos.capto", to.value);
+    S.capNeed.clear();
+    for (const l of S.capSeen) captr.prepare(l, to.value, true).then((r) => {
+      capTrNote(l, r);
+      paintGets();
+    });
+    paintGets();
+  };
+  paintGets();
+  inner.append(tl, to, tn, gets);
   if (S.capBroken) {
     const w = document.createElement("p");
     w.className = "small capWarn";
