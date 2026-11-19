@@ -2426,7 +2426,9 @@ addEventListener("keydown", (e) => {
   }
   if (e.key === " ") {
     // hold Space to talk while muted (on the board Space moves the board; a focused field keeps its Space)
-    if (S.panel === "board" || (e.target !== document.body && !e.target.closest("#bar, #grid"))) return;
+    // a button that just hid itself (the "You're muted" note's Unmute) keeps the keys: count those as the page's
+    const tgt = e.target.checkVisibility?.() === false ? document.body : e.target;
+    if (S.panel === "board" || (tgt !== document.body && !tgt.closest("#bar, #grid"))) return;
     e.preventDefault();
     if (e.repeat || S.mic || S.ptt || !S.micTrack) return;
     if (!may("me", "talk")) return askToSpeak();
