@@ -1,5 +1,6 @@
 import { VIDEO_CAP } from "./net.js";
 import { NostrSignal, NOSTR_OK } from "./nsig.js";
+import { Big, BIG_OK, makeKeys } from "./big.js";
 // Direct (mesh) WebRTC between everyone in a room. The signaling server only passes handshakes;
 // audio, video, chat and the board go device to device.
 //
@@ -44,6 +45,23 @@ export class Mesh extends EventTarget {
     this.closed = false;
     // who gets my sound and picture (breakout rooms: only the people in my room); everyone by default
     this.route = () => true;
+    // big calls (past MESH_MAX): the room server arranges a tree, big.js carries sound, pictures and messages
+    this.big = null;
+    this.known = new Map(); // id -> name: everyone the server says is in the call
+    this.pubs = new Map(); // id -> their signing key (messages passed along the tree are signed)
+    this.meHost = !!this.key;
+    this.keysP = BIG_OK ? makeKeys().then((k) => (this.keys = k)).catch(() => null) : Promise.resolve(null);
+  }
+
+  get amHost() {
+    return this.meHost;
+  }
+
+  // how many people this device offers to pass the call on to, in a big call
+  get kidCap() {
+    if (!BIG_OK) return 1;
+    const phone = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || "");
+    return phone ? 2 : (navigator.hardwareConcurrency || 4) >= 8 ? 4 : 3;
   }
 
   emit(type, detail) {
@@ -96,7 +114,11 @@ export class Mesh extends EventTarget {
       this.helloSeen.add(m.from);
       if (this.srv) return void this.ns.send({ t: "srv", from: this.id, to: m.from });
       if (this.peers.has(m.from)) return;
-      if (this.peers.size + 1 >= MESH_MAX) return void this.ns.send({ t: "full", from: this.id, to: m.from });
+      if (this.peers.size + 1 >= MESH_MAX) {
+        // the call is as big as a direct link to everyone allows: the server arranges it as a tree from here
+        if (BIG_OK) return this.goServer();
+        return void this.ns.send({ t: "full", from: this.id, to: m.from });
+      }
       this.ns.send({ t: "here", from: this.id, to: m.from, name: this.name });
       this.viaN.add(m.from);
       this.emit("someone-joining", { id: m.from, name });
@@ -137,10 +159,12 @@ export class Mesh extends EventTarget {
   connectServer() {
     const ws = new WebSocket(`${this.signalUrl}/ws/${this.room}`);
     this.ws = ws;
-    ws.onopen = () => {
+    ws.onopen = async () => {
       this.tries = 0;
+      await this.keysP;
+      if (this.ws !== ws || ws.readyState !== 1) return;
       this.emit("signal-open");
-      this.sendSignal({ t: "hello", id: this.id, name: this.name, ...(this.key ? { key: this.key, claim: true, ...(this.opts ? { opts: this.opts } : {}) } : {}), ...(this.knock ? { knock: true } : {}), ...(this.pass ? { pass: this.pass } : {}) });
+      this.sendSignal({ t: "hello", id: this.id, name: this.name, cap: this.kidCap, ...(this.keys ? { pub: this.keys.pub } : {}), ...(this.key ? { key: this.key, claim: true, ...(this.opts ? { opts: this.opts } : {}) } : {}), ...(this.knock ? { knock: true } : {}), ...(this.pass ? { pass: this.pass } : {}) });
     };
     ws.onmessage = (e) => this.onSignal(JSON.parse(e.data));
     ws.onclose = () => {
@@ -186,6 +210,16 @@ export class Mesh extends EventTarget {
       for (const c of (this.hostQueue || []).splice(0)) this.sendSignal(c);
       for (const p of m.peers) if (p.host) this.hosts.add(p.id);
       for (const p of m.peers) if (p.role === "host") this.owners.add(p.id);
+      for (const p of m.peers) {
+        this.known.set(p.id, p.name);
+        if (p.pub) this.pubs.set(p.id, p.pub);
+      }
+      if (m.big) {
+        // a big call: no link to everyone; the tree message says whom I link to, the rest come along it
+        if (!this.goBig()) return;
+        for (const p of m.peers) if (!this.peers.has(p.id)) this.farStub(p.id, p.name);
+        return this.emit("joined", { count: m.peers.length });
+      }
       for (const p of m.peers) if (!this.peers.has(p.id)) this.call(p.id, p.name);
       this.emit("joined", { count: m.peers.length });
     } else if (m.t === "join") {
@@ -197,11 +231,16 @@ export class Mesh extends EventTarget {
       if (m.host) this.hosts.add(m.id);
       else this.hosts.delete(m.id);
       if (m.role === "host") this.owners.add(m.id);
+      this.known.set(m.id, m.name);
+      if (m.pub) this.pubs.set(m.id, m.pub);
+      if (this.big && !this.peers.has(m.id)) this.farStub(m.id, m.name);
       this.emit("someone-joining", { id: m.id, name: m.name });
     } else if (["room", "lock", "knock", "knock-gone", "waiting", "denied", "removed", "passcode", "pass", "perms", "role"].includes(m.t)) {
       // host controls: who may come in, mute, remove, the passcode (the server checks who is the host)
       if (m.t === "denied" || m.t === "removed" || m.t === "passcode") this.closed = true;
       if (m.t === "pass") this.pass = m.pass || "";
+      if (m.t === "room") this.meHost = !!m.host;
+      if (m.t === "role" && m.id === this.id) this.meHost = !!m.role;
       if (m.t === "role" && m.id !== this.id) {
         if (m.role) this.hosts.add(m.id);
         else this.hosts.delete(m.id);
@@ -211,8 +250,9 @@ export class Mesh extends EventTarget {
       // The room server lost their link, but our own connection to them still works (a phone changing
       // network): they're still here, and come back to the server in a moment. If they really left, that
       // connection closes too and they're gone at once; if it stays up but they never come back, after 30 s.
+      this.known.delete(m.id);
       const p = this.peers.get(m.id);
-      if (p && !m.removed && p.state === "connected" && p.dc.readyState === "open") {
+      if (p && !p.far && !m.removed && p.state === "connected" && p.dc.readyState === "open") {
         p.away = true;
         clearTimeout(p.leaveTimer);
         p.leaveTimer = setTimeout(() => this.peers.get(m.id) === p && p.away && this.drop(m.id), 30000);
@@ -227,6 +267,8 @@ export class Mesh extends EventTarget {
       }
     } else if (m.t === "full") {
       this.emit("full", { max: m.max });
+    } else if (m.t === "tree") {
+      this.onTree(m);
     } else if (m.t === "signal") {
       // one person's handshake messages are handled in order (an answer or a candidate must not overtake
       // the offer it belongs to); a failure is logged instead of silently leaving a half-made connection
@@ -247,15 +289,17 @@ export class Mesh extends EventTarget {
 
   peer(id, name) {
     let p = this.peers.get(id);
-    if (p) return p;
+    if (p && !p.far) return p;
+    const was = p;
     // once a relay was needed in this call, new connections include it from the start
     const pc = new RTCPeerConnection({ iceServers: this.relayList ? [...ICE, ...this.relayList] : ICE });
     const dc = pc.createDataChannel("juntos", { negotiated: true, id: 0 });
     // cid: this connection's own id; rcid: the id of their end of it. Every handshake message carries both, so
     // a late answer or candidate meant for an older connection between the same two people is dropped instead
     // of being applied to the new one (which left connections stuck half-made in big calls).
-    p = { id, pc, dc, name: name || "", stream: new MediaStream(), audio: null, video: null, state: "connecting", cid: randomId(), rcid: null };
+    p = { id, pc, dc, name: name || (was && was.name) || "", stream: was ? was.stream : new MediaStream(), audio: null, video: null, state: "connecting", cid: randomId(), rcid: null };
     this.peers.set(id, p);
+    if (this.big) this.mediaChannel(p);
     // No direct connection within a few seconds (mobile networks often block it): try the relay now
     // instead of waiting the half minute a browser takes to give up.
     p.timer = setTimeout(() => p.state !== "connected" && this.viaRelay(p), 6000);
@@ -302,10 +346,75 @@ export class Mesh extends EventTarget {
       } catch (_) {
         return;
       }
+      // in a big call messages come signed and are passed along the tree
+      if (this.big && msg && msg._r) return this.big.onRelay(id, e.data, msg);
       this.emit("message", { from: id, msg });
     };
     this.emit("peer", { id });
     return p;
+  }
+
+  // ---- big calls ----
+
+  // the call became (or is) a tree; false on a device that can't take part in one (no WebCodecs)
+  goBig() {
+    if (this.big) return true;
+    if (!BIG_OK || !this.keys) {
+      this.emit("full", { max: MESH_MAX });
+      this.leave();
+      return false;
+    }
+    this.big = new Big(this);
+    // sound and pictures now travel as encoded data along the tree, not on each connection's own tracks
+    for (const p of this.peers.values()) {
+      p.audio?.sender.replaceTrack(null).catch(() => {});
+      p.video?.sender.replaceTrack(null).catch(() => {});
+    }
+    this.big.setTracks(this.audioTrack, this.videoTrack);
+    this.emit("big", {});
+    return true;
+  }
+
+  // someone in the call I have no connection to: what reaches me from them comes along the tree
+  farStub(id, name, stream) {
+    const p = { id, far: true, pc: null, dc: { readyState: "far", send() {} }, name: name || "", stream: stream || new MediaStream(), audio: null, video: null, state: "connected", cid: "" };
+    this.peers.set(id, p);
+    this.emit("peer", { id });
+    return p;
+  }
+
+  mediaChannel(p) {
+    if (p.mc || !p.pc) return;
+    // unordered and never re-sent: a late piece of sound is worth nothing
+    p.mc = p.pc.createDataChannel("m", { negotiated: true, id: 1, ordered: false, maxRetransmits: 0 });
+    p.mc.binaryType = "arraybuffer";
+    p.mc.onmessage = (e) => this.big && e.data instanceof ArrayBuffer && this.big.onMedia(p.id, e.data);
+  }
+
+  // the server says whom I link to: my parent (I call them) and my children (they call me)
+  onTree(m) {
+    if (!this.goBig()) return;
+    const kids = Array.isArray(m.kids) ? m.kids.filter((k) => typeof k === "string") : [];
+    const parent = typeof m.parent === "string" ? m.parent : null;
+    const links = new Set(parent ? [parent, ...kids] : kids);
+    this.big.links = links;
+    for (const [id, name] of this.known) if (!this.peers.has(id)) this.farStub(id, name);
+    for (const [id, p] of [...this.peers]) {
+      if (p.far || links.has(id)) continue;
+      if (!this.known.has(id)) {
+        this.drop(id); // they left (the server said so); the connection was only waiting to close
+        continue;
+      }
+      // no longer a link: close it; their own tracks on it go, what comes along the tree stays
+      this.forget(p);
+      for (const t of p.stream.getTracks()) if (!(t instanceof MediaStreamTrackGenerator)) p.stream.removeTrack(t);
+      this.farStub(id, p.name, p.stream);
+    }
+    if (parent && (!this.peers.has(parent) || this.peers.get(parent).far)) this.call(parent, this.known.get(parent));
+    for (const id of links) {
+      const p = this.peers.get(id);
+      if (p && !p.far) this.mediaChannel(p);
+    }
   }
 
   // A direct connection failed (strict networks, some mobile carriers): try again through a relay.
@@ -373,6 +482,7 @@ export class Mesh extends EventTarget {
   call(id, name) {
     const p = this.peer(id, name);
     p.offerer = true;
+    if (this.big) return;
     p.audio = p.pc.addTransceiver("audio", { direction: "sendrecv" });
     p.video = p.pc.addTransceiver("video", { direction: "sendrecv" });
     if (this.audioTrack && this.route(id)) p.audio.sender.replaceTrack(this.audioTrack);
@@ -500,6 +610,7 @@ export class Mesh extends EventTarget {
     const p = this.peers.get(id);
     if (!p) return;
     this.forget(p);
+    this.big?.drop(id);
     this.emit("left", { id, name: p.name });
     this.retune();
   }
@@ -507,6 +618,7 @@ export class Mesh extends EventTarget {
   async setTracks(audio, video) {
     this.audioTrack = audio || null;
     this.videoTrack = video || null;
+    if (this.big) return this.big.setTracks(this.audioTrack, this.videoTrack);
     for (const p of this.peers.values()) {
       const to = this.route(p.id);
       if (p.audio) await p.audio.sender.replaceTrack(to ? this.audioTrack : null).catch(() => {});
@@ -526,17 +638,21 @@ export class Mesh extends EventTarget {
   }
 
   broadcast(msg) {
+    if (this.big) return this.big.post(msg);
     const s = JSON.stringify(msg);
     for (const p of this.peers.values()) if (p.dc.readyState === "open") p.dc.send(s);
   }
 
   // only to the people in my room (chat, captions, hands, reactions in a breakout room)
   roomcast(msg) {
+    if (this.big) return this.big.post(msg, null, true);
     const s = JSON.stringify(msg);
     for (const p of this.peers.values()) if (p.dc.readyState === "open" && this.route(p.id)) p.dc.send(s);
   }
 
   sendTo(id, msg) {
+    // a big call sends only the pictures on stage, at one size: no per-viewer picture requests
+    if (this.big) return msg && msg.k === "want" ? undefined : this.big.post(msg, id);
     const p = this.peers.get(id);
     if (p && p.dc.readyState === "open") p.dc.send(JSON.stringify(msg));
   }
@@ -556,6 +672,7 @@ export class Mesh extends EventTarget {
     clearInterval(this.aloneTimer);
     this.closed = true;
     for (const id of [...this.peers.keys()]) this.drop(id);
+    this.big?.close();
     try {
       this.ws.close();
     } catch (_) {}

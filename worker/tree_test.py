@@ -1,0 +1,202 @@
+# A big call as a tree: N people (more than the 16 a link to everyone allows), all on this machine. When the 17th
+# joins, the room server turns the call into a tree: each device links to its parent and a few children, and
+# sound, pictures and messages are passed along it, device to device (web/big.js).
+# Checks: everyone is in the call and sees everyone; each device holds only its tree links (all open); everyone
+# hears everyone; the host's picture reaches everyone; a chat message reaches everyone; a message forged in
+# someone else's name is passed on by nobody and shown by nobody; when someone in the middle of the tree leaves,
+# the tree closes over the gap and everyone still hears everyone.
+# Heavy (N browsers on one machine): run through the machine queue.
+# Run: python tree_test.py [people (default 20)] [cameras-on (default 3)] [base-url]
+import sys
+import time
+sys.stdout.reconfigure(encoding='utf-8')
+from playwright.sync_api import sync_playwright
+
+N = int(sys.argv[1]) if len(sys.argv) > 1 else 20
+CAMS = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+BASE = sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1:8797"
+WS = BASE.replace("http", "ws", 1)
+PER_BROWSER = 4
+ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+errors = []
+
+# my links: all real connections with both channels open, and exactly the ones the tree gave me
+LINKS_OK = """() => { const m = __S.mesh; if (!m.big) return false;
+  const real = [...m.peers.values()].filter(p => !p.far);
+  return real.length === m.big.links.size && real.every(p => m.big.links.has(p.id) && p.dc.readyState === 'open' && p.mc && p.mc.readyState === 'open') }"""
+HEARD = "() => Object.fromEntries([...__S.mesh.big.rx.entries()].map(([s, r]) => [s, [r.aN || 0, r.vN || 0]]))"
+
+
+def check(ok, what):
+    print(("ok   " if ok else "FAIL ") + what, flush=True)
+    if not ok:
+        errors.append(what)
+
+
+with sync_playwright() as p:
+    browsers = []
+    pages = []
+
+    def page(i):
+        if i % PER_BROWSER == 0:
+            browsers.append(p.chromium.launch(headless=True, channel="msedge", args=ARGS))
+        ctx = browsers[-1].new_context(locale="en-US", permissions=["camera", "microphone"], viewport={"width": 1280, "height": 760})
+        ctx.add_init_script("window.__netFake = { rtt: 60, loss: 0, jitter: 5 }")
+        pg = ctx.new_page()
+        pg.on("pageerror", lambda e, i=i: errors.append(f"pageerror (p{i}): {e}"))
+        return pg
+
+    def wait_all(js, pgs, secs, what):
+        t = time.time()
+        while time.time() - t < secs:
+            if all(pg.evaluate(js) for pg in pgs):
+                check(True, f"{what} ({time.time() - t:.0f} s)")
+                return True
+            time.sleep(2)
+        bad = [i for i, pg in enumerate(pgs) if not pg.evaluate(js)]
+        check(False, f"{what}: not on {len(bad)} of {len(pgs)}")
+        for i in bad[:4]:
+            print("   ", pgs[i].evaluate("""() => { const m = __S.mesh; return { big: !!m.big, peers: m.peers.size,
+              links: m.big ? [...m.big.links] : null, real: [...m.peers.values()].filter(p => !p.far).map(p => p.name + ':' + p.state + '/' + p.dc.readyState + '/' + (p.mc ? p.mc.readyState : '-')) } }"""), flush=True)
+        return False
+
+    def hearing(pgs, ids, what):
+        h1 = [pg.evaluate(HEARD) for pg in pgs]
+        time.sleep(6)
+        h2 = [pg.evaluate(HEARD) for pg in pgs]
+        deaf = 0
+        for i, (a, b) in enumerate(zip(h1, h2)):
+            mine = pgs[i].evaluate("__S.mesh.id")
+            miss = [n for s, n in ids.items() if s != mine and not (b.get(s, [0])[0] > a.get(s, [0])[0])]
+            if miss:
+                deaf += 1
+                print(f"    {pgs[i].evaluate('__S.mesh.name')} doesn't hear {miss}", flush=True)
+        check(deaf == 0, f"{what}: everyone hears everyone ({len(pgs)} people)")
+        return h1, h2
+
+    t0 = time.time()
+    a = page(0)
+    a.goto(f"{BASE}/?signal={WS}")
+    a.click("#start")
+    a.wait_for_selector("#lobby:not([hidden])")
+    a.fill("#name", "P0")
+    a.click("#enter")
+    a.wait_for_selector("#call:not([hidden])")
+    link = f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}"
+    pages.append(a)
+    for i in range(1, N):
+        pg = page(i)
+        pg.goto(link)
+        pg.wait_for_selector("#lobby:not([hidden])")
+        if i >= CAMS:
+            pg.click("#pCam")
+        pg.fill("#name", f"P{i}")
+        pg.click("#enter")
+        pg.wait_for_selector("#call:not([hidden])")
+        pages.append(pg)
+        print(f"  P{i} in ({time.time() - t0:.0f} s)", flush=True)
+
+    wait_all(f"__S.mesh.peers.size === {N - 1} && !!__S.mesh.big", pages, 60, f"{N} people: everyone is in the big call and sees everyone")
+    wait_all(LINKS_OK, pages, 90, "each device holds only its tree links, all open")
+    links = [pg.evaluate("__S.mesh.big.links.size") for pg in pages]
+    over = sum(pg.evaluate("__S.mesh.big.links.size > __S.mesh.kidCap + 1") for pg in pages)
+    check(over == 0, f"no device links to more than its parent and the children it offered to feed (most links: {max(links)})")
+    ids = {pg.evaluate("__S.mesh.id"): pg.evaluate("__S.mesh.name") for pg in pages}
+    host = pages[0].evaluate("__S.mesh.id")
+    time.sleep(3)
+    h1, h2 = hearing(pages, ids, "the tree")
+    sees = sum(1 for i, (x, y) in enumerate(zip(h1, h2)) if i == 0 or y.get(host, [0, 0])[1] > x.get(host, [0, 0])[1])
+    check(sees == N, f"the host's picture reaches everyone ({sees} of {N})")
+    for i, pg in enumerate(pages):
+        st = pg.evaluate("__S.mesh.big.stats")
+        if i < 4 or i == N - 1:
+            print(f"  P{i}: links {links[i]}, sent {st['sent']}, passed on {st['fwd']}, got {st['got']}, dropped {st['dropped']}, bad {st['bad']}", flush=True)
+
+    # a chat message from someone near the bottom reaches everyone
+    pages[N - 1].evaluate("__S.mesh.broadcast({ k: 'chat', text: 'hello along the tree' })")
+    wait_all("__S.chat.some(c => c.text === 'hello along the tree')", pages[:N - 1], 15, "a chat message reaches everyone")
+    # a message in the host's name with a wrong signature is passed on by nobody and shown by nobody
+    forger = pages[N - 2]
+    forger.evaluate("""(h) => { const l = [...__S.mesh.big.links][0];
+      __S.mesh.peers.get(l).dc.send(JSON.stringify({ _r: 1, s: h, n: 987654, to: '', rc: 0, m: { k: 'chat', text: 'forged' }, sig: 'AAAA' })) }""", host)
+    time.sleep(4)
+    shown = sum(pg.evaluate("__S.chat.some(c => c.text === 'forged')") for pg in pages)
+    bad = sum(pg.evaluate("__S.mesh.big.stats.bad") for pg in pages)
+    check(shown == 0 and bad == 1, f"a message forged in the host's name: shown by {shown}, stopped by the first device that got it (got by {bad})")
+
+    # breakout rooms: a device whose room holds only the host plays only the host (the tree still carries the rest)
+    r = pages[N - 1]
+    r.evaluate("(h) => { __S.mesh.__route = __S.mesh.route; __S.mesh.route = (id) => id === h }", host)
+    time.sleep(1)
+    x1 = r.evaluate(HEARD)
+    time.sleep(5)
+    x2 = r.evaluate(HEARD)
+    others = [s for s in x2 if s != host and x2[s][0] > x1.get(s, [0])[0]]
+    check(x2.get(host, [0])[0] > x1.get(host, [0])[0] and not others, f"in a breakout room only the room is played (others still played: {len(others)})")
+    r.evaluate("__S.mesh.route = __S.mesh.__route")
+
+    # someone in the middle of the tree leaves: their children hang on elsewhere
+    mid = next(i for i in range(1, N) if pages[i].evaluate("__S.mesh.big.links.size") >= 3)
+    gone = pages[mid].evaluate("__S.mesh.id")
+    print(f"  P{mid} (links {links[mid]}) leaves", flush=True)
+    pages[mid].click("#bLeave")
+    rest = [pg for i, pg in enumerate(pages) if i != mid]
+    wait_all(f"__S.mesh.peers.size === {N - 2}", rest, 30, "everyone sees them gone")
+    wait_all(LINKS_OK, rest, 60, "the tree closes over the gap: every device's links open again")
+    del ids[gone]
+    hearing(rest, ids, "after the leave")
+
+    # a device that can't take part in a tree (no WebCodecs track generator, like some browsers today)
+    NOTREE = "delete window.MediaStreamTrackGenerator"
+
+    def joiner(url, name, notree=False):
+        pg = page(len(pages) + 100)
+        if notree:
+            pg.context.add_init_script(NOTREE)
+        pg.add_init_script("""window.__toasts = []; new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) =>
+          n.classList && n.classList.contains('toast') && __toasts.push(n.textContent)))).observe(document, { childList: true, subtree: true })""")
+        pg.goto(url)
+        pg.wait_for_selector("#lobby:not([hidden])")
+        pg.click("#pCam")
+        pg.fill("#name", name)
+        pg.click("#enter")
+        pg.wait_for_selector("#call:not([hidden])")
+        return pg
+
+    x = joiner(link, "NoTree", True)
+    x.wait_for_function("__toasts.some(t => t.includes('full')) || __S.mesh.peers.size > 0", timeout=20000)
+    check(x.evaluate("__toasts.some(t => t.includes('full')) && __S.mesh.peers.size === 0"),
+          "a device that can't take part in the tree is told the big call is full")
+    check(all(pg.evaluate(f"__S.mesh.peers.size === {N - 2}") for pg in rest), "and nobody in the call is disturbed")
+    x.close()
+
+    # a small call (the test server's mesh limit) with such a device in it: one more person is refused instead
+    # of the call becoming a tree that would push that device out
+    h = page(500)
+    h.context.add_init_script(NOTREE)
+    h.goto(f"{BASE}/?signal={WS}")
+    h.click("#start")
+    h.wait_for_selector("#lobby:not([hidden])")
+    h.click("#pCam")
+    h.fill("#name", "FirefoxLike")
+    h.click("#enter")
+    h.wait_for_selector("#call:not([hidden])")
+    room = f"{h.url}{'&' if '?' in h.url else '?'}signal={WS}"
+    small = [h]
+    while True:
+        y = joiner(room, f"S{len(small)}")
+        y.wait_for_function("__toasts.some(t => t.includes('full')) || __S.mesh.peers.size > 0", timeout=20000)
+        if y.evaluate("__toasts.some(t => t.includes('full'))"):
+            break
+        small.append(y)
+        if len(small) > 20:
+            break
+    n = len(small)
+    check(2 <= n <= 20 and h.evaluate(f"!__S.mesh.big && __S.mesh.peers.size === {n - 1} && !__S.mesh.closed"),
+          f"a small call with a device that can't do a tree stays small: {n} in, the next one is told it's full, nobody pushed out")
+    for b in browsers:
+        b.close()
+
+print("errors:", errors)
+print("OK" if not errors else "FAILED")
+sys.exit(1 if errors else 0)

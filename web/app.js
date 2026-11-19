@@ -139,7 +139,7 @@ function callDetails() {
       recording: !!S.recorder,
     },
     devices: S.devKinds || null,
-    connections: peers.map((p) => ({ p: who(p.id), state: p.state, ice: p.pc.iceConnectionState, viaRelay: !!p.relayTried })),
+    connections: peers.map((p) => ({ p: who(p.id), state: p.state, ice: p.pc ? p.pc.iceConnectionState : "tree", viaRelay: !!p.relayTried })),
     // how each person's sound is being played here (a voice that arrives but isn't heard)
     playback: {
       speakerPicked: !!S.sink,

@@ -118,9 +118,7 @@ export class Big {
 
   onRelay(from, raw, o) {
     if (typeof o.s !== "string" || typeof o.n !== "number" || o.s === this.mesh.id || this.dup(o.s, "m" + o.n)) return;
-    // pass it on first (whoever is further down doesn't wait for my check; they check it themselves)
-    if (o.to !== this.mesh.id) this.linkSend(from, raw);
-    if (o.to && o.to !== this.mesh.id) return;
+    // checked before it goes on (about a millisecond): a message forged in someone's name stops at the first device
     const prev = this.chains.get(o.s) || Promise.resolve();
     const next = prev
       .then(async () => {
@@ -129,6 +127,8 @@ export class Big {
         const body = JSON.stringify([o.s, o.n, o.to || "", o.rc ? 1 : 0, o.m]);
         const ok = await crypto.subtle.verify(SIGN, await k, unb64u(String(o.sig || "")), enc.encode(body));
         if (!ok) return (this.stats.bad++, null);
+        if (o.to !== this.mesh.id) this.linkSend(from, raw);
+        if (o.to && o.to !== this.mesh.id) return;
         if (o.rc && !this.mesh.route(o.s)) return;
         if (o.m && o.m._kf) return this.keyAsked();
         this.mesh.emit("message", { from: o.s, msg: o.m });
@@ -330,6 +330,8 @@ export class Big {
       for (const p of f.parts) all.set(p, (o += p.length) - p.length);
       data = all;
     }
+    // breakout rooms: the tree carries everyone's sound and picture; I play only those in my room
+    if (!this.mesh.route(src)) return;
     this.play(src, kind, flags, seq, ts, data);
   }
 
@@ -372,6 +374,7 @@ export class Big {
           r.adec.configure({ codec: "opus", sampleRate: flags & 2 ? 44100 : 48000, numberOfChannels: flags & 4 ? 2 : 1 });
           this.attach(src, r.agen);
         }
+        r.aN = (r.aN || 0) + 1; // counts only, kept on this device (tests read them)
         r.adec.decode(new EncodedAudioChunk({ type: "key", timestamp: ts, data }));
         return;
       }
@@ -414,6 +417,7 @@ export class Big {
         return;
       }
       r.needKey = false;
+      r.vN = (r.vN || 0) + 1;
       r.vdec.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: ts, data }));
     } catch (_) {
       if (kind === 2) r.needKey = true;

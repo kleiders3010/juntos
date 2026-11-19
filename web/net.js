@@ -141,7 +141,7 @@ export class Net {
     if (!mesh) return;
     const fake = window.__netFake; // tests: { rtt, loss, jitter } for every connection
     for (const [id, p] of mesh.peers) {
-      if (p.state !== "connected") continue;
+      if (p.state !== "connected" || !p.pc) continue; // someone reached along a big call's tree
       let r;
       try {
         r = await p.pc.getStats();

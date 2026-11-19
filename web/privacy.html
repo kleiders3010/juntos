@@ -24,7 +24,11 @@ at meet.jurisgames.com (juntos.jurisgames.com is another address for it: it forw
 <ul>
   <li><b>Camera, microphone, chat and the board</b> go directly between the devices in the call, encrypted
     (WebRTC). When a network blocks direct connections they pass, still encrypted, through a Cloudflare relay
-    that cannot read them. Nothing of the call is stored on any server.</li>
+    that cannot read them. Nothing of the call is stored on any server. In a call of more than 16 people each
+    device connects to only a few others, and sound, pictures and messages (private messages and breakout-room
+    messages too) are passed along by the devices of other people in the call, who already have its link. Their
+    app passes them on without showing them, and messages are signed, so whoever passes them on can't change them
+    or write in someone else's name.</li>
   <li><b>Your name</b> is sent to the people in the same call and saved only on your device.</li>
   <li><b>Recordings</b> are made on your device and saved to your own downloads. Everyone in the call sees
     when someone records.</li>
@@ -90,7 +94,11 @@ day.</p>
 <div lang="es">
 <p>Juntos es una app de videollamadas gratis y de código abierto (en meet.jurisgames.com; juntos.jurisgames.com es otra dirección que lleva ahí). No guarda nada que te identifique: sin cuentas,
 sin anuncios, sin analíticas. Lo que escribís en un campo (un nombre, una respuesta, una nota) se envía tal cual, así que si escribís ahí un email o un teléfono también se envía; nunca te lo pedimos, salvo el email opcional para responderte en "Enviar comentarios". La cámara, el micrófono, el chat y la pizarra van directo entre los dispositivos,
-cifrados; si la red no lo permite pasan cifrados por un relé de Cloudflare que no puede leerlos. Tu nombre lo ven
+cifrados; si la red no lo permite pasan cifrados por un relé de Cloudflare que no puede leerlos. En una llamada de más de
+16 personas cada dispositivo se conecta solo con unos pocos, y el sonido, la imagen y los mensajes (también los
+privados y los de las salas) los van pasando los dispositivos de otras personas de la llamada, que ya tienen su
+enlace; su app los pasa sin mostrarlos, y los mensajes van firmados, así que nadie puede cambiarlos ni escribir en
+nombre de otro. Tu nombre lo ven
 los de la llamada y se guarda solo en tu dispositivo. Las grabaciones se hacen y se guardan en tu dispositivo, y
 todos ven cuando alguien graba. Si alguien activa los subtítulos, el navegador de cada persona pasa su propia voz
 a texto (Chrome, Edge y Safari pueden enviar el sonido a Google, Microsoft o Apple para eso; Firefox lo hace en el dispositivo) y el texto va directo a

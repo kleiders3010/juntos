@@ -85,7 +85,9 @@ async function turn(req, env) {
 }
 
 export class Room {
-  constructor(state) {
+  constructor(state, env) {
+    // tests only (wrangler dev --var MESH_MAX:4): the tree from a few people on, so one PC can run it
+    this.meshMax = Number(env && env.MESH_MAX) || MESH_MAX;
     this.state = state;
   }
 
@@ -141,7 +143,7 @@ export class Room {
     }
     ws.serializeAttachment({ id: a.id, name: a.name, host: !!a.host, co: !!a.co, cap: a.cap || 2, pub: a.pub || "" });
     const me = { ws, a: ws.deserializeAttachment() };
-    const big = others.some((p) => p.a.tree) || others.length + 1 > MESH_MAX;
+    const big = others.some((p) => p.a.tree) || others.length + 1 > this.meshMax;
     this.send(ws, { t: "peers", big, peers: others.map((p) => ({ id: p.a.id, name: p.a.name, host: !!(p.a.host || p.a.co), role: this.role(p.a), pub: p.a.pub || "" })) });
     this.send(ws, { t: "room", locked: !!this.locked, host: !!(a.host || a.co), owner: !!a.host, pass: !!this.hasPass });
     this.send(ws, this.permMsg());
@@ -261,6 +263,13 @@ export class Room {
         }
       if (this.peers().length >= MAX_PEOPLE) {
         this.send(ws, { t: "full", max: MAX_PEOPLE });
+        return ws.close(1008, "full");
+      }
+      // a tree needs every device in it to pass sound and pictures on (WebCodecs; a device that can't sends no
+      // key): if one can't, the newcomer is told the call is full, and nobody already in is pushed out
+      const now = this.peers().filter((p) => p.ws !== ws);
+      if ((now.some((p) => p.a.tree) || now.length + 1 > this.meshMax) && (!pub || now.some((p) => !p.a.pub))) {
+        this.send(ws, { t: "full", max: this.meshMax });
         return ws.close(1008, "full");
       }
       // The person who started the call holds a secret key (kept on their device); the room keeps
