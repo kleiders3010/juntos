@@ -1,6 +1,7 @@
 import { VIDEO_CAP } from "./net.js";
 import { NostrSignal, NOSTR_OK } from "./nsig.js";
 import { Big, BIG_OK, makeKeys } from "./big.js";
+import { Fwd } from "./fwd.js";
 import { HostDocs, pubOf, ownsCode, newSigner, helloProof, helloOk, LIST_MAX } from "./hostauth.js";
 // Direct (mesh) WebRTC between everyone in a room. The signaling server only passes handshakes;
 // audio, video, chat and the board go device to device.
@@ -57,6 +58,8 @@ export class Mesh extends EventTarget {
     this.route = () => true;
     // big calls (past MESH_MAX): the room server arranges a tree, big.js carries sound, pictures and messages
     this.big = null;
+    // two people who can't connect: someone connected to both passes things on (fwd.js)
+    this.fwd = new Fwd(this);
     this.known = new Map(); // id -> name: everyone the server says is in the call
     this.pubs = new Map(); // id -> their signing key (messages passed along the tree are signed)
     this.meHost = !!this.key;
@@ -447,8 +450,11 @@ export class Mesh extends EventTarget {
     // No direct connection within a few seconds (mobile networks often block it): try the relay now
     // instead of waiting the half minute a browser takes to give up.
     p.timer = setTimeout(() => p.state !== "connected" && this.viaRelay(p), 6000);
-    pc.onicecandidate = (e) => e.candidate && this.sendSignal({ t: "signal", to: id, data: { ice: e.candidate, cid: p.cid, for: p.rcid } });
+    pc.onicecandidate = (e) => e.candidate && !this.noDirect(p) && this.sendSignal({ t: "signal", to: id, data: { ice: e.candidate, cid: p.cid, for: p.rcid } });
     pc.ontrack = (e) => {
+      // a person's own tracks come without a stream; with one, it's someone else's passed on by this person (fwd.js)
+      const sid = e.streams && e.streams[0] && e.streams[0].id;
+      if (sid) return this.fwd.track(sid, e.track);
       if (!p.stream.getTracks().includes(e.track)) p.stream.addTrack(e.track);
       this.emit("peer", { id });
     };
@@ -476,28 +482,40 @@ export class Mesh extends EventTarget {
       this.emit("peer", { id });
     };
     pc.onnegotiationneeded = async () => {
-      if (!p.offerer) return;
+      // (the side that didn't make the connection offers too when it adds someone else's tracks to pass on)
+      if (!p.offerer && !p.reneg) return;
+      if (pc.signalingState !== "stable") return;
       await pc.setLocalDescription();
       // the first offer of a connection says so: the other side drops any old, broken one it still holds
-      this.sendSignal({ t: "signal", to: id, data: { sdp: pc.localDescription, name: this.name, fresh: !p.offered, cid: p.cid, for: p.rcid } });
+      this.sendSignal({ t: "signal", to: id, data: { sdp: pc.localDescription, name: this.name, fresh: p.offerer && !p.offered, cid: p.cid, for: p.rcid } });
       p.offered = true;
     };
     dc.onopen = () => this.emit("channel-open", { id });
-    dc.onmessage = (e) => {
-      let msg;
-      try {
-        msg = JSON.parse(e.data);
-      } catch (_) {
-        return;
-      }
-      // in a big call messages come signed and are passed along the tree
-      if (this.big && msg && msg._r) return this.big.onRelay(id, e.data, msg);
-      if (msg && msg.k === "_hs") return void (!this.srv && this.takeHs(msg.hs));
-      if (msg && msg.k === "_pass") return void (typeof msg.pass === "string" && !this.srv && (this.pass = msg.pass.slice(0, 10)));
-      this.emit("message", { from: id, msg });
-    };
+    dc.onmessage = (e) => this.onDc(id, e.data, true);
     this.emit("peer", { id });
     return p;
+  }
+
+  // a message from someone: on our own connection (direct), or sealed and passed on by a helper (fwd.js)
+  onDc(id, data, direct) {
+    let msg;
+    try {
+      msg = JSON.parse(data);
+    } catch (_) {
+      return;
+    }
+    // in a big call messages come signed and are passed along the tree
+    if (this.big && msg && msg._r) return this.big.onRelay(id, data, msg);
+    if (direct && msg && typeof msg.k === "string" && this.fwd.onMsg(id, msg)) return;
+    if (msg && msg.k === "_hs") return void (!this.srv && this.takeHs(msg.hs));
+    if (msg && msg.k === "_pass") return void (typeof msg.pass === "string" && !this.srv && (this.pass = msg.pass.slice(0, 10)));
+    this.emit("message", { from: id, msg });
+  }
+
+  // tests only: act as if no direct connection to these names were possible (strict routers on both sides)
+  noDirect(p) {
+    const n = globalThis.__juntosNoDirect;
+    return !!(n && p && n.includes(p.name));
   }
 
   // ---- host controls without the server ----
@@ -724,6 +742,8 @@ export class Mesh extends EventTarget {
     p.gaveUp = true;
     p.relaying = false;
     this.emit("peer", { id: p.id });
+    // no direct way and no relay: someone connected to both of us can pass things on
+    this.fwd.need(p);
   }
 
   /** "Try again" on someone we couldn't reach: a brand-new connection (with the relay), offered by us. */
@@ -759,7 +779,11 @@ export class Mesh extends EventTarget {
   }
 
   async onPeerSignal(from, data) {
+    if (data && data.fwk) return this.fwd.gotKey(from, data.fwk);
     let p = this.peers.get(from);
+    // reached through a helper: their retries of a direct connection stop here (the helper's going ends it)
+    if (p && p.via) return;
+    if (data && data.ice && this.noDirect(p)) return;
     // an offer from another connection of theirs than the one we hold is a new connection too
     const other = !!(p && data.cid && p.rcid && data.cid !== p.rcid);
     if (data.sdp && data.sdp.type === "offer" && (data.fresh || other) && p) {
@@ -878,6 +902,9 @@ export class Mesh extends EventTarget {
     const p = this.peers.get(id);
     if (!p) return;
     this.forget(p);
+    // I passed things on for them, or they did for me
+    this.fwd.gone(id);
+    for (const q of [...this.peers.values()]) if (q.via === id) this.fwd.off(id, q.id);
     this.big?.drop(id);
     this.emit("left", { id, name: p.name });
     this.retune();

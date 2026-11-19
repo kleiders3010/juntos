@@ -141,7 +141,13 @@ with sync_playwright() as p:
     people(a)
     a.click('[name="removePass"]')
     o.wait_for_function("!__S.hasPass", timeout=5000)
-    check(info(code)["pass"] is False and a.query_selector('[name="addPass"]'), "the passcode removed: nobody is asked for one")
+    # the host's panel redraws when the server answers, which can come a moment after Beto hears it
+    try:
+        a.wait_for_selector('[name="addPass"]', timeout=5000)
+    except Exception:
+        pass
+    inf = info(code)
+    check(inf["pass"] is False and a.query_selector('[name="addPass"]'), f"the passcode removed: nobody is asked for one ({inf}, add button: {bool(a.query_selector('[name=addPass]'))})")
 
     # --- a planned call holds its passcode before the host comes ---
     h = page("Host2")
