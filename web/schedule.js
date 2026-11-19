@@ -388,8 +388,7 @@ export function scheduleSheet(o) {
     if (!y || Number.isNaN(h)) return;
     const v = sec.value();
     if (!v) return;
-    const code = o.newCode();
-    const key = o.hostKey();
+    const { code, key } = o.newHost();
     try {
       localStorage.setItem(`juntos.host.${code}`, key); // whoever plans the call is its host on this device
     } catch {}

@@ -252,7 +252,7 @@ export class Room {
       const name = String(msg.name || "").slice(0, 60);
       // how many children this device says it can feed in a big call, and its public key (relayed messages are signed)
       const cap = Math.max(1, Math.min(MAX_KIDS, Math.floor(Number(msg.cap)) || 2));
-      const pub = typeof msg.pub === "string" && /^[A-Za-z0-9_-]{40,120}$/.test(msg.pub) ? msg.pub : "";
+      const pub = typeof msg.pub === "string" && /^[A-Za-z0-9_-]{40,120}(\.[A-Za-z0-9_-]{40,120})?$/.test(msg.pub) ? msg.pub : "";
       if (!/^[A-Za-z0-9_-]{6,40}$/.test(id)) return ws.close(1008, "bad id");
       for (const p of this.peers(true))
         if (p.a.id === id && p.ws !== ws) {

@@ -135,6 +135,46 @@ with sync_playwright() as p:
     check(x2.get(host, [0])[0] > x1.get(host, [0])[0] and not others, f"in a breakout room only the room is played (others still played: {len(others)})")
     r.evaluate("__S.mesh.route = __S.mesh.__route")
 
+    # private and breakout-room traffic: the devices passing it along can't read it
+    room = {pages[0], pages[N - 1], pages[N - 2]}
+    rids = [pg.evaluate("__S.mesh.id") for pg in room]
+    for pg in pages:
+        inside = pg in room
+        pg.evaluate("""([ids, inside]) => { const m = __S.mesh, b = m.big;
+          m.__route = m.route; m.route = (id) => ids.includes(id) === inside;
+          window.__got = []; m.addEventListener('message', (e) => __got.push(e.detail.msg));
+          window.__seen = { plain: 0, text: 0, sealed: 0 };
+          const ls = b.linkSend.bind(b);
+          b.linkSend = (x, d, media) => { if (typeof d === 'string' && d.includes('secret')) __seen.text++; return ls(x, d, media) };
+          const om = b.onMedia.bind(b);
+          b.onMedia = (from, buf) => { const u = new Uint8Array(buf);
+            const src = new TextDecoder().decode(u.subarray(17, 17 + u[16]));
+            if (ids.includes(src) && window.__count) __seen[u[1] & 0x80 ? 'sealed' : 'plain']++;
+            return om(from, buf) };
+          m.reroute() }""", [rids, inside])
+    time.sleep(3)
+    for pg in pages:
+        pg.evaluate("window.__count = 1")
+    pages[N - 1].evaluate("__S.mesh.roomcast({ k: 'chat', text: 'room secret' })")
+    pages[0].evaluate("(id) => __S.mesh.sendTo(id, { k: 'chat', text: 'private secret' })", pages[N - 2].evaluate("__S.mesh.id"))
+    time.sleep(6)
+    outside = [pg for pg in pages if pg not in room]
+    got = lambda pg, t: pg.evaluate(f"__got.some(m => m && m.text === '{t}')")
+    check(got(pages[0], "room secret") and got(pages[N - 2], "room secret") and not any(got(pg, "room secret") for pg in outside),
+          "a breakout-room message reaches the room and nobody else")
+    check(got(pages[N - 2], "private secret") and not any(got(pg, "private secret") for pg in pages if pg is not pages[N - 2]),
+          "a private message reaches only its person")
+    seen = [pg.evaluate("__seen") for pg in outside]
+    passed = sum(pg.evaluate("__S.mesh.big.stats.fwd") for pg in outside)
+    check(not any(s["text"] for s in seen), f"no device outside passed along readable private or room text ({passed} pieces passed on)")
+    sealed = sum(s["sealed"] for s in seen)
+    plain = sum(s["plain"] for s in seen)
+    check(sealed > 0 and plain == 0, f"the room's sound reaches devices outside it only encrypted ({sealed} encrypted, {plain} readable)")
+    hearing(list(room), {i: ids[i] for i in rids}, "inside the breakout room")
+    for pg in pages:
+        pg.evaluate("__S.mesh.route = __S.mesh.__route; window.__count = 0; __S.mesh.reroute()")
+    time.sleep(2)
+
     # someone in the middle of the tree leaves: their children hang on elsewhere
     mid = next(i for i in range(1, N) if pages[i].evaluate("__S.mesh.big.links.size") >= 3)
     gone = pages[mid].evaluate("__S.mesh.id")

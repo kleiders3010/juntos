@@ -2,8 +2,8 @@
 # allows it ... if anything just to ROUTE the joins"): people find each other through Nostr relays (here a small
 # fake relay on this PC, speaking the same protocol), and our server is opened only when the call needs it.
 # Checks: an ordinary call makes no request to our server at all (no websocket, no /info); the people in it hear
-# each other; someone leaving is gone for the others; when the host locks the call, everyone moves to the server
-# and keeps their connections; a newcomer then is sent to the server, which makes them ask to join.
+# each other; someone leaving is gone for the others; when the host sets a passcode, everyone moves to the server
+# and keeps their connections; a newcomer then is sent to the server, which asks them for the passcode.
 # Run: python serverless_test.py [base-url]
 import asyncio
 import json
@@ -119,18 +119,17 @@ with sync_playwright() as p:
     o.wait_for_function("__S.mesh.peers.size === 1", timeout=10000)
     check(True, "Carla leaves: Ana and Beto see her gone")
 
-    # a host control needs the server: the call moves to it, connections stay
+    # a passcode needs the server (only a gatekeeper can limit guesses): the call moves to it, connections stay
+    # (locking, muting, co-hosts and removing work without it: hostctl_test.py)
     beto_pc = a.evaluate("[...__S.mesh.peers.values()][0].cid")
-    a.evaluate("__S.mesh.host({ t: 'lock', on: true })")
-    a.wait_for_function("__S.locked === true", timeout=15000)
+    a.evaluate("__S.mesh.host({ t: 'pass', pass: '482916' })")
+    a.wait_for_function("__S.hasPass === true", timeout=15000)
     o.wait_for_function("__S.mesh.srv && __S.mesh.ws && __S.mesh.ws.readyState === 1", timeout=15000)
     check(a.evaluate("[...__S.mesh.peers.values()][0].cid") == beto_pc and a.evaluate(both.format(n=1)),
-          "Ana locks the call: both move to the server, the connection between them stays")
+          "Ana sets a passcode: both move to the server, the connection between them stays")
     d = person("Dan", link, wait=False)
-    d.wait_for_function("__S.waiting === true", timeout=20000)
-    check(True, "Dan looks on the relay, is sent to the server, and has to ask to join")
-    a.wait_for_function("__S.knocks && __S.knocks.size === 1", timeout=10000)
-    check(True, "Ana sees Dan asking")
+    d.wait_for_function("!__S.mesh && !document.querySelector('#lobby').hidden", timeout=20000)
+    check(True, "Dan looks on the relay, is sent to the server, and is asked for the passcode")
     b.close()
 
 print("errors:", errors)

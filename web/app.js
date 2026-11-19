@@ -1,4 +1,5 @@
 import { Mesh, randomId } from "./rtc.js";
+import { newHost } from "./hostauth.js";
 import { Background, BACKGROUNDS } from "./bg.js";
 import { Board, COLORS, SIZES, TOOLS } from "./board.js";
 import { Recorder } from "./rec.js";
@@ -70,15 +71,6 @@ function toast(text) {
 
 function show(page) {
   for (const p of document.querySelectorAll(".page")) p.hidden = p.id !== page;
-}
-
-// Room codes look like "kfa-rmzq-tde": easy to read out loud, nothing to mix up (no l/1/o/0).
-function newCode() {
-  const abc = "abcdefghijkmnpqrstuvwxyz";
-  const r = new Uint8Array(10);
-  crypto.getRandomValues(r);
-  const s = Array.from(r, (b) => abc[b % abc.length]).join("");
-  return `${s.slice(0, 3)}-${s.slice(3, 7)}-${s.slice(7)}`;
 }
 
 function codeFrom(text) {
@@ -213,17 +205,18 @@ if (startSec.box.querySelector('[name="ask"]').checked || startSec.box.querySele
 $("start").onclick = () => {
   const sec = startSec.value();
   if (!sec) return ($("startOpts").open = true);
-  const code = newCode();
-  // who starts the call is its host (mute, remove, lock): a secret only this device keeps
+  // who starts the call is its host (mute, remove, lock): a secret key only this device keeps; the call's code is
+  // made from its public half, so everyone in the call can check the host's choices without a server
+  const { code, key } = newHost();
   try {
-    localStorage.setItem(`juntos.host.${code}`, randomId() + randomId());
+    localStorage.setItem(`juntos.host.${code}`, key);
   } catch {}
   keepSecurity(code, sec);
   history.pushState({}, "", `/r/${code}`);
   route();
 };
 // planned calls: "Schedule for later" and the list of calls planned on this device
-const schedOpts = () => ({ t, toast, isPhone, newCode, hostKey: () => randomId() + randomId(), claim: claimRoom, changed: () => paintUpcoming($("upcoming"), schedOpts()) });
+const schedOpts = () => ({ t, toast, isPhone, newHost, claim: claimRoom, changed: () => paintUpcoming($("upcoming"), schedOpts()) });
 // A planned call with a passcode or "ask to join": its host claims the room right away (so the passcode holds before
 // the host arrives), then hangs up. Nobody else is in a room made a second ago.
 function claimRoom(code, key, opts) {

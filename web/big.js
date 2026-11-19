@@ -10,6 +10,11 @@
 // - Messages (chat, captions, hands) are passed along the same way, signed by who wrote them (ECDSA P-256; the
 //   room server hands out the public keys), so someone passing them along can't change them or write in
 //   another person's name.
+// - Private and breakout-room traffic is also encrypted, so the devices passing it along can't read it: a
+//   private message with a key only the two people share (ECDH P-256, next to the signing key); a breakout-room
+//   message with a new key each time, sent along wrapped for each person in the room; and while the call is
+//   split into rooms, each device encrypts its sound and picture with a key it gives only to its room (a new
+//   key whenever the rooms change).
 
 export const BIG_OK =
   typeof VideoEncoder === "function" &&
@@ -32,10 +37,28 @@ const b64u = (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, "-").replac
 const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 
 /** This device's signing key for the call: { priv, pub } (pub travels in the hello, base64url of the raw point). */
+// pub = signing key "." encryption key (the server checks only its shape)
 export async function makeKeys() {
   const k = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, false, ["sign", "verify"]);
-  return { priv: k.privateKey, pub: b64u(new Uint8Array(await crypto.subtle.exportKey("raw", k.publicKey))) };
+  const e = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveKey"]);
+  const raw = async (key) => b64u(new Uint8Array(await crypto.subtle.exportKey("raw", key)));
+  return { priv: k.privateKey, epriv: e.privateKey, pub: (await raw(k.publicKey)) + "." + (await raw(e.publicKey)) };
 }
+
+const GCM = (key, iv) => [{ name: "AES-GCM", iv }, key];
+async function seal(key, bytes) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt(...GCM(key, iv), bytes));
+  const out = new Uint8Array(12 + ct.length);
+  out.set(iv);
+  out.set(ct, 12);
+  return out;
+}
+const unseal = async (key, u8) => new Uint8Array(await crypto.subtle.decrypt(...GCM(key, u8.subarray(0, 12)), u8.subarray(12)));
+const newKey = () => crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+const rawKey = async (k) => new Uint8Array(await crypto.subtle.exportKey("raw", k));
+const useKey = (raw) => crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+const ENC = 0x80; // media flag: the frame is encrypted with its sender's room key
 
 const SIGN = { name: "ECDSA", hash: "SHA-256" };
 
@@ -46,6 +69,13 @@ export class Big {
     this.seq = 0;
     this.seen = new Map(); // src -> Set of recent message/media keys (a piece is passed on once)
     this.keys = new Map(); // src -> imported public key (promise)
+    this.pair = new Map(); // id -> key shared with them (promise), for private messages
+    this.mk = null; // my room key while the call is split into rooms (my sound and picture are encrypted with it)
+    this.mkRaw = null;
+    this.mkeys = new Map(); // src -> their room key (CryptoKey)
+    this.mout = Promise.resolve(); // my encrypted frames go out in order
+    this.dchain = new Map(); // src -> promise: their encrypted frames are played in order
+    this.mkAsk = new Map(); // src -> when I last asked them for their room key
     this.chains = new Map(); // src -> promise: one person's messages are checked and shown in order
     this.out = Promise.resolve(); // my own messages are signed and sent in order
     this.rx = new Map(); // src -> decoders and generated tracks
@@ -53,7 +83,7 @@ export class Big {
     this.mseq = { 1: 0, 2: 0 };
     this.spoke = 0;
     this.lastLoud = 0;
-    this.stats = { sent: 0, fwd: 0, got: 0, decA: 0, decV: 0, bad: 0, keyAsk: 0, dropped: 0 };
+    this.stats = { sent: 0, fwd: 0, got: 0, decA: 0, decV: 0, bad: 0, keyAsk: 0, dropped: 0, sealed: 0, unreadable: 0 };
     this.watch = setInterval(() => this.idleCheck(), 1000);
   }
 
@@ -100,20 +130,92 @@ export class Big {
     const n = ++this.seq;
     this.dup(s, "m" + n);
     this.out = this.out.then(async () => {
-      const body = JSON.stringify([s, n, to || "", rc ? 1 : 0, m]);
-      const sig = b64u(new Uint8Array(await crypto.subtle.sign(SIGN, this.mesh.keys.priv, enc.encode(body))));
-      this.linkSend(null, JSON.stringify({ _r: 1, s, n, to: to || "", rc: rc ? 1 : 0, m, sig }));
+      let x = "", w = null;
+      if (to) {
+        // only the two of us can read it (someone on an old version without an encryption key: as before)
+        const k = this.pairKey(to);
+        if (k) x = b64u(await seal(await k, enc.encode(JSON.stringify(m))));
+      } else if (rc && this.split()) {
+        // only my room can read it: a new key, wrapped for each person in the room
+        const ck = await newKey();
+        const raw = await rawKey(ck);
+        w = {};
+        for (const id of this.mesh.known.keys()) {
+          if (id === s || !this.mesh.route(id)) continue;
+          const k = this.pairKey(id);
+          if (k) w[id] = b64u(await seal(await k, raw));
+        }
+        x = b64u(await seal(ck, enc.encode(JSON.stringify(m))));
+      }
+      const o = x ? { _r: 1, s, n, to: to || "", rc: rc ? 1 : 0, m: null, x, w } : { _r: 1, s, n, to: to || "", rc: rc ? 1 : 0, m };
+      o.sig = b64u(new Uint8Array(await crypto.subtle.sign(SIGN, this.mesh.keys.priv, enc.encode(this.body(o)))));
+      this.linkSend(null, JSON.stringify(o));
     }).catch(() => {});
+  }
+
+  // what the signature covers
+  body(o) {
+    const head = [o.s, o.n, o.to || "", o.rc ? 1 : 0, o.m];
+    return JSON.stringify(o.x ? [...head, o.x, o.w || null] : head);
+  }
+
+  // the call is split into breakout rooms and someone is not in mine
+  split() {
+    for (const id of this.mesh.known.keys()) if (id !== this.mesh.id && !this.mesh.route(id)) return true;
+    return false;
   }
 
   pubKey(src) {
     let k = this.keys.get(src);
-    const raw = this.mesh.pubs.get(src);
+    const raw = (this.mesh.pubs.get(src) || "").split(".")[0];
     if (!k && raw) {
       k = crypto.subtle.importKey("raw", unb64u(raw), { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
       this.keys.set(src, k);
     }
     return k;
+  }
+
+  // the key only I and they can make (ECDH)
+  pairKey(id) {
+    let k = this.pair.get(id);
+    const raw = (this.mesh.pubs.get(id) || "").split(".")[1];
+    if (!k && raw && this.mesh.keys.epriv) {
+      k = crypto.subtle
+        .importKey("raw", unb64u(raw), { name: "ECDH", namedCurve: "P-256" }, false, [])
+        .then((pub) => crypto.subtle.deriveKey({ name: "ECDH", public: pub }, this.mesh.keys.epriv, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]));
+      this.pair.set(id, k);
+    }
+    return k;
+  }
+
+  async readable(o) {
+    if (!o.x) return o.m;
+    const pk = this.pairKey(o.s);
+    if (!pk) throw new Error("no key");
+    if (o.to) return JSON.parse(dec.decode(await unseal(await pk, unb64u(o.x))));
+    const wk = o.w && typeof o.w === "object" ? o.w[this.mesh.id] : null;
+    if (typeof wk !== "string") return undefined; // not for my room
+    const ck = await useKey(await unseal(await pk, unb64u(wk)));
+    return JSON.parse(dec.decode(await unseal(ck, unb64u(o.x))));
+  }
+
+  // the rooms changed: a new key for my sound and picture, given only to my room (none while the call is whole)
+  async rekey() {
+    if (!this.split()) {
+      this.mk = this.mkRaw = null;
+      return;
+    }
+    const k = await newKey();
+    this.mkRaw = b64u(await rawKey(k));
+    this.mk = k;
+    this.post({ _mk: this.mkRaw }, null, true);
+  }
+
+  async gotRoomKey(src, raw) {
+    if (typeof raw !== "string" || raw.length > 64) return;
+    try {
+      this.mkeys.set(src, await useKey(unb64u(raw)));
+    } catch (_) {}
   }
 
   onRelay(from, raw, o) {
@@ -124,14 +226,23 @@ export class Big {
       .then(async () => {
         const k = this.pubKey(o.s);
         if (!k) return (this.stats.bad++, null);
-        const body = JSON.stringify([o.s, o.n, o.to || "", o.rc ? 1 : 0, o.m]);
-        const ok = await crypto.subtle.verify(SIGN, await k, unb64u(String(o.sig || "")), enc.encode(body));
+        const ok = await crypto.subtle.verify(SIGN, await k, unb64u(String(o.sig || "")), enc.encode(this.body(o)));
         if (!ok) return (this.stats.bad++, null);
         if (o.to !== this.mesh.id) this.linkSend(from, raw);
         if (o.to && o.to !== this.mesh.id) return;
         if (o.rc && !this.mesh.route(o.s)) return;
-        if (o.m && o.m._kf) return this.keyAsked();
-        this.mesh.emit("message", { from: o.s, msg: o.m });
+        let m;
+        try {
+          m = await this.readable(o);
+        } catch (_) {
+          return void this.stats.unreadable++;
+        }
+        if (m === undefined) return;
+        if (m && m._kf) return this.keyAsked();
+        if (m && m._mk) return this.gotRoomKey(o.s, m._mk);
+        // they couldn't read my sound: send my room key again, to them only
+        if (m && m._mka) return void (this.mk && this.mesh.route(o.s) && this.post({ _mk: this.mkRaw }, o.s));
+        this.mesh.emit("message", { from: o.s, msg: m });
       })
       .catch(() => {});
     this.chains.set(o.s, next);
@@ -277,6 +388,13 @@ export class Big {
 
   // header: kind(1 sound, 2 picture), flags, piece, pieces, u32 seq, f64 timestamp, src length, src, data
   sendMedia(kind, flags, ts, data) {
+    const k = this.mk;
+    if (!k) return this.sendFrame(kind, flags, ts, data);
+    const copy = data.slice();
+    this.mout = this.mout.then(async () => this.sendFrame(kind, flags | ENC, ts, await seal(k, copy))).catch(() => {});
+  }
+
+  sendFrame(kind, flags, ts, data) {
     const src = enc.encode(this.mesh.id);
     const seq = ++this.mseq[kind];
     const count = Math.max(1, Math.ceil(data.length / FRAG));
@@ -332,7 +450,21 @@ export class Big {
     }
     // breakout rooms: the tree carries everyone's sound and picture; I play only those in my room
     if (!this.mesh.route(src)) return;
-    this.play(src, kind, flags, seq, ts, data);
+    if (!(flags & ENC)) return this.play(src, kind, flags, seq, ts, data);
+    this.stats.sealed++;
+    const key = this.mkeys.get(src);
+    if (!key) {
+      // their room key hasn't reached me (yet): ask them for it, now and then
+      const t = performance.now();
+      if (t - (this.mkAsk.get(src) || -1e9) > 3000) {
+        this.mkAsk.set(src, t);
+        this.post({ _mka: 1 }, src);
+      }
+      return void this.stats.unreadable++;
+    }
+    const bytes = data.slice();
+    const prev = this.dchain.get(src) || Promise.resolve();
+    this.dchain.set(src, prev.then(async () => this.play(src, kind, flags & ~ENC, seq, ts, await unseal(key, bytes))).catch(() => void this.stats.unreadable++));
   }
 
   rxFor(src) {
