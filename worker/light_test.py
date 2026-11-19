@@ -59,6 +59,7 @@ with sync_playwright() as p:
     o.wait_for_selector(OTHER, timeout=20000)
     o.wait_for_timeout(2000)
     before = o.evaluate(SEEN, OTHER)
+    o.locator(".tile:not([data-id=\"me\"])").first.screenshot(path=os.path.join(os.environ.get("TEMP", "."), "juntos_light_before.png"))
     check(0 <= before < 60, f"Beto sees Ana dark at first (brightness {before:.0f})")
 
     a.wait_for_selector('#toasts [name="lightOn"]', timeout=15000)
@@ -67,6 +68,7 @@ with sync_playwright() as p:
     a.wait_for_function("__S.lightOn && window.__juntosLight?.gain > 1", timeout=10000)
     o.wait_for_timeout(2500)
     after = o.evaluate(SEEN, OTHER)
+    o.locator(".tile:not([data-id=\"me\"])").first.screenshot(path=os.path.join(os.environ.get("TEMP", "."), "juntos_light_after.png"))
     check(after > before + 30, f"she turns it on: Beto sees her brighter ({before:.0f} -> {after:.0f})")
     check(a.evaluate("localStorage.getItem('juntos.light')") == "on", "it is remembered")
     check(a.query_selector('#toasts [name="lightOn"]') is None, "the suggestion goes away")
