@@ -572,6 +572,7 @@ function enterCall(name) {
     document.querySelector(`.tile[data-id="${e.detail.id}"]`)?.remove();
     S.hands.delete(e.detail.id);
     S.netq.left(e.detail.id);
+    S.pinAll = S.pinAll.filter((x) => x !== e.detail.id);
     if (!document.querySelector(".tile.spot")) $("grid").classList.remove("hasSpot");
     if (S.recBy?.delete(e.detail.id)) paintRec();
     if (S.capWant.delete(e.detail.id)) capSync();
@@ -602,6 +603,7 @@ function enterCall(name) {
   mesh.addEventListener("channel-open", (e) => {
     // catch the newcomer up: board, chat, how I am
     mesh.sendTo(e.detail.id, { ...myState(), hand: S.hands.has("me") });
+    if (S.isHost && S.pinAll.length) mesh.sendTo(e.detail.id, { k: "pinall", ids: S.pinAll });
     if (S.board && S.board.items.length) mesh.sendTo(e.detail.id, S.board.snapshot());
     const mainChat = S.chat.filter((c) => !c.room); // a breakout room's chat stays in the room
     if (mainChat.length) mesh.sendTo(e.detail.id, { k: "history", chat: mainChat.slice(-200) });
@@ -675,6 +677,8 @@ function onMessage(from, m) {
     if (m.hand !== undefined) setHand(from, m.hand, who, true);
   } else if (m.k === "hand") {
     setHand(from, m.on, who);
+  } else if (m.k === "pinall") {
+    if (roleOf(from) && Array.isArray(m.ids)) takePinAll(m.ids.filter((x) => typeof x === "string"), who);
   } else if (m.k === "lowerhand") {
     if (!roleOf(from) || typeof m.id !== "string") return;
     if ((m.id === "*" || m.id === S.mesh.id) && S.hands.has("me")) {
@@ -879,24 +883,61 @@ function openVolume(tile) {
   setTimeout(() => document.addEventListener("pointerdown", away, true));
 }
 
-// One person fills the screen; the same button (or Esc) brings everyone back.
-function spotlight(tile) {
-  const on = !tile.classList.contains("spot");
-  for (const x of document.querySelectorAll(".tile.spot")) {
-    x.classList.remove("spot");
-    x.querySelector(".fsBtn").innerHTML = svg("full");
-  }
-  $("grid").classList.toggle("hasSpot", on);
-  if (on) {
-    tile.classList.add("spot");
-    tile.querySelector(".fsBtn").innerHTML = svg("fullExit");
+// Pins, like Meet's: the button on a picture makes it big; with someone already big, it pins this one too (up to
+// 6, sharing the big space); on a pinned one it unpins it. Esc unpins everyone. Only on this device, unless a host
+// pins someone for everyone (up to 3).
+const PIN_MAX = 6; // pinned: Meet's limit for yourself
+const PIN_ALL_MAX = 3; // pinned: Meet's limit for a host pinning for everyone
+function spotlight(tile, on = !tile.classList.contains("spot")) {
+  const spots = [...document.querySelectorAll(".tile.spot")];
+  if (on && !spots.includes(tile) && spots.length >= PIN_MAX) return toast(t("You can pin up to {n} people", { n: PIN_MAX }));
+  tile.classList.toggle("spot", on);
+  if (on) tile.dataset.pinAt = Date.now();
+  paintPins();
+}
+function unpinAll() {
+  for (const x of document.querySelectorAll(".tile.spot")) x.classList.remove("spot");
+  paintPins();
+}
+function paintPins() {
+  const any = !!document.querySelector(".tile.spot");
+  $("grid").classList.toggle("hasSpot", any);
+  for (const x of document.querySelectorAll("#grid .tile")) {
+    const b = x.querySelector(".fsBtn");
+    if (!b) continue;
+    const on = x.classList.contains("spot");
+    b.innerHTML = svg(on ? "fullExit" : "full");
+    b.title = on ? t2("Unpin") : any ? t2("Pin too") : t2("Full screen");
   }
   layout();
 }
 addEventListener("keydown", (e) => {
-  const s = document.querySelector(".tile.spot");
-  if (e.key === "Escape" && s) spotlight(s);
+  if (e.key === "Escape" && document.querySelector(".tile.spot")) unpinAll();
 });
+// a host pins people for everyone: everyone's view shows those (each person can still change their own)
+S.pinAll = []; // ids the hosts pinned for everyone
+function tileOf(id) {
+  return document.querySelector(`#grid .tile[data-id="${id === S.mesh?.id ? "me" : id}"]`);
+}
+function pinForAll(id, on) {
+  const ids = on ? [...S.pinAll.filter((x) => x !== id), id] : S.pinAll.filter((x) => x !== id);
+  if (ids.length > PIN_ALL_MAX) return toast(t("You can pin up to {n} people for everyone", { n: PIN_ALL_MAX }));
+  S.mesh.roomcast({ k: "pinall", ids });
+  takePinAll(ids);
+}
+function takePinAll(ids, by) {
+  const was = S.pinAll;
+  S.pinAll = ids.slice(0, PIN_ALL_MAX);
+  for (const id of was) if (!S.pinAll.includes(id)) tileOf(id)?.classList.remove("spot");
+  if (S.pinAll.length) for (const x of document.querySelectorAll(".tile.spot")) if (!S.pinAll.includes(x.dataset.id === "me" ? S.mesh.id : x.dataset.id)) x.classList.remove("spot");
+  for (const id of S.pinAll) tileOf(id)?.classList.add("spot");
+  paintPins();
+  renderPeople();
+  if (by && S.pinAll.length) {
+    const names = S.pinAll.map((id) => (id === S.mesh.id ? t("you") : S.mesh.peers.get(id)?.name || "")).filter(Boolean).join(", ");
+    toast(t("{name} pinned {who} for everyone", { name: by, who: names }));
+  }
+}
 
 // What a tile shows while its connection isn't up: connecting, another route, or a way to try again.
 function paintStatus(tile, p) {
@@ -1081,6 +1122,27 @@ function layout() {
   const wide = innerWidth > innerHeight;
   const cols = n <= 1 ? 1 : n <= 2 ? (wide ? 2 : 1) : n <= 4 ? 2 : n <= 9 ? 3 : 4;
   g.style.setProperty("--cols", cols);
+  // several pinned: they share the big space in pin order (the others stay small on the side)
+  const spots = tiles.filter((x) => x.classList.contains("spot") && !x.classList.contains("off")).sort((a, b) => (a.dataset.pinAt || 0) - (b.dataset.pinAt || 0));
+  for (const x of tiles) if (!spots.includes(x) || spots.length < 2 || mode !== "tiled") for (const k of ["left", "top", "width", "height", "right", "bottom", "margin"]) x.style.removeProperty(k);
+  if (mode === "tiled" && spots.length > 1) {
+    const W0 = g.clientWidth || innerWidth;
+    const H0 = g.clientHeight || innerHeight;
+    const side = tiles.length > spots.length ? (wide ? 184 : 112) : 0;
+    const n = spots.length;
+    const sc = wide ? (n <= 2 ? 2 : n <= 4 ? 2 : 3) : n <= 3 ? 1 : 2;
+    const sr = Math.ceil(n / sc);
+    const w = (W0 - side) / sc;
+    const h = H0 / sr;
+    spots.forEach((x, i) => {
+      x.style.left = `${(i % sc) * w}px`;
+      x.style.top = `${Math.floor(i / sc) * h}px`;
+      x.style.width = `${w - 4}px`;
+      x.style.height = `${h - 4}px`;
+      x.style.right = x.style.bottom = "auto"; // (a tile's auto margins would centre it in the whole space)
+      x.style.margin = "0";
+    });
+  }
   // sidebar: the others in a column on the right (a row at the bottom on a tall screen), sized to fit
   const thumbs = shown.filter((x) => x !== main);
   const k = Math.max(1, thumbs.length);
@@ -1470,7 +1532,7 @@ function setBoardBig(on) {
   document.body.classList.toggle("boardBig", on);
   $("boardMax").innerHTML = svg(on ? "fullExit" : "full");
   $("boardMax").title = t(on ? "Back to the side" : "Make the board big");
-  if (on) for (const x of document.querySelectorAll(".tile.spot")) spotlight(x);
+  if (on) unpinAll();
   layout(); // the big board puts everyone in the floating column, whatever the layout
   requestAnimationFrame(() => S.board?.resize());
 }
@@ -1881,6 +1943,15 @@ function renderPeople() {
       co.title = t("Co-hosts have the same controls as you, except making co-hosts.");
       co.onclick = () => S.mesh.host({ t: "cohost", id, on: role !== "co" });
       li.append(co);
+    }
+    if (id && S.isHost) {
+      const pin = document.createElement("button");
+      const on = S.pinAll.includes(id);
+      pin.className = "chip" + (on ? " on" : "");
+      pin.name = "pinAll";
+      pin.textContent = on ? t("Unpin for everyone") : t("Pin for everyone");
+      pin.onclick = () => pinForAll(id, !on);
+      li.append(pin);
     }
     if (id && S.isHost && role !== "host" && (role !== "co" || S.isOwner)) li.append(sureButton(t("Remove"), t("Remove?"), () => S.mesh.host({ t: "remove", id })));
     ul.append(li);

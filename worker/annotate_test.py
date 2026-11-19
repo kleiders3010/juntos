@@ -110,6 +110,7 @@ with sync_playwright() as p:
     a.click(f'{tile_a} .anBar [data-tool="text"]')
     a.mouse.click(*at(0.2, 0.7))
     a.wait_for_selector(f"{tile_a} .anText")
+    a.wait_for_function("document.activeElement?.classList.contains('anText')", timeout=5000)  # it takes focus a moment later
     a.keyboard.type("Look here")  # pinned: mark kinds pen/text/fade/rect are the wire format between app versions; the text is the one typed above; file name prefix "Juntos screen"
     a.keyboard.press("Enter")
     check(wait(o, "(sid) => [...(__S.an.shares.get(sid)?.items.values() || [])].some(i => i.t === 'text' && i.s === 'Look here')", arg=sid), "Ana writes a text and Beto gets it")  # pinned: mark kinds pen/text/fade/rect are the wire format between app versions; the text is the one typed above; file name prefix "Juntos screen"
