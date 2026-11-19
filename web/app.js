@@ -1,4 +1,5 @@
 import { Mesh, randomId } from "./rtc.js";
+import { watchDirect } from "./direct.js";
 import { newHost } from "./hostauth.js";
 import { Background, BACKGROUNDS } from "./bg.js";
 import { Light, watchDark } from "./light.js";
@@ -28,7 +29,13 @@ const BASE = new URL("./", import.meta.url).pathname;
 const MIRROR = location.hostname.endsWith(".github.io");
 const SIGNAL = params.get("signal") || (location.protocol === "https:" && !MIRROR ? `wss://${location.host}` : "wss://meet.jurisgames.com");
 // the second room server (the game host, same room code): used when the first can't be reached; tests: ?signal2=
-const SIGNAL2 = params.get("signal2") || (params.get("signal") ? null : "wss://games.jurisgames.com/juntos");
+let SIGNAL2 = params.get("signal2") || (params.get("signal") ? null : "wss://games.jurisgames.com/juntos");
+// Cloudflare down: the game host straight (direct.js), for new calls and for the call going on
+watchDirect(SIGNAL2, (url) => {
+  const list = S.mesh?.servers, i = list ? list.indexOf(SIGNAL2) : -1;
+  if (i >= 0) list[i] = url;
+  SIGNAL2 = url;
+});
 // Finding each other through public Nostr relays (rtc.js, nsig.js): on by default; a page pointed at a test server
 // (?signal=) uses only that server, unless test relays are given (?relays=ws://...,ws://...)
 const RELAYS = params.get("relays") ? params.get("relays").split(",").filter((u) => /^wss?:\/\//.test(u)) : params.get("signal") ? null : [];
