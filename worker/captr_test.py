@@ -5,7 +5,7 @@
 # click); Carla's browser has no translator (like Firefox).
 # Checked: Beto sees Ana's words in Spanish, while she talks and when she ends; his own words aren't translated;
 # someone who already speaks his language isn't translated; German needs a click, then works; the .txt keeps what was
-# said and the translation; "Don't translate" goes back; the choice is remembered; Carla is told what she needs.
+# said and the translation; "Don't translate" goes back; the choice is remembered; Carla gets it from another browser.
 #   python worker/captr_test.py [base-url]   (local: npx wrangler dev --port 8797)
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
@@ -138,12 +138,21 @@ with sync_playwright() as p:
     o.wait_for_function("[...document.querySelectorAll('#captions .capLine')].some(l => l.lastChild.textContent === 'back to normal')", timeout=5000)
     check(True, "\"Don't translate\" shows the words as said again")
 
-    # Carla's browser has no translator
+    # Carla's browser has no translator (like Firefox): a browser in the call that has one translates for her
+    # (Kleider, 2026-11-19: "redirecting that traffic through another user that CAN do these things")
     c = page("Carla", SR + NO_TR)
     enter(c, "Carla", join)
+    c.wait_for_function("__S.capCan.size === 3 && [...__S.capCan.values()].every(x => x.tr)", timeout=30000)
     c.click("#bCaps")
     c.wait_for_selector(".capSheet")
-    check(not c.is_enabled('select[name="capTo"]') and "Chrome" in c.inner_text(".capTrNote"), "Carla's browser can't translate: the choice is off and says what can")
+    check(c.is_enabled('select[name="capTo"]') and "translates them for you" in c.inner_text(".capTrNote"), "Carla's browser can't translate: the note says whose browser does it for her")
+    c.check('input[name="caps"]')
+    c.select_option('select[name="capTo"]', "es")
+    c.click(".capSheet .primary")
+    a.wait_for_timeout(1500)
+    a.evaluate("__say('see you tomorrow', true)")
+    c.wait_for_function("[...document.querySelectorAll('#captions .capLine')].some(l => l.lastChild.textContent === '[en>es] see you tomorrow')", timeout=8000)
+    check(True, "she reads Ana's words in Spanish, translated by another browser in the call")
 
     b.close()
 

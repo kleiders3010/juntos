@@ -416,7 +416,8 @@ function askToSpeak() {
 
 // how I am, for the others (and for their recordings: a shared screen leads the picture)
 function myState() {
-  return { k: "state", mic: micLive(), cam: S.cam, screen: !!S.screen };
+  // ct / cx: my browser can make captions from someone else's voice / translate captions, for those who can't
+  return { k: "state", mic: micLive(), cam: S.cam, screen: !!S.screen, ct: canCapTrack(), cx: captr.CAN };
 }
 
 function setMic(on) {
@@ -699,6 +700,7 @@ function enterCall(name) {
     if (p?.name) S.att.came(e.detail.id, p.name);
   });
   mesh.addEventListener("left", (e) => S.att.went(e.detail.id));
+  mesh.addEventListener("left", (e) => capLeft(e.detail.id));
   navigator.mediaDevices?.enumerateDevices?.().then((l) => (S.devKinds = l.reduce((o, d) => ((o[d.kind] = (o[d.kind] || 0) + 1), o), {}))).catch(() => {});
   const states = new Map();
   for (const ev of ["signal-open", "signal-lost", "joined", "full"]) mesh.addEventListener(ev, (e) => diag(ev, e.detail?.count != null ? { count: e.detail.count } : undefined));
@@ -803,7 +805,7 @@ function onMessage(from, m) {
   const who = (p && p.name) || t("Someone");
   if (S.netq.receive(from, m)) return; // what they need from my picture, how their connection is
   // chat, hands, reactions and captions from someone in another breakout room aren't for me
-  if (["chat", "hand", "react", "cap", "ana", "and", "anc", "ano", "anp", "ans"].includes(m.k) && !S.br.same(from)) return;
+  if (["chat", "hand", "react", "cap", "caphelp", "capfrom", "trq", "trr", "ana", "and", "anc", "ano", "anp", "ans"].includes(m.k) && !S.br.same(from)) return;
   if (S.br.receive(from, m)) {
     // breakout rooms
   } else if (m.k === "chat") {
@@ -814,6 +816,10 @@ function onMessage(from, m) {
     S.chat.sort((a, b) => a.at - b.at);
     renderChat();
   } else if (m.k === "state") {
+    if ("ct" in m || "cx" in m) {
+      S.capCan.set(from, { tk: !!m.ct, tr: !!m.cx });
+      capSync();
+    }
     const tile = document.querySelector(`.tile[data-id="${from}"]`);
     if (tile) {
       tile.dataset.mic = m.mic ? "1" : "0";
@@ -848,6 +854,15 @@ function onMessage(from, m) {
     capWanted(from, !!m.on && may(from, "caps"), who);
   } else if (m.k === "capno") {
     if (S.capsOn) showCap(from, who, m.why === "browser" ? t("(their browser can't make captions)") : m.why === "broken" ? t("(their captions aren't working on their device right now)") : t("(they turned off captions of their voice)"), true, true);
+  } else if (m.k === "caphelp") {
+    if (m.no) capNoHelp(from);
+    else capHelp(from, !!m.on, String(m.lang || "").slice(0, 20), who);
+  } else if (m.k === "capfrom") {
+    if (from === S.capHelper) capSend(String(m.text || "").slice(0, 500), !!m.final);
+  } else if (m.k === "trq") {
+    trHelp(from, m, who);
+  } else if (m.k === "trr") {
+    capTrWait.get(m.id)?.(typeof m.text === "string" ? m.text.slice(0, 1000) : null);
   } else if (m.k === "rec") {
     S.recBy ||= new Set();
     if (m.on) S.recBy.add(from);
@@ -2467,7 +2482,7 @@ S.capsOn = localStorage.getItem("juntos.captions") === "on";
 S.capShare = localStorage.getItem("juntos.capshare") !== "off";
 S.capSize = localStorage.getItem("juntos.capsize") || "large";
 S.capLang = localStorage.getItem("juntos.caplang") || "";
-S.capTo = captr.CAN ? localStorage.getItem("juntos.capto") || "" : ""; // translate the others' captions into this
+S.capTo = localStorage.getItem("juntos.capto") || ""; // translate the others' captions into this (here, or by a helper)
 S.capSeen = new Set(); // the languages the others' captions came in
 S.capNeed = new Set(); // languages whose translation the browser downloads only after a click
 S.capWant = new Set(); // who in the call wants captions (peer ids)
@@ -2510,9 +2525,10 @@ function capWarn(why, stop) {
   if (S.capBroken !== why) {
     S.capBroken = why;
     toast(t(CAP_WHY[why]));
-    for (const id of S.capWant) S.mesh?.sendTo(id, { k: "capno", why: stop ? "browser" : "broken" });
+    if (!(stop && capPick("tk"))) for (const id of S.capWant) S.mesh?.sendTo(id, { k: "capno", why: stop ? "browser" : "broken" });
   }
   paintCaps();
+  if (stop) capSync(); // someone else's browser may make them now
 }
 function capGiveUp(why = "browser") {
   capWarn(why, true);
@@ -2527,6 +2543,10 @@ function capReset() {
   if (S.capCode !== S.code) S.transcript = [];
   S.capCode = S.code;
   S.capWant.clear();
+  S.capCan.clear();
+  S.capHelper = null;
+  S.capNoHelpers.clear();
+  for (const id of [...S.capHelping.keys()]) capHelp(id, false);
   S.capLines.clear();
   capToldMe = false;
   paintCaps();
@@ -2546,7 +2566,9 @@ function paintCaps() {
 
 // listen to my own voice only while someone wants captions, my mic is on and I haven't turned it off
 function capSync() {
-  const need = !!(SR && S.mesh && micLive() && S.capShare && (S.capsOn || S.capWant.size));
+  const want = !!(S.mesh && micLive() && S.capShare && (S.capsOn || S.capWant.size));
+  capHelped(want && !SR);
+  const need = want && !!SR;
   if (need === capOn) return;
   capOn = need;
   capFails = 0;
@@ -2673,14 +2695,182 @@ function capSend(text, final) {
 function capWanted(from, on, who) {
   if (on) {
     S.capWant.add(from);
-    if (!SR || !S.capShare) S.mesh.sendTo(from, { k: "capno", why: SR ? "off" : "browser" });
-    else if (S.capBroken) S.mesh.sendTo(from, { k: "capno", why: "broken" });
-    else if (!capToldMe) {
+    if (!S.capShare) S.mesh.sendTo(from, { k: "capno", why: "off" });
+    else if (!SR && !capPick("tk")) S.mesh.sendTo(from, { k: "capno", why: "browser" });
+    else if (SR && S.capBroken) S.mesh.sendTo(from, { k: "capno", why: "broken" });
+    else if (!capToldMe && SR) {
       capToldMe = true;
       toast(t("{name} turned on captions: your browser turns what you say into text", { name: who }));
     }
   } else S.capWant.delete(from);
   capSync();
+}
+
+// ---------- help from someone else's browser ----------
+// Kleider, 2026-11-19: "This kind of limitation is something you can circumvent by redirecting that traffic through
+// another user that CAN do these things". Captions: someone whose browser can't turn their voice into text (Firefox,
+// Safari, a phone, a speech service that never answers) gets a browser in the call that can listen to a voice it
+// receives (Chrome / Edge 135+ on a computer) to do it: it listens to their voice as it arrives and sends the words
+// back, and they go out as their own captions (so who sees them, the transcript and "turn off captions of my voice"
+// work as always). Translation: a browser with no translator asks one that has it to translate the lines it shows.
+// Each helper is told, and so is the person helped; only someone in the same breakout room helps.
+S.capCan = new Map(); // peer id -> { tk: can caption a received voice, tr: can translate }
+S.capHelper = null; // who makes my captions, when my browser can't
+S.capNoHelpers = new Set(); // who said they can't help me after all
+S.capHelping = new Map(); // peer id -> the recognition listening to their voice for them
+let capTrackable = null;
+// a browser that can listen to a given track refuses a stopped one; one that can't ignores it (see capByTrack)
+function canCapTrack() {
+  if (capTrackable !== null) return capTrackable;
+  capTrackable = false;
+  if (!SR) return false;
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const dead = ctx.createMediaStreamDestination().stream.getAudioTracks()[0];
+    dead.stop();
+    const r = new SR();
+    try {
+      r.start(dead);
+      try {
+        r.abort();
+      } catch {}
+    } catch {
+      capTrackable = true;
+    }
+    ctx.close();
+  } catch {}
+  return capTrackable;
+}
+// the helper for me: spread over everyone who can (each person helped picks by a hash of the two ids)
+const capHash = (s) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
+const capCanHelp = (id, kind) => !!(S.capCan.get(id)?.[kind] && S.mesh?.peers.has(id) && S.br.same(id) && !(kind === "tk" && S.capNoHelpers.has(id)));
+function capPick(kind) {
+  if (!S.mesh) return null;
+  if (kind === "tk" && S.capHelper && capCanHelp(S.capHelper, "tk")) return S.capHelper; // keep the one helping
+  const ids = [...S.capCan.keys()].filter((id) => capCanHelp(id, kind));
+  return ids.sort((a, b) => capHash(S.mesh.id + a) - capHash(S.mesh.id + b))[0] || null;
+}
+const capName = (id) => S.mesh?.peers.get(id)?.name || t("Someone");
+function capHelped(on) {
+  const h = on ? capPick("tk") : null;
+  if (h === S.capHelper) return;
+  if (S.capHelper) S.mesh?.sendTo(S.capHelper, { k: "caphelp", on: false });
+  S.capHelper = h;
+  if (h) {
+    S.mesh.sendTo(h, { k: "caphelp", on: true, lang: S.capLang || navigator.language || "en-US" });
+    S.capBroken = "";
+    toast(t("Your browser can't make captions, so {name}'s browser makes them for you", { name: capName(h) }));
+  }
+  paintCaps();
+}
+function capNoHelp(from) {
+  S.capNoHelpers.add(from);
+  if (S.capHelper === from) capLost();
+}
+// my helper is gone: another, or else whoever wants my captions is told they stopped
+function capLost() {
+  S.capHelper = null;
+  capSync();
+  if (!S.capHelper && !SR) for (const id of S.capWant) S.mesh?.sendTo(id, { k: "capno", why: "browser" });
+}
+function capLeft(id) {
+  S.capCan.delete(id);
+  if (S.capHelping.has(id)) capHelp(id, false);
+  if (S.capHelper === id) capLost();
+}
+// I make captions for someone: my browser listens to their voice as it arrives here
+const CAP_HELP_MAX = 2; // people one browser makes captions for
+function capHelp(from, on, lang, who) {
+  const cur = S.capHelping.get(from);
+  if (cur) {
+    S.capHelping.delete(from);
+    cur.gone = true;
+    try {
+      cur.abort();
+    } catch {}
+  }
+  if (!on) return;
+  if (!canCapTrack() || !S.br.same(from) || S.capHelping.size >= CAP_HELP_MAX) return S.mesh?.sendTo(from, { k: "caphelp", no: true });
+  const tr = S.mesh?.peers.get(from)?.stream?.getAudioTracks()[0];
+  const r = new SR();
+  r.continuous = true;
+  r.interimResults = true;
+  r.lang = lang || navigator.language || "en-US";
+  r.fails = cur?.fails || 0;
+  r.onresult = (e) => {
+    r.fails = 0;
+    let fin = "";
+    let now = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) fin += e.results[i][0].transcript;
+      else now += e.results[i][0].transcript;
+    }
+    if (fin.trim()) S.mesh?.sendTo(from, { k: "capfrom", text: fin.trim().slice(0, 500), final: true });
+    if (now.trim()) S.mesh?.sendTo(from, { k: "capfrom", text: now.trim().slice(0, 500), final: false });
+  };
+  r.onerror = (e) => {
+    if (e.error !== "no-speech" && e.error !== "aborted") r.fails++;
+  };
+  // the browser stops now and then (silence, a time limit, their voice track changed): again while still asked
+  r.onend = () => {
+    if (r.gone || S.capHelping.get(from) !== r) return;
+    if (r.fails >= 5) {
+      S.capHelping.delete(from);
+      return S.mesh?.sendTo(from, { k: "caphelp", no: true });
+    }
+    setTimeout(() => S.capHelping.get(from) === r && !r.gone && capHelp(from, true, lang, who), Math.min(300 * 2 ** r.fails, 10000));
+  };
+  S.capHelping.set(from, r);
+  try {
+    if (!tr || tr.readyState !== "live") throw new Error("no voice yet");
+    r.start(tr);
+  } catch {
+    r.fails++;
+    setTimeout(() => r.onend(), 0);
+  }
+  if (!cur && who) toast(t("Your browser makes captions for {name} (theirs can't)", { name: who }));
+}
+
+// translation by someone else's browser, for a browser with no translator
+const capTrWait = new Map(); // request id -> answer
+function trVia(text, from, to) {
+  if (captr.CAN) return captr.translate(text, from, to);
+  const h = capPick("tr");
+  if (!h) return Promise.resolve(null);
+  const id = randomId();
+  return new Promise((res) => {
+    const timer = setTimeout(() => {
+      capTrWait.delete(id);
+      res(null);
+    }, 5000);
+    capTrWait.set(id, (x) => {
+      clearTimeout(timer);
+      capTrWait.delete(id);
+      res(x);
+    });
+    S.mesh.sendTo(h, { k: "trq", id, text: text.slice(0, 500), from, to });
+  });
+}
+const trHelped = new Set(); // whom I've translated for (told once)
+const trNeed = new Set(); // "from>to" pairs my browser downloads only after a click here
+const trBucket = new Map(); // peer id -> { n, at }: at most 30 a minute each
+async function trHelp(from, m, who) {
+  const answer = (text) => S.mesh?.sendTo(from, { k: "trr", id: String(m.id || "").slice(0, 40), text });
+  const b = trBucket.get(from) || { n: 0, at: Date.now() };
+  if (Date.now() - b.at > 60000) Object.assign(b, { n: 0, at: Date.now() });
+  trBucket.set(from, b);
+  const lf = String(m.from || ""), lt = String(m.to || "");
+  if (!captr.CAN || ++b.n > 30 || !captr.TARGETS.includes(captr.base(lt)) || !/^[a-z]{2,3}([-_][A-Za-z0-9]{2,8})*$/.test(lf)) return answer(null);
+  let st = captr.status(lf, lt);
+  if (!st) st = await captr.prepare(lf, lt);
+  if (st === "need") trNeed.add(`${lf}>${lt}`);
+  if (st !== "ok") return answer(null);
+  const x = await captr.translate(String(m.text || "").slice(0, 500), lf, lt);
+  answer(x);
+  if (x != null && !trHelped.has(from)) {
+    trHelped.add(from);
+    toast(t("Your browser translates captions for {name} (theirs can't)", { name: who }));
+  }
 }
 
 // a new caption line; the same person going on doesn't repeat the name (CSS shows it again once it's the top line)
@@ -2721,7 +2911,14 @@ function capText(L, s, lang, entry) {
     L.el.lastChild.textContent = s;
     return;
   }
-  const st = captr.status(lang, to);
+  // no translator here: a helper's browser translates finished phrases (and the line now and then while it grows)
+  const helped = !captr.CAN;
+  if (helped && (!capPick("tr") || (!entry && Date.now() - (L.asked || 0) < 1200))) {
+    if (!L.trd) L.el.lastChild.textContent = s;
+    return;
+  }
+  if (helped) L.asked = Date.now();
+  const st = helped ? "ok" : captr.status(lang, to);
   if (st !== "ok") {
     L.el.lastChild.textContent = s;
     // ready in a moment: the line on screen gets translated then, not only the next words
@@ -2734,7 +2931,7 @@ function capText(L, s, lang, entry) {
   }
   if (!L.trd) L.el.lastChild.textContent = s;
   const n = (L.seq = (L.seq || 0) + 1);
-  captr.translate(s, lang, to).then((x) => {
+  trVia(s, lang, to).then((x) => {
     if (x == null || L.seq !== n) return;
     L.trd = true;
     L.el.lastChild.textContent = x;
@@ -2742,7 +2939,7 @@ function capText(L, s, lang, entry) {
   });
   if (entry) {
     const src = entry.text;
-    captr.translate(src, lang, to).then((x) => {
+    trVia(src, lang, to).then((x) => {
       if (x != null && entry.text === src) Object.assign(entry, { tr: x, to });
     });
   }
@@ -2762,7 +2959,13 @@ function capTrNote(lang, r) {
 // any click or key is the go-ahead the browser wants before it downloads a translation
 for (const ev of ["pointerdown", "keydown"])
   addEventListener(ev, () => {
-    if (!S.capTo) return;
+    for (const p of trNeed) {
+      // a pair someone asked me to translate: this click is the go-ahead
+      const [a, b] = p.split(">");
+      trNeed.delete(p);
+      captr.prepare(a, b, true);
+    }
+    if (!S.capTo || !captr.CAN) return;
     for (const l of S.capNeed) captr.prepare(l, S.capTo, true).then((r) => capTrNote(l, r));
   }, true);
 
@@ -3026,12 +3229,15 @@ function captionsSheet() {
     o.selected = S.capTo === v;
     to.append(o);
   }
-  to.disabled = !captr.CAN;
+  const trBy = captr.CAN ? null : capPick("tr");
+  to.disabled = !captr.CAN && !trBy;
   const tn = document.createElement("p");
   tn.className = "small capTrNote";
   tn.textContent = captr.CAN
     ? t("Your browser translates them on this device; nothing is sent anywhere to translate.")
-    : t("Translated captions need Chrome or Edge on a computer.");
+    : trBy
+      ? t("Your browser can't translate, so {name}'s browser translates them for you (it gets the captions you see).", { name: capName(trBy) })
+      : t("Translated captions need Chrome or Edge on a computer, here or for someone in the call.");
   const gets = document.createElement("div");
   const paintGets = () => {
     gets.replaceChildren();
@@ -3055,7 +3261,7 @@ function captionsSheet() {
     S.capTo = to.value;
     localStorage.setItem("juntos.capto", to.value);
     S.capNeed.clear();
-    for (const l of S.capSeen) captr.prepare(l, to.value, true).then((r) => {
+    if (captr.CAN) for (const l of S.capSeen) captr.prepare(l, to.value, true).then((r) => {
       capTrNote(l, r);
       paintGets();
     });
