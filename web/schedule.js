@@ -322,12 +322,14 @@ async function copy(text, done, toast, t) {
 }
 
 /** The link, Copy / Share and the QR code: shared by the in-call Invite sheet and a planned call. */
-function linkBlock(inner, url, { t, toast, isPhone, share }) {
+export function linkBlock(inner, url, { t, toast, isPhone, share, copied }) {
   const row = el("div", { className: "schedLink" });
   const input = el("input", { value: url, readOnly: true, name: "link" });
   input.onfocus = () => input.select();
   const cp = el("button", { className: "primary", name: "copy", textContent: t("Copy link") });
-  cp.onclick = () => copy(url, t("Link copied. Send it to anyone."), toast, t);
+  cp.onclick = () => {
+    copy(url, copied || t("Link copied. Send it to anyone."), toast, t);
+  };
   row.append(input, cp);
   inner.append(row);
   if (navigator.share && isPhone) {

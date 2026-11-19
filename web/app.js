@@ -12,7 +12,7 @@ import { Breakout } from "./breakout.js";
 import { Notes } from "./notes.js";
 import { Annotate } from "./annotate.js";
 import { openFeedback } from "./feedback.js";
-import { scheduleSheet, inviteSheet, paintUpcoming, securityFields, keepSecurity, passOf, callUrl, newPass, PASS_RE } from "./schedule.js";
+import { linkBlock, scheduleSheet, inviteSheet, paintUpcoming, securityFields, keepSecurity, passOf, callUrl, newPass, PASS_RE } from "./schedule.js";
 import { Net } from "./net.js";
 
 translatePage();
@@ -67,6 +67,7 @@ const ICON = {
   layout: "M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z",
   cc: "M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z",
   pip: "M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z",
+  swap: "M4 6h18V4H4c-1.1 0-2 .9-2 2v11H0v3h14v-3H4V6zm19 2h-6c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h6c.55 0 1-.45 1-1V9c0-.55-.45-1-1-1zm-1 9h-4v-7h4v7z",
   fullExit: "M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z",
 };
 const svg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON[name]}"/></svg>`;
@@ -196,14 +197,18 @@ function route() {
   const m = location.pathname.slice(BASE.length - 1).match(/^\/r\/([a-z0-9-]{4,64})$/);
   if (m) {
     S.code = m[1];
-    // a link with the passcode in it (".../r/code#p=123456"): keep it, and take it off the address bar
-    const hp = location.hash.match(/^#p=([A-Za-z0-9]{4,10})$/);
+    // a link with the passcode in it (".../r/code#p=123456"): keep it, and take it off the address bar. A link from
+    // "Switch to another device" also carries a one-time code (sw) and the name (n).
+    const h = new URLSearchParams(location.hash.slice(1));
+    const hp = /^[A-Za-z0-9]{4,10}$/.test(h.get("p") || "") && h.get("p");
     if (hp) {
       try {
-        localStorage.setItem(`juntos.pass.${S.code}`, hp[1]);
+        localStorage.setItem(`juntos.pass.${S.code}`, hp);
       } catch {}
-      history.replaceState(history.state, "", `${BASE}r/${S.code}${location.search}`);
     }
+    S.switchTo = /^[0-9a-f]{32}$/.test(h.get("sw") || "") ? h.get("sw") : "";
+    S.switchName = S.switchTo ? (h.get("n") || "").slice(0, 60) : "";
+    if (location.hash) history.replaceState(history.state, "", `${BASE}r/${S.code}${location.search}`);
     openLobby();
   } else {
     show("home");
@@ -452,10 +457,80 @@ function paintToggles() {
 }
 
 // ---------- lobby ----------
+// ---------- switch to another device, like Meet's "Switch here" ----------
+// The device in the call shows a link (and a QR code) with a one-time code. The other device opens it and picks
+// "Switch here": once it is in the call it sends the code to everyone, the device that made it sees its own code,
+// makes the new one a co-host if it was a host, and leaves. "Join here too" joins as well and nobody leaves.
+function paintSwitch() {
+  const on = !!S.switchTo;
+  $("enter").textContent = on ? t("Switch here") : t("Join now");
+  let too = $("joinToo");
+  if (on && !too) {
+    too = document.createElement("button");
+    too.id = "joinToo";
+    too.className = "secondary";
+    too.textContent = t("Join here too");
+    too.onclick = () => {
+      S.switchTo = "";
+      paintSwitch();
+      $("enter").click();
+    };
+    $("enter").after(too);
+  }
+  if (too) too.hidden = !on;
+}
+
+function switchSheet() {
+  S.mySwitch ||= [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const u = new URL(callUrl(S.code));
+  const h = new URLSearchParams(u.hash.slice(1));
+  h.set("sw", S.mySwitch);
+  h.set("n", localStorage.getItem("name") || "");
+  u.hash = h.toString();
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  const inner = document.createElement("div");
+  inner.className = "sheetInner schedSheet switchSheet";
+  const h3 = document.createElement("h3");
+  h3.textContent = t("Switch to another device");
+  const p = document.createElement("p");
+  p.className = "small";
+  p.textContent = t("Open this link on your other device, or scan the code. There, pick \"Switch here\": the call moves over and this device leaves.");
+  inner.append(h3, p);
+  linkBlock(inner, u.href, { t, toast, isPhone, share: { url: u.href }, copied: t("Link copied. Open it on your other device; it is only for you.") });
+  if (S.locked) {
+    const l = document.createElement("p");
+    l.className = "small";
+    l.textContent = t("The call is locked: let your other device in when it asks.");
+    inner.append(l);
+  }
+  const done = document.createElement("button");
+  done.className = "ghost";
+  done.name = "done";
+  done.textContent = t("Done");
+  done.onclick = () => sheet.remove();
+  inner.append(done);
+  sheet.append(inner);
+  sheet.onclick = (e) => {
+    if (e.target === sheet) sheet.remove();
+  };
+  document.body.append(sheet);
+}
+
+// the other device says it is in with my code: hand over and leave
+function switched(from, tok) {
+  if (!S.mySwitch || tok !== S.mySwitch) return;
+  S.mySwitch = "";
+  if (S.isHost && S.mesh) S.mesh.host({ t: "cohost", id: from, on: true });
+  document.querySelector(".switchSheet")?.closest(".sheet")?.remove();
+  setTimeout(() => leave(t("You switched to your other device.")), 600);
+}
+
 async function openLobby() {
   show("lobby");
-  $("name").value = localStorage.getItem("name") || "";
+  $("name").value = S.switchName || localStorage.getItem("name") || "";
   askPass();
+  paintSwitch();
   $("pBg").innerHTML = svg("bg");
   $("pDev").innerHTML = svg("gear");
   if (!S.camStream) await (S.mediaReady ||= getMedia());
@@ -669,6 +744,7 @@ function enterCall(name) {
   mesh.addEventListener("channel-open", (e) => {
     // catch the newcomer up: board, chat, how I am
     mesh.sendTo(e.detail.id, { ...myState(), hand: S.hands.has("me") });
+    if (S.switchTo) mesh.sendTo(e.detail.id, { k: "switch", tok: S.switchTo }); // I came from another device of mine
     if (S.isHost && S.pinAll.length) mesh.sendTo(e.detail.id, { k: "pinall", ids: S.pinAll });
     if (S.board && S.board.items.length) mesh.sendTo(e.detail.id, S.board.snapshot());
     const mainChat = S.chat.filter((c) => !c.room); // a breakout room's chat stays in the room
@@ -759,6 +835,8 @@ function onMessage(from, m) {
     const lang = typeof m.lang === "string" ? m.lang.slice(0, 20) : "";
     if (lang) S.capSeen.add(captr.base(lang));
     if (S.capsOn) showCap(from, who, String(m.text || "").slice(0, 500), !!m.final, false, lang);
+  } else if (m.k === "switch") {
+    switched(from, String(m.tok || ""));
   } else if (m.k === "capwant") {
     capWanted(from, !!m.on && may(from, "caps"), who);
   } else if (m.k === "capno") {
@@ -1413,6 +1491,7 @@ function buildBar() {
   extra.push(button("bNotes", "notes", "Notes", () => openPanel("notes")));
   extra.push(button("bLayout", "layout", "Layout", layoutSheet));
   extra.push(button("bCaps", "cc", "Captions", captionsSheet));
+  extra.push(button("bSwitch", "swap", "Switch device", switchSheet));
   if (pipSupported()) extra.push(button("bPip", "pip", "Small window", openPip));
   if (Recorder.supported()) extra.push(button("bRec", "rec", "Record", toggleRec));
   const react = button("bReact", "more", "React", openReactions);

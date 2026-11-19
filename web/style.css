@@ -179,7 +179,7 @@ a { color: #93c5fd; }
 }
 
 .sheet { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 20; display: flex; align-items: flex-end; }
-.sheetInner { background: var(--bg); width: 100%; border-radius: 18px 18px 0 0; padding: 16px; padding-bottom: max(16px, env(safe-area-inset-bottom)); display: grid; grid-template-columns: 1fr; gap: 8px; }
+.sheetInner { background: var(--bg); width: 100%; border-radius: 18px 18px 0 0; padding: 16px; padding-bottom: max(16px, env(safe-area-inset-bottom)); display: grid; grid-template-columns: 1fr; gap: 8px; max-height: 100%; overflow-y: auto; } /* a sheet taller than the screen scrolls; its top never goes off the screen */
 .sheetInner .round { width: 100%; justify-content: flex-start; padding: 0 16px; border-radius: 12px; }
 .sheetInner .round span { display: inline; }
 
