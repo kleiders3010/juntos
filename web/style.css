@@ -279,8 +279,17 @@ body.boardBig .grid .tile .label { font-size: 12px; padding: 1px 6px; }
 #boardMax svg { width: 22px; height: 22px; fill: currentColor; display: block; }
 
 /* audio: lobby level, sound tests, muted note, push to talk, shortcuts */
-.lobbyMic { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; font-size: 14px; color: var(--muted); }
-.lobbyMic[hidden] { display: none; }
+/* the lobby's devices, like Meet's pre-join: which microphone, speaker and camera, each can be changed and checked */
+#lobbyMsg:empty { display: none; }
+.lobbyDevs { display: flex; flex-direction: column; gap: 8px; }
+.ldRow { display: grid; grid-template-columns: 22px minmax(0, 1fr) 64px; align-items: center; gap: 8px; }
+.ldRow > :nth-child(2):last-child { grid-column: 2 / 4; }
+.ldIc svg { width: 22px; height: 22px; fill: var(--muted); display: block; }
+.ldRow.bad .ldIc svg { fill: #e8a33d; }
+.ldRow select { min-width: 0; width: 100%; font: inherit; font-size: 14px; color: var(--fg, #fff); background: var(--card); border: 1px solid #4b5563; border-radius: 10px; padding: 8px; text-overflow: ellipsis; }
+.ldRow select:disabled { opacity: .75; }
+.ldRow .meter { width: 100%; }
+.ldRow .chip { padding: 6px 0; text-align: center; }
 .devTests { display: flex; flex-wrap: wrap; gap: 8px; }
 .devTests .chip { padding: 10px 16px; font-size: 15px; }
 .devTests .chip:disabled { opacity: .8; }

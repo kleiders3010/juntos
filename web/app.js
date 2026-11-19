@@ -588,11 +588,12 @@ function passRefused(m) {
 function lobbyMeter() {
   clearInterval(lobbyMeter.timer);
   const m = $("pMeter");
+  lobbyPickers();
   if (!S.micTrack) {
-    lobbyDevices();
-    return (m.parentNode.hidden = true);
+    m.classList.add("off");
+    m.firstChild.style.width = "0";
+    return lobbyDevices();
   }
-  m.parentNode.hidden = false;
   const ac = (openDevices.ac ||= new (window.AudioContext || window.webkitAudioContext)());
   const an = ac.createAnalyser();
   an.fftSize = 512;
@@ -637,7 +638,8 @@ function lobbyDevices() {
   }
   const spk = lobbyDevices.spk;
   let msg, ok;
-  if (cam && mic) {
+  if (mic && !S.mic) msg = t("Your microphone is muted: nobody will hear you.");
+  else if (cam && mic) {
     ok = true;
     msg = spk ? t("Your camera, microphone and speaker work") : t("Your camera and microphone work");
   } else if (mic) msg = t("Your microphone works. No camera.");
@@ -649,9 +651,72 @@ function lobbyDevices() {
   el.lastChild.textContent = msg;
   el.hidden = false;
 }
+// The lobby names the microphone, speaker and camera in use, each a picker (Meet's pre-join does the same):
+// you see before joining that it's the headset and not the laptop's microphone, and change it there.
+async function lobbyPickers() {
+  const list = (await navigator.mediaDevices?.enumerateDevices?.().catch(() => [])) || [];
+  const live = (tr) => !!tr && tr.readyState === "live";
+  // "Microphone (Realtek(R) Audio)" stays; a USB id at the end "(046d:0825)" goes
+  const name = (d) => (d.label || "").replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i, "");
+  const fill = (id, kind, cur, noun, none, ok, icon) => {
+    const sel = $(id);
+    const row = sel.parentNode;
+    row.classList.toggle("bad", !ok);
+    row.firstChild.innerHTML = svg(icon);
+    if (document.activeElement === sel) return; // never rebuilt under the person's hand
+    const items = list.filter((d) => d.kind === kind && d.deviceId);
+    sel.innerHTML = "";
+    items.forEach((d, i) => sel.append(new Option(name(d) || `${t(noun)} ${i + 1}`, d.deviceId)));
+    if (!items.length) sel.append(new Option(t(none), ""));
+    if (cur && items.some((d) => d.deviceId === cur)) sel.value = cur;
+    sel.disabled = !items.length;
+  };
+  const mic = live(S.micTrack), cam = live(S.camTrack);
+  fill("ldMic", "audioinput", S.micTrack?.getSettings().deviceId, "Microphone", "No microphone found", mic && S.mic, mic && S.mic ? "mic" : "micOff");
+  fill("ldCam", "videoinput", S.camTrack?.getSettings().deviceId, "Camera", "No camera found", cam, cam && S.cam ? "cam" : "camOff");
+  // Firefox and Safari can't send sound to a chosen speaker: there it's the one the system uses
+  if ("setSinkId" in HTMLMediaElement.prototype && list.some((d) => d.kind === "audiooutput" && d.deviceId)) fill("ldSpk", "audiooutput", S.sink || "default", "Speaker", "", true, "vol");
+  else {
+    const sel = $("ldSpk");
+    sel.innerHTML = "";
+    sel.append(new Option(t("This device's speaker"), ""));
+    sel.disabled = true;
+    sel.parentNode.firstChild.innerHTML = svg("vol");
+  }
+}
+$("ldMic").onchange = async (e) => {
+  await useMic(e.target.value);
+  lobbyPickers();
+};
+$("ldCam").onchange = async (e) => {
+  await useCamera({ ...camConstraints(null), facingMode: undefined, deviceId: { exact: e.target.value } });
+  lobbyPickers();
+};
+$("ldSpk").onchange = (e) => useSpeaker(e.target.value);
+$("ldTest").onclick = async () => {
+  const b = $("ldTest");
+  if (b.disabled) return;
+  b.disabled = true;
+  b.textContent = "♪";
+  try {
+    const a = await playOnSpeaker((chime.url ||= chime()));
+    if (!a) toast(t("Couldn't play a sound here"));
+    else await new Promise((r) => (a.onended = r));
+  } finally {
+    b.disabled = false;
+    b.textContent = t("Test");
+  }
+};
+navigator.mediaDevices?.addEventListener?.("devicechange", () => !$("lobby").hidden && lobbyPickers());
 $("pCheck").onclick = openDevices;
-$("pMic").onclick = () => setMic(!S.mic);
-$("pCam").onclick = () => setCam(!S.cam);
+$("pMic").onclick = async () => {
+  await setMic(!S.mic);
+  lobbyPickers();
+};
+$("pCam").onclick = async () => {
+  await setCam(!S.cam);
+  lobbyPickers();
+};
 $("pBg").onclick = () => {
   const order = ["none", "blur", "blur-strong", ...BACKGROUNDS.filter((b) => b.src).map((b) => b.id)];
   const next = order[(order.indexOf(S.bgMode) + 1) % order.length];

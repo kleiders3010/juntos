@@ -34,6 +34,25 @@ with sync_playwright() as p:
     a.wait_for_selector("#lobby:not([hidden])")
     a.wait_for_selector("#lobbyOk.ok:not([hidden])", timeout=5000)
     check("camera" in a.text_content("#lobbyOk") and "microphone" in a.text_content("#lobbyOk"), f"the lobby says the camera and microphone work: {a.text_content('#lobbyOk')!r}")
+
+    # Kleider (hub #335): before joining the screen shows the devices in use, to tell it's all good
+    SEL = "id => { const s = document.getElementById(id); return s.selectedIndex < 0 ? '' : s.options[s.selectedIndex].text }"
+    a.wait_for_function("document.querySelector('#ldMic').options.length > 0 && document.querySelector('#ldCam').options.length > 0", timeout=5000)
+    mic, cam = a.evaluate(SEL, "ldMic"), a.evaluate(SEL, "ldCam")
+    real = a.evaluate("() => navigator.mediaDevices.enumerateDevices().then(l => l.map(d => d.label))")
+    check(mic in real and cam in real, f"the lobby names the microphone and camera in use: {mic!r}, {cam!r}")
+    check(a.evaluate(SEL, "ldMic") == a.evaluate("() => navigator.mediaDevices.enumerateDevices().then(l => l.find(d => d.kind === 'audioinput' && d.deviceId === __S.micTrack.getSettings().deviceId).label)"), "the microphone shown is the one sending")  # pinned: the name shown is the device in use
+    check(a.is_visible("#ldSpk") and a.evaluate(SEL, "ldSpk") != "", f"and the speaker: {a.evaluate(SEL, 'ldSpk')!r}")
+    check(a.is_visible("#pMeter"), "the microphone's level is next to it")
+    a.evaluate("window.__played = 0; const pl = HTMLMediaElement.prototype.play; HTMLMediaElement.prototype.play = function () { if (this instanceof HTMLAudioElement) __played++; return pl.call(this) }; 0")
+    a.click("#ldTest")
+    a.wait_for_function("!document.querySelector('#ldTest').disabled", timeout=8000)
+    check(a.evaluate("__played") == 1, "Test plays a sound on the speaker from the lobby")
+    a.click("#pMic")
+    a.wait_for_function("!document.querySelector('#lobbyOk').classList.contains('ok')", timeout=3000)
+    check("muted" in a.text_content("#lobbyOk") and a.evaluate("document.querySelector('.ldRow[data-k=mic]').classList.contains('bad')"), f"a muted microphone shows before joining: {a.text_content('#lobbyOk')!r}")  # pinned: before joining the lobby says when the microphone is muted (Meet warns too)
+    a.click("#pMic")
+    a.wait_for_selector("#lobbyOk.ok", timeout=3000)
     a.fill("#name", "Ana")
     a.click("#enter")
     a.wait_for_selector("#call:not([hidden])")
