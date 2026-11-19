@@ -28,7 +28,7 @@ def check(ok, what):
         errors.append(what)
 
 
-# --- a minimal Nostr relay: REQ subscriptions (kinds + #x), EVENT fan-out, nothing stored ---
+# --- a minimal Nostr relay: REQ subscriptions (kinds + #x), EVENT fan-out, recent events replayed ---
 subs = {}  # websocket -> list of filters
 
 
@@ -47,6 +47,11 @@ async def relay_conn(ws):
             d = json.loads(raw)
             if d[0] == "REQ":
                 subs[ws].append((d[1], d[2]))
+                # public relays send what they still have since the subscription's "since" (ephemeral ones too,
+                # for a while): a newcomer sees hellos from before it came
+                for ev in relay_events[-2000:]:
+                    if matches(d[2], ev) and ev["created_at"] >= d[2].get("since", 0):
+                        await ws.send(json.dumps(["EVENT", d[1], ev]))
                 await ws.send(json.dumps(["EOSE", d[1]]))
             elif d[0] == "EVENT":
                 ev = d[1]

@@ -6,7 +6,7 @@
 # talk, locking the call, someone asking to join and a co-host letting them in, removing someone, refusing
 # someone: all reach everyone; a document forged by a guest is ignored; a co-host can't remove the host; and
 # none of it makes a single request to our server.
-# Run: python hostctl_test.py [base-url]
+# Run: python hostctl_test.py [base-url]   (an https base: the live site with the public relays)
 import asyncio
 import json
 import sys
@@ -30,8 +30,9 @@ def check(ok, what):
         errors.append(what)
 
 
-# --- a minimal Nostr relay: REQ subscriptions (kinds + #x), EVENT fan-out, nothing stored ---
+# --- a minimal Nostr relay: REQ subscriptions (kinds + #x), EVENT fan-out, recent events replayed ---
 subs = {}
+stored = []
 
 
 def matches(f, ev):
@@ -49,9 +50,16 @@ async def relay_conn(ws):
             d = json.loads(raw)
             if d[0] == "REQ":
                 subs[ws].append((d[1], d[2]))
+                # public relays send what they still have since the subscription's "since" (ephemeral ones too,
+                # for a while): a newcomer sees hellos from before it came
+                for ev in stored:
+                    if matches(d[2], ev) and ev["created_at"] >= d[2].get("since", 0):
+                        await ws.send(json.dumps(["EVENT", d[1], ev]))
                 await ws.send(json.dumps(["EOSE", d[1]]))
             elif d[0] == "EVENT":
                 ev = d[1]
+                stored.append(ev)
+                del stored[:-2000]
                 await ws.send(json.dumps(["OK", ev["id"], True, ""]))
                 for other, fs in list(subs.items()):
                     for sid, f in fs:
@@ -94,7 +102,8 @@ with sync_playwright() as p:
             pg.wait_for_function("__S.joined", timeout=15000)
         return pg
 
-    Q = f"signal={WS}&relays={RELAY}"
+    LIVE = BASE.startswith("https://")  # the live site: the public relays, no test parameters
+    Q = "" if LIVE else f"signal={WS}&relays={RELAY}"
     full = "(n) => __S.mesh && __S.mesh.peers.size === n && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')"
 
     def wait(pg, js, what, arg=None, secs=15):
@@ -104,10 +113,11 @@ with sync_playwright() as p:
             return True
         except Exception:
             check(False, what)
+            print("   ", pg.evaluate("() => __S.mesh ? { id: __S.mesh.id, w: __S.mesh.waitingN, shown: __S.mesh.hsShown, seen: [...__S.mesh.helloSeen].map(x => x.slice(0, 4)), viaN: [...__S.mesh.viaN].map(x => x.slice(0, 4)), peers: [...__S.mesh.peers.values()].map(p => p.name + ':' + p.id.slice(0, 4) + ':' + p.state + '/' + p.dc.readyState) } : 'out'"), flush=True)
             return False
 
     a = person("Ana", f"{BASE}/?{Q}")
-    link = a.url.split("?")[0] + "?" + Q
+    link = a.url.split("?")[0] + ("?" + Q if Q else "")
     check(a.evaluate("__S.isHost && __S.isOwner && __S.mesh.selfHost"), "the call's code is made from Ana's host key: she is the host without the server")
     o = person("Beto", link)
     c = person("Carla", link)

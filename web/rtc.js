@@ -130,8 +130,21 @@ export class Mesh extends EventTarget {
     this.aloneTimer = setInterval(() => !this.peers.size && say(), 20000);
   }
 
+  proof() {
+    return this.hproof ? { hp: this.hpub, hsig: this.hproof } : {};
+  }
+
+  // may this person connect to me (a locked call: only those let in, the hosts, or the host proving it)
+  async mayCome(m) {
+    const st = this.hd.doc;
+    if (!st || !(st.locked || m.knock) || st.admit.includes(m.from) || m.from === st.host || st.cos[m.from]) return true;
+    if (m.t === "here" && !this.peers.size && !this.meHost) return true; // I'm the newcomer: they're in already
+    if (!this.hostHere()) return true; // nobody here could let them in
+    return !!(m.hp && (await helloOk(m.hp, m.hsig, this.room, m.from)));
+  }
+
   sayHello() {
-    if (!this.closed && !this.srv) this.ns.send({ t: "hello", from: this.id, name: this.name, ck: this.signer.pub, ...(this.knock ? { knock: 1 } : {}), ...(this.hproof ? { hp: this.hpub, hsig: this.hproof } : {}) });
+    if (!this.closed && !this.srv) this.ns.send({ t: "hello", from: this.id, name: this.name, ck: this.signer.pub, ...(this.knock ? { knock: 1 } : {}), ...this.proof() });
   }
 
   async onRelay(m) {
@@ -145,7 +158,7 @@ export class Mesh extends EventTarget {
       if (typeof m.ck === "string" && /^[0-9a-f]{64}$/.test(m.ck)) this.cks.set(m.from, m.ck);
       const st = this.hd.doc;
       if (st && (st.out.includes(m.from) || st.deny.includes(m.from))) return; // sent out: no answer
-      if (st && (st.locked || m.knock) && !st.admit.includes(m.from) && this.hostHere() && !(m.hp && (await helloOk(m.hp, m.hsig, this.room, m.from)))) {
+      if (!(await this.mayCome(m))) {
         // the call is locked: they wait until a host or co-host lets them in (the hosts tell them so)
         const knew = this.knocking.has(m.from);
         this.knocking.set(m.from, name);
@@ -159,7 +172,7 @@ export class Mesh extends EventTarget {
         if (BIG_OK) return this.goServer();
         return void this.ns.send({ t: "full", from: this.id, to: m.from });
       }
-      this.ns.send({ t: "here", from: this.id, to: m.from, name: this.name, ck: this.signer.pub, ...(this.hd.wire ? { hs: this.hd.wire } : {}) });
+      this.ns.send({ t: "here", from: this.id, to: m.from, name: this.name, ck: this.signer.pub, ...(this.hd.wire ? { hs: this.hd.wire } : {}), ...this.proof() });
       this.viaN.add(m.from);
       this.emit("someone-joining", { id: m.from, name });
     } else if (m.t === "here") {
@@ -168,6 +181,9 @@ export class Mesh extends EventTarget {
       // (the host coming back takes the call's choices as they are, then says it's the host now)
       if (m.hs) await this.takeHs(m.hs, this.selfHost);
       if (this.closed || this.srv || this.peers.has(m.from)) return;
+      // relays replay recent messages: a newcomer may answer an old hello. Someone already in a locked call
+      // connects only to people who were let in (or the host, who proves it)
+      if (!(await this.mayCome(m))) return;
       this.viaN.add(m.from);
       // two newcomers at once: only the one with the lower id calls
       if (this.helloSeen.has(m.from) && this.id > m.from) return;
@@ -492,14 +508,17 @@ export class Mesh extends EventTarget {
       clearInterval(this.aloneTimer);
       return this.emit("host", { t: d.out.includes(this.id) ? "removed" : "denied", by });
     }
-    if (!this.hsShown) {
-      if (this.waitingN && d.locked && !d.admit.includes(this.id)) return; // still waiting
+    const letIn = this.waitingN && (!d.locked || d.admit.includes(this.id));
+    if (letIn) {
+      // let in: say hello again, now the others answer, and I call each of them (the hellos I saw while waiting
+      // don't count: those people ignored my answers then)
+      this.waitingN = false;
+      this.helloSeen.clear();
+      this.hello();
+    }
+    if (!this.hsShown || letIn) {
+      if (this.waitingN) return; // still waiting
       this.hsShown = true;
-      if (this.waitingN) {
-        // let in: say hello again, now the others answer
-        this.waitingN = false;
-        this.hello();
-      }
       this.emit("host", { t: "room", host: this.meHost, owner: this.selfHost, locked: d.locked, pass: false, serverless: true });
       this.emit("host", { t: "perms", perms: d.perms, talk: d.talk });
       for (const id of Object.keys(d.cos)) if (id !== this.id) this.emit("host", { t: "role", id, role: "co", by });
