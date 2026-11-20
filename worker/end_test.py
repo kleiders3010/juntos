@@ -116,6 +116,8 @@ with sync_playwright() as p:
     for mode in ("server", "serverless"):
         print(f"--- {mode} ---", flush=True)
         q = f"signal={WS}" + ("" if mode == "server" else f"&relays={RELAY}")
+        if mode == "serverless" and BASE.startswith("https://"):
+            q = "x=1"  # the live site: the public relays, no test parameters
         a = person("Ana", f"{BASE}/?{q}")
         link = a.url.split("?")[0] + "?" + q
         o = person("Beto", link)
