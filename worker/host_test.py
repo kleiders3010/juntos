@@ -165,7 +165,7 @@ with sync_playwright() as p:
     c.wait_for_function("__S.locked", timeout=5000)
     e = person("Eva", join, wait=False)
     e.wait_for_function("__S.waiting", timeout=10000)
-    a.evaluate("document.getElementById('bLeave').click()")
+    a.evaluate("document.getElementById('bLeave').click(); document.getElementById('justLeave')?.click()")
     e.wait_for_function("__S.joined && !__S.waiting", timeout=10000)
     check(True, "the last host leaves: Eva, who was waiting, comes in")
     a.click("#rejoin")

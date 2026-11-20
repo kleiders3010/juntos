@@ -195,7 +195,7 @@ with sync_playwright() as p:
     mid = next(i for i in range(1, N) if pages[i].evaluate("__S.mesh.big.links.size") >= 3)
     gone = pages[mid].evaluate("__S.mesh.id")
     print(f"  P{mid} (links {links[mid]}) leaves", flush=True)
-    pages[mid].click("#bLeave")
+    pages[mid].click("#bLeave"); pages[mid].query_selector("#justLeave") and pages[mid].click("#justLeave")  # a host is asked: just leave
     rest = [pg for i, pg in enumerate(pages) if i != mid]
     wait_all(f"__S.mesh.peers.size === {N - 2}", rest, 30, "everyone sees them gone")
     wait_all(LINKS_OK, rest, 60, "the tree closes over the gap: every device's links open again")

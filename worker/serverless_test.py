@@ -119,7 +119,7 @@ with sync_playwright() as p:
     check(LIVE or len(relay_events) > 0 and all('"sdp"' not in e["content"] and "Beto" not in e["content"] for e in relay_events),
           "the relay saw only encrypted messages")
 
-    c.click("#bLeave")
+    c.click("#bLeave"); c.query_selector("#justLeave") and c.click("#justLeave")  # a host is asked: just leave
     a.wait_for_function("__S.mesh.peers.size === 1", timeout=10000)
     o.wait_for_function("__S.mesh.peers.size === 1", timeout=10000)
     check(True, "Carla leaves: Ana and Beto see her gone")

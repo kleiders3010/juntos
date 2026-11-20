@@ -105,7 +105,7 @@ with sync_playwright() as p:
     a.click("#bMore")
     a.click(".sheet #bPip")
     a.wait_for_function("!!__S.pip", timeout=10000)
-    a.click("#bLeave")
+    a.click("#bLeave"); a.query_selector("#justLeave") and a.click("#justLeave")  # a host is asked: just leave
     a.wait_for_selector("#ended:not([hidden])")
     a.wait_for_function("!__S.pip", timeout=5000)
     check(True, "leaving the call closes the small window")

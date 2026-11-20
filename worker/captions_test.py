@@ -233,7 +233,7 @@ with sync_playwright() as p:
     o.click("#bCaps")
     o.check('input[name="caps"]')
     o.click(".capSheet .primary")
-    o.click("#bLeave")
+    o.click("#bLeave"); o.query_selector("#justLeave") and o.click("#justLeave")  # a host is asked: just leave
     o.wait_for_selector("#ended:not([hidden])")
     check(o.is_visible("#endedCaps") and o.evaluate("localStorage.getItem('juntos.captions')") == "on", "after leaving, the captions can still be saved; on stays on")
     b.close()

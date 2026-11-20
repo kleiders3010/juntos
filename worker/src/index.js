@@ -12,7 +12,7 @@ const MAX_PEOPLE = 200;
 const MAX_KIDS = 6; // the most children a device may say it can feed
 const MAX_MSG = 64 * 1024;
 const ROOM_KEEP = 31 * 24 * 3600 * 1000; // a room's host and lock are forgotten a month after its last use
-const HOST_CMDS = new Set(["lock", "admit", "admit-all", "deny", "remove", "pass", "talk", "perm", "cohost"]);
+const HOST_CMDS = new Set(["lock", "admit", "admit-all", "deny", "remove", "pass", "talk", "perm", "cohost", "end"]);
 // What everyone may do, set by the hosts (Meet's host management: chat, present, audio locks). Hosts and co-hosts
 // always may. "talk" off = nobody may speak unless a host lets them one by one (Zoom's "Mute all" without "Allow
 // participants to unmute themselves"). A host never switches anyone's microphone on or off: who isn't allowed to
@@ -393,6 +393,19 @@ export class Room {
         await this.state.storage.put("in", this.in);
       }
       for (const p of this.peers()) this.send(p.ws, { t: "leave", id: target.a.id, removed: true });
+    } else if (msg.t === "end") {
+      // Meet's "End the call for everyone": everyone is sent out, the hosts and whoever is waiting to come in too
+      // (breakout rooms are inside the same call, so they end with it)
+      for (const p of all) {
+        this.send(p.ws, { t: "ended", by: me.name });
+        p.ws.serializeAttachment({});
+        try {
+          p.ws.close(4005, "ended");
+        } catch (_) {}
+      }
+      await this.loadPerms();
+      this.in = {};
+      await this.state.storage.put("in", this.in);
     } else if (msg.t === "talk" || msg.t === "perm" || msg.t === "cohost") {
       await this.loadPerms();
       const st = this.state.storage;

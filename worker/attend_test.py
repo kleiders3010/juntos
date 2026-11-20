@@ -68,7 +68,7 @@ with sync_playwright() as p:
     o = page("Beto")
     enter(o, "Beto", join)
     peers(a, 2)
-    c.evaluate("document.getElementById('bLeave').click()")
+    c.evaluate("document.getElementById('bLeave').click(); document.getElementById('justLeave')?.click()")
     a.wait_for_function("__S.mesh.peers.size === 1", timeout=60000)
 
     a.evaluate(OPEN_PEOPLE)
@@ -85,7 +85,7 @@ with sync_playwright() as p:
     o.wait_for_selector("#peopleList li")
     check(o.query_selector('button[name="attSave"]') is None, "Beto isn't a host: no attendance button")
 
-    a.evaluate("document.getElementById('bLeave').click()")
+    a.evaluate("document.getElementById('bLeave').click(); document.getElementById('justLeave')?.click()")
     a.wait_for_selector("#endedAtt:not([hidden])")
     _, r2 = rows(a, "#endedAtt")
     check(r2["Ana"]["Last left"][:4].isdigit() and r2["Beto"]["Last left"][:4].isdigit(), "after leaving Ana can still save it; nobody is 'still in the call'")

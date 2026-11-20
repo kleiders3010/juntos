@@ -137,7 +137,7 @@ with sync_playwright() as p:
     check(hp.evaluate("__S.mesh.fwd.stats.helped") >= 1 and o.evaluate("__S.mesh.fwd.stats.unreadable") == 0, "sealed on the way, opened only at the other end")
 
     # the helper leaves: the other one takes over
-    hp.click("#bLeave")
+    hp.click("#bLeave"); hp.query_selector("#justLeave") and hp.click("#justLeave")  # a host is asked: just leave
     other = "Dan" if hname == "Carla" else "Carla"
     a.wait_for_function(f"({via})(['{ids['Beto']}', '{ids[other]}'])", timeout=90000)
     o.wait_for_function(f"({via})(['{ids['Ana']}', '{ids[other]}'])", timeout=30000)

@@ -555,3 +555,6 @@ body:has(#brBar:not([hidden])) .toasts { top: calc(var(--brH, 60px) + 24px); } /
 .people .handsRow ol { margin: 0; padding-left: 1.6em; display: flex; flex-direction: column; gap: 4px; }
 .people .handsRow ol li { display: list-item; }
 .people .handsRow ol li > * { vertical-align: middle; margin-right: 8px; }
+/* Leave, for hosts: end the call for everyone or just leave (centered small card on computers) */
+.sheetInner.leaveInner { max-width: 420px; margin: 0 auto; }
+@media (min-width: 641px) { .sheet:has(.leaveInner) { align-items: center; } .sheetInner.leaveInner { border-radius: 18px; } }

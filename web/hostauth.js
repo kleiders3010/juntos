@@ -87,6 +87,8 @@ function clean(d, code) {
     out: ids(d.out),
     deny: ids(d.deny),
     admit: ids(d.admit),
+    // when a host ended the call for everyone (their clock, ms); 0 = never
+    end: Number.isSafeInteger(d.end) && d.end > 0 ? d.end : 0,
   };
 }
 

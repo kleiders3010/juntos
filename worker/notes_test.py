@@ -167,7 +167,7 @@ with sync_playwright() as p:
         a.click('#notesPane button[name="save"]')
     saved = open(d.value.path(), encoding="utf-8").read()
     check(saved.replace("\r\n", "\n").rstrip("\n") == value(a), "the .txt is the notes")
-    a.click("#bLeave")
+    a.click("#bLeave"); a.query_selector("#justLeave") and a.click("#justLeave")  # a host is asked: just leave
     a.wait_for_selector("#ended:not([hidden])")
     check(a.is_visible("#endedNotes"), "after leaving, the notes can still be saved")
     with a.expect_download() as d:

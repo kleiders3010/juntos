@@ -155,7 +155,7 @@ with sync_playwright() as p:
     check(True, "Carla hears both")
     pv = a.evaluate("fetch(new URL('privacy', document.baseURI.replace(/r\\/[^/]*$/, '')).href).then(r => r.status)")
     check(pv == 200, f"the copy's privacy page opens ({pv})")  # pinned: HTTP OK
-    c.click("#bLeave")
+    c.click("#bLeave"); c.query_selector("#justLeave") and c.click("#justLeave")  # a host is asked: just leave
     c.click("#homeBtn")
     c.wait_for_function("!document.querySelector('#home').hidden", timeout=10000)
     check(c.evaluate("location.pathname") == "/juntos/", f"leaving goes back to the copy's start page ({c.evaluate('location.pathname')})")  # pinned: the copy lives at /juntos/

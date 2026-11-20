@@ -66,6 +66,7 @@ export class Mesh extends EventTarget {
     this.keysP = BIG_OK ? makeKeys().then((k) => (this.keys = k)).catch(() => null) : Promise.resolve(null);
     // host controls kept by the devices themselves in a call without our server (hostauth.js)
     this.hd = new HostDocs(room);
+    this.since = Date.now(); // when I came (an end made before it is an old one)
     this.hpub = pubOf(this.key);
     this.signer = newSigner();
     this.cks = new Map(); // id -> their key for this visit (a co-host signs with it)
@@ -379,9 +380,9 @@ export class Mesh extends EventTarget {
       if (m.pub) this.pubs.set(m.id, m.pub);
       if (this.big && !this.peers.has(m.id)) this.farStub(m.id, m.name);
       this.emit("someone-joining", { id: m.id, name: m.name });
-    } else if (["room", "lock", "knock", "knock-gone", "waiting", "denied", "removed", "passcode", "pass", "perms", "role"].includes(m.t)) {
+    } else if (["room", "lock", "knock", "knock-gone", "waiting", "denied", "removed", "ended", "passcode", "pass", "perms", "role"].includes(m.t)) {
       // host controls: who may come in, mute, remove, the passcode (the server checks who is the host)
-      if (m.t === "denied" || m.t === "removed" || m.t === "passcode") this.closed = true;
+      if (m.t === "denied" || m.t === "removed" || m.t === "ended" || m.t === "passcode") this.closed = true;
       if (m.t === "pass") this.pass = m.pass || "";
       // what the call had on its server, for moving it to the other one
       if (m.t === "room" || m.t === "lock") this.srvState = { ...this.srvState, locked: !!(m.t === "room" ? m.locked : m.on) };
@@ -566,6 +567,7 @@ export class Mesh extends EventTarget {
           delete d.talk[T];
           if (!!cmd.on !== d.perms.talk) d.talk[T] = !!cmd.on;
         } else if (cmd.t === "perm" && ["share", "chat", "caps"].includes(cmd.key)) d.perms[cmd.key] = !!cmd.on;
+        else if (cmd.t === "end") d.end = Math.max(Date.now(), d.end + 1);
         else if (cmd.t === "cohost" && T && me) {
           // only the host makes co-hosts: their key for this visit goes in the document
           const pub = this.cks.get(T);
@@ -577,6 +579,12 @@ export class Mesh extends EventTarget {
       me ? { hostSk: this.key, name: this.name } : { signer: this.signer, name: this.name },
     );
     if (!w || this.closed) return;
+    if (cmd.t === "end") {
+      // everyone gets it first, then I go too (leaving closes the links the document travels on)
+      this.ns?.send({ t: "hs", from: this.id, hs: w });
+      this.broadcast({ k: "_hs", hs: w });
+      return void setTimeout(() => this.takeHs(w), 800);
+    }
     await this.takeHs(w);
     this.ns?.send({ t: "hs", from: this.id, hs: w });
     this.broadcast({ k: "_hs", hs: w });
@@ -605,6 +613,14 @@ export class Mesh extends EventTarget {
       clearTimeout(this.hereTimer);
       this.hereTimer = setTimeout(() => !this.closed && this.hd.doc && this.hd.doc.host !== this.id && this.host({ t: "_here" }), 1500);
     }
+    // a host ended the call for everyone (the host too). Not an old end the relays replay to a newcomer: a change
+    // that reaches me in the call, or one made after I came
+    if (prev && d.end !== prev.end && (Date.now() - this.hsAt > 3000 || d.end > this.since)) {
+      this.closed = true;
+      clearInterval(this.aloneTimer);
+      return this.emit("host", { t: "ended", by });
+    }
+    this.hsAt ||= Date.now();
     if (d.out.includes(this.id) || d.deny.includes(this.id)) {
       if (this.selfHost) return;
       this.closed = true;

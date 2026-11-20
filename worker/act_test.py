@@ -190,7 +190,7 @@ with sync_playwright() as p:
     check("Pizza or tacos?" in text and "Tacos: 1" in text and "Is this approved?" in text and "Can we record this?" not in text,
           "the .txt has the polls with results and the questions (not deleted ones)")  # pinned: the votes this test made
 
-    a.click("#bLeave")
+    a.click("#bLeave"); a.query_selector("#justLeave") and a.click("#justLeave")  # a host is asked: just leave
     a.wait_for_selector("#ended:not([hidden])")
     check(a.is_visible("#endedAct"), "after leaving, polls and questions can still be saved")
     b.close()

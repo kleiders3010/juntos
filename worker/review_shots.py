@@ -118,7 +118,7 @@ with sync_playwright() as p:
     shot(beto, "phone-chat")
 
     # leaving
-    a.click("#bLeave")
+    a.click("#bLeave"); a.query_selector("#justLeave") and a.click("#justLeave")  # a host is asked: just leave
     a.wait_for_selector("#ended:not([hidden])")
     shot(a, "pc-after-leaving")
     phone = page("Eva", **PHONE)

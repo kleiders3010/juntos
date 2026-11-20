@@ -1706,7 +1706,7 @@ function buildBar() {
   if (isPhone) {
     bar.append(button("bChat2", "chat", "Chat", () => openPanel("chat")));
     bar.append(button("bMore", "more", "More", () => openMore(extra)));
-    bar.append(button("bLeave", "end", "Leave", leave, "end"));
+    bar.append(button("bLeave", "end", "Leave", leaveClick, "end"));
   } else {
     // like Meet's bar (its help page "Learn about the Meet layout for your computer"): the call's own controls in the
     // middle, the rest under More, People and Chat at the right; one row instead of two
@@ -1716,7 +1716,7 @@ function buildBar() {
     const rest = extra.filter((b) => !main.includes(b) && !side.includes(b));
     const mid = document.createElement("div");
     mid.className = "barMid";
-    mid.append(button("bMic", "mic", "Mic", () => setMic(!S.mic)), button("bCam", "cam", "Camera", () => setCam(!S.cam)), ...main, button("bMore", "more", "More", () => openMore(rest)), button("bLeave", "end", "Leave", leave, "end"));
+    mid.append(button("bMic", "mic", "Mic", () => setMic(!S.mic)), button("bCam", "cam", "Camera", () => setCam(!S.cam)), ...main, button("bMore", "more", "More", () => openMore(rest)), button("bLeave", "end", "Leave", leaveClick, "end"));
     const right = document.createElement("div");
     right.className = "barSide";
     right.append(...side);
@@ -2339,6 +2339,8 @@ function onHost(m) {
     toast(m.on ? t("{name} set a passcode for new people", { name: m.by }) : t("{name} removed the passcode", { name: m.by }));
   } else if (m.t === "denied") {
     leave(t("Nobody let you in this time."));
+  } else if (m.t === "ended") {
+    leave(S.endingAll ? t("You ended the call for everyone") : t("{name} ended the call for everyone", { name: m.by || t("A host") }), true);
   } else if (m.t === "removed") {
     localStorage.setItem(`juntos.out.${S.code}`, "1");
     leave(t("{name} removed you from the call", { name: m.by || t("Someone") }));
@@ -4340,10 +4342,48 @@ $("feedbackHome").onclick = $("endedFeedback").onclick = (e) => {
 };
 $("invite").onclick = () => inviteSheet(S.hasPass ? callUrl(S.code) : `${location.origin}${BASE}r/${S.code}`, { t, toast, isPhone, locked: S.locked, pass: S.hasPass ? passOf(S.code) : "" });
 
-async function leave(why) {
+// Leave, for a host or co-host with others in the call: Meet's choice between ending the call for everyone and
+// just leaving (help 11989526 / Workspace update 2021-02 "End meeting for all")
+function leaveClick() {
+  if (!S.isHost || !S.mesh || !S.mesh.peers.size) return leave();
+  const sheet = document.createElement("div");
+  sheet.className = "sheet";
+  sheet.id = "leaveSheet";
+  const inner = document.createElement("div");
+  inner.className = "sheetInner leaveInner";
+  const end = document.createElement("button");
+  end.className = "secondary danger big";
+  end.id = "endAll";
+  end.textContent = t("End the call for everyone");
+  end.onclick = () => {
+    sheet.remove();
+    S.endingAll = true;
+    S.mesh?.host({ t: "end" });
+  };
+  const just = document.createElement("button");
+  just.className = "secondary big";
+  just.id = "justLeave";
+  just.textContent = t("Just leave the call");
+  just.onclick = () => {
+    sheet.remove();
+    leave();
+  };
+  inner.append(end, just);
+  sheet.append(inner);
+  sheet.onclick = (e) => {
+    if (e.target === sheet) sheet.remove();
+  };
+  document.body.append(sheet);
+}
+
+async function leave(why, ended) {
   // why: set when the call ended you (removed, not let in); a click passes an event
+  // ended: a host ended the call for everyone: nothing to rejoin
+  $("rejoin").hidden = ended === true;
+  S.endingAll = false;
+  for (const s of document.querySelectorAll(".sheet")) s.remove(); // a choice still open (Leave, More) goes with the call
   $("endedMsg").textContent = typeof why === "string" ? why : "";
-  $("endedTitle").textContent = typeof why === "string" ? t("You're out of the call") : t("You left the call");
+  $("endedTitle").textContent = ended === true ? t("The call has ended") : typeof why === "string" ? t("You're out of the call") : t("You left the call");
   if (S.recorder) await toggleRec();
   S.knocks?.clear();
   paintKnocks();
