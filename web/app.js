@@ -895,7 +895,9 @@ function enterCall(name) {
     if (S.isHost && S.pinAll.length) mesh.sendTo(e.detail.id, { k: "pinall", ids: S.pinAll });
     if (S.board && S.board.items.length) mesh.sendTo(e.detail.id, S.board.snapshot());
     const mainChat = S.chat.filter((c) => !c.room); // a breakout room's chat stays in the room
-    if (mainChat.length) mesh.sendTo(e.detail.id, { k: "history", chat: mainChat.slice(-200).map(chatOut) });
+    const sent = mainChat.slice(-200);
+    const oldPins = mainChat.slice(0, -200).filter((c) => c.pin);
+    if (mainChat.length) mesh.sendTo(e.detail.id, { k: "history", chat: [...oldPins, ...sent].map(chatOut) });
     if (S.recorder) mesh.sendTo(e.detail.id, { k: "rec", on: true });
     if (S.capsOn) mesh.sendTo(e.detail.id, { k: "capwant", on: true });
     if (S.act.any()) mesh.sendTo(e.detail.id, S.act.snapshotFor(e.detail.id));
@@ -943,7 +945,7 @@ function onMessage(from, m) {
   const who = (p && p.name) || t("Someone");
   if (S.netq.receive(from, m)) return; // what they need from my picture, how their connection is
   // chat, hands, reactions and captions from someone in another breakout room aren't for me
-  if (["chat", "chatre", "hand", "react", "cap", "caphelp", "capfrom", "trq", "trr", "ana", "and", "anc", "ano", "anp", "ans"].includes(m.k) && !S.br.same(from)) return;
+  if (["chat", "chatre", "chatpin", "hand", "react", "cap", "caphelp", "capfrom", "trq", "trr", "ana", "and", "anc", "ano", "anp", "ans"].includes(m.k) && !S.br.same(from)) return;
   if (S.br.receive(from, m)) {
     // breakout rooms
   } else if (m.k === "chat") {
@@ -952,6 +954,8 @@ function onMessage(from, m) {
   } else if (m.k === "chatre") {
     if (!may(from, "chat")) return;
     chatReactIn(from, who, m);
+  } else if (m.k === "chatpin") {
+    chatPinIn(from, m);
   } else if (m.k === "history") {
     chatHistoryIn(from, m.chat);
   } else if (m.k === "state") {
@@ -1825,11 +1829,11 @@ function chatOut(c) {
     re[e] = {};
     for (const [k, v] of Object.entries(who)) re[e][mine(k)] = k === "me" ? localStorage.getItem("name") || "" : v;
   }
-  return { id: c.id, from: mine(c.from), name: c.from === "me" ? localStorage.getItem("name") || "" : c.name, text: c.text, at: c.at, q: c.q || null, re };
+  return { id: c.id, from: mine(c.from), name: c.from === "me" ? localStorage.getItem("name") || "" : c.name, text: c.text, at: c.at, q: c.q || null, re, pin: c.pin || 0 };
 }
 function chatHistoryIn(from, list) {
   if (!Array.isArray(list)) return;
-  for (const raw of list.slice(-200)) {
+  for (const raw of list.slice(-300)) {
     if (!raw || typeof raw !== "object") continue;
     const text = String(raw.text ?? "").slice(0, 2000);
     if (!text) continue;
@@ -1841,7 +1845,8 @@ function chatHistoryIn(from, list) {
       continue;
     }
     const f = typeof raw.from === "string" ? raw.from.slice(0, 40) : "";
-    S.chat.push({ id: chatIdOk(raw.id) ? raw.id : "", from: f === S.mesh.id ? "me" : f, name: String(raw.name ?? "").slice(0, 60), text, at: +raw.at || Date.now(), q: chatQuoteIn(raw.q), re, room: 0 });
+    const pin = chatIdOk(raw.id) && +raw.pin > 0 ? +raw.pin : 0;
+    S.chat.push({ id: chatIdOk(raw.id) ? raw.id : "", from: f === S.mesh.id ? "me" : f, name: String(raw.name ?? "").slice(0, 60), text, at: +raw.at || Date.now(), q: chatQuoteIn(raw.q), re, room: 0, pin });
   }
   S.chat.sort((a, b) => a.at - b.at);
   renderChat(true);
@@ -1858,6 +1863,77 @@ function chatReactIn(from, who, m) {
   }
   renderChat(true);
   if (m.on && c.from === "me" && S.panel !== "chat") toast(t("{name} reacted {emoji} to your message", { name: who, emoji: e }));
+}
+// Pinned messages, like Meet's chat (help "Send chat messages to video meeting participants" and the Workspace update
+// "Pin chat messages in Google Meet", 2024-01): you pin and unpin your own messages, hosts (and co-hosts) may unpin
+// anyone's; pinned messages sit at the top of the chat for everyone, people who join later too.
+function chatCanPin(c, on) {
+  if (!c?.id) return false;
+  if (c.from === "me") return !on || may("me", "chat");
+  return !on && !!roleOf("me");
+}
+function chatPin(c, on) {
+  if (!chatCanPin(c, on)) return on ? toast(t("A host turned off chat")) : undefined;
+  c.pin = on ? Date.now() : 0;
+  S.chatOpen = "";
+  S.mesh.roomcast({ k: "chatpin", id: c.id, on });
+  renderChat(true);
+}
+function chatPinIn(from, m) {
+  const c = chatIdOk(m.id) && S.chat.find((x) => x.id === m.id);
+  if (!c) return;
+  const own = c.from === from;
+  if (m.on ? !(own && may(from, "chat")) : !(own || roleOf(from))) return;
+  c.pin = m.on ? Date.now() : 0;
+  renderChat(true);
+}
+function chatPinIcon(cls, off) {
+  const b = document.createElement("button");
+  b.className = cls;
+  // unpinning: the pin struck through
+  b.innerHTML = off ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICON.pin}"/><path d="M3 2.5 21.5 21" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>` : svg("pin");
+  return b;
+}
+function renderChatPins(log) {
+  const box = $("chatPins");
+  const here = S.br?.here || 0;
+  const pins = S.chat.filter((c) => c.pin && (c.room || 0) === here).sort((a, b) => b.pin - a.pin);
+  box.innerHTML = "";
+  box.hidden = !pins.length;
+  if (!pins.length) return;
+  const head = document.createElement("div");
+  head.className = "pinHead";
+  head.innerHTML = svg("pin");
+  head.append(t(pins.length === 1 ? "1 pinned message" : "{n} pinned messages", { n: pins.length }));
+  box.append(head);
+  for (const c of pins) {
+    const row = document.createElement("div");
+    row.className = "pinRow";
+    row.dataset.id = c.id;
+    const go = document.createElement("button");
+    go.className = "pinGo";
+    const nb = document.createElement("b");
+    nb.textContent = c.from === "me" ? t("You") : c.name;
+    const tx = document.createElement("span");
+    tx.textContent = c.text;
+    go.append(nb, tx);
+    go.title = t("Show in chat");
+    go.onclick = () => {
+      const orig = log.querySelector(`.msg[data-id="${c.id}"]`);
+      if (!orig) return;
+      orig.scrollIntoView({ block: "center", behavior: "smooth" });
+      orig.classList.add("flash");
+      setTimeout(() => orig.classList.remove("flash"), 1200);
+    };
+    row.append(go);
+    if (chatCanPin(c, false)) {
+      const x = chatPinIcon("unpin", true);
+      x.title = t("Unpin");
+      x.onclick = () => chatPin(c, false);
+      row.append(x);
+    }
+    box.append(row);
+  }
 }
 function chatUse() {
   try {
@@ -1927,13 +2003,20 @@ function renderChat(keep) {
   for (const c of S.chat) {
     if ((c.room || 0) !== (S.br?.here || 0)) continue; // each breakout room has its own chat
     const d = document.createElement("div");
-    d.className = "msg" + (c.from === "me" ? " mine" : "") + (c.id && S.chatOpen === c.id ? " open" : "");
+    d.className = "msg" + (c.from === "me" ? " mine" : "") + (c.id && S.chatOpen === c.id ? " open" : "") + (c.pin ? " pinned" : "");
     if (c.id) d.dataset.id = c.id;
     const who = document.createElement("b");
     who.textContent = c.from === "me" ? t("You") : c.name;
     const tm = document.createElement("time");
     tm.textContent = new Date(c.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     d.append(who, tm);
+    if (c.pin) {
+      const pm = document.createElement("span");
+      pm.className = "pinMark";
+      pm.innerHTML = svg("pin");
+      pm.title = t("Pinned");
+      d.append(pm);
+    }
     if (c.q) {
       const q = document.createElement("blockquote");
       q.className = "quote";
@@ -2018,7 +2101,18 @@ function renderChat(keep) {
         ev.stopPropagation();
         chatQuoteSet(c);
       };
-      act.append(more, reply, grid);
+      act.append(more, reply);
+      if (chatCanPin(c, !c.pin)) {
+        const pb = chatPinIcon("rePin", !!c.pin);
+        pb.name = "pin";
+        pb.title = t(c.pin ? "Unpin" : "Pin");
+        pb.onclick = (ev) => {
+          ev.stopPropagation();
+          chatPin(c, !c.pin);
+        };
+        act.append(pb);
+      }
+      act.append(grid);
       d.append(act);
       // a phone has no pointing: a tap opens the same actions
       d.onclick = () => {
@@ -2028,6 +2122,7 @@ function renderChat(keep) {
     }
     log.append(d);
   }
+  renderChatPins(log);
   log.scrollTop = keep && !atEnd ? top : log.scrollHeight;
 }
 $("chatForm").onsubmit = (e) => {

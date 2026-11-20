@@ -159,6 +159,18 @@ a { color: #93c5fd; }
 .reGrid[hidden] { display: none; }
 .reGrid button { width: 32px; height: 32px; border-radius: 8px; font-size: 18px; }
 .reGrid button:hover { background: var(--card); }
+.chatPins { flex: none; max-height: 32%; overflow-y: auto; border-bottom: 1px solid #4b5563; padding-bottom: 6px; display: flex; flex-direction: column; gap: 2px; }
+.chatPins[hidden] { display: none; }
+.pinHead { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.pinHead svg, .pinMark svg, .rePin svg, .pinRow .unpin svg { width: 16px; height: 16px; fill: currentColor; }
+.pinRow { display: flex; align-items: center; gap: 4px; background: var(--card); border-radius: 8px; }
+.pinGo { flex: 1; min-width: 0; text-align: left; padding: 6px 8px; font-size: 14px; display: flex; gap: 6px; }
+.pinGo b { flex: none; font-size: 13px; }
+.pinGo span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pinRow .unpin { width: 32px; height: 32px; border-radius: 50%; color: var(--muted); display: grid; place-items: center; flex: none; }
+.pinRow .unpin:hover { background: var(--bg2); color: inherit; }
+.pinMark { color: var(--muted); vertical-align: middle; margin-left: 6px; }
+.msgAct .rePin { color: var(--muted); display: grid; place-items: center; }
 .chatQuote { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); border-left: 3px solid var(--accent); padding: 2px 4px 2px 8px; }
 .chatQuote span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chatQuote[hidden] { display: none; }
