@@ -33,6 +33,10 @@ install, open source.
 - Record the call on your own device as an MP4 (everyone sees that you are recording). Landscape, with whoever is talking (or a shared screen) big and the others small, or everyone the same size; reactions, raised hands and chat can show in the video. No upload, no limit.
 - Send feedback (start page, Devices, and after a call): a problem, an idea or something else, an optional email for an answer, and, if you keep the tick, the recent call's technical numbers (connection states, delay, lost packets, how many people; never sound, video, chat or names). "See what's sent" shows it all first. It is emailed to hello@jurisgames.com through [jurisgames-feedback](https://github.com/kleiders3010/jurisgames-feedback), which stores nothing.
 
+## Problems or ideas
+
+In the app: Send feedback. If the app doesn't open at all, open an issue at https://github.com/kleiders3010/juntos/issues or email hello@jurisgames.com.
+
 ## How it works
 Audio, video, chat and the board go directly between the people in the call (WebRTC). A tiny Cloudflare Worker
 (`worker/`) only introduces people to each other when they join a room. Per room it keeps only a hash of the host's key, whether the call is locked, a hash of its passcode if it has one, what the hosts let everyone do, and (by the random per-visit id, no names) co-hosts, speaking choices and who was let in; deleted a month after the room was last used.
