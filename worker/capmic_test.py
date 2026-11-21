@@ -8,7 +8,7 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 # a recognition that takes a microphone: refuses a stopped one (as the spec says), remembers which one it got
@@ -62,7 +62,7 @@ with sync_playwright() as p:
     c.click("#enter")
     c.wait_for_selector("#call:not([hidden])")
     for pg in (a, c):
-        pg.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+        pg.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
 
     # both turn captions on: each browser listens
     for pg in (a, c):
@@ -70,7 +70,7 @@ with sync_playwright() as p:
         pg.wait_for_selector(".capSheet")
         pg.check('input[name="caps"]')
         pg.click(".capSheet .primary")
-    a.wait_for_function("__sr.length === 1", timeout=5000)
+    a.wait_for_function("() => __sr.length === 1", timeout=5000)
     check(a.evaluate("__sr[0].track === __S.micTrack"), "Ana's captions listen to the call's own microphone")
 
     # Ana switches microphone in Devices: captions follow
@@ -79,14 +79,14 @@ with sync_playwright() as p:
     n = a.evaluate(f"{MIC_SELECT}.options.length")
     old = a.evaluate("__S.micTrack.id")
     a.evaluate(f"(() => {{ const s = {MIC_SELECT}; s.selectedIndex = (s.selectedIndex + 1) % s.options.length; s.dispatchEvent(new Event('change')) }})()")
-    a.wait_for_function(f"__S.micTrack.id !== '{old}' && __sr.length === 1 && __sr[0].track === __S.micTrack", timeout=8000)
+    a.wait_for_function(f"() => __S.micTrack.id !== '{old}' && __sr.length === 1 && __sr[0].track === __S.micTrack", timeout=8000)
     check(a.evaluate("__sr.length === 1 && __sr[0].track === __S.micTrack && __S.micTrack.readyState === 'live'"),
           f"after switching microphone ({n} to pick from) captions listen to the new one")  # pinned: MediaStreamTrack state name
     check(not a.evaluate("!!__S.capOtherMic"), "and no 'another microphone' note where captions follow the picked one")
 
     # Carla's browser can't: her captions sheet says which microphone captions hear
-    c.wait_for_function("__sr.length === 1", timeout=5000)
-    c.wait_for_function("!!__S.capOtherMic", timeout=5000)
+    c.wait_for_function("() => __sr.length === 1", timeout=5000)
+    c.wait_for_function("() => !!__S.capOtherMic", timeout=5000)
     c.click("#bCaps")
     c.wait_for_selector(".capSheet")
     note = c.text_content(".capSheet .capMic") if c.query_selector(".capSheet .capMic") else ""

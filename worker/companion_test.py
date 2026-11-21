@@ -6,7 +6,7 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 errors = []
@@ -43,8 +43,8 @@ with sync_playwright() as p:
     c.fill("#name", "Ana")
     c.click("#enterComp")
     c.wait_for_selector("#call:not([hidden])")
-    a.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.pc.connectionState === 'connected')", timeout=30000)
-    c.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.pc.connectionState === 'connected')", timeout=30000)
+    a.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.pc.connectionState === 'connected')", timeout=30000)
+    c.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.pc.connectionState === 'connected')", timeout=30000)
     c.wait_for_timeout(1500)
 
     # the companion device: no microphone out, no sound in, camera off
@@ -62,7 +62,7 @@ with sync_playwright() as p:
 
     # the others: not a tile, named "(Companion)" in People, can still chat
     cid = a.evaluate("[...__S.mesh.peers.keys()][0]")
-    a.wait_for_function(f"document.querySelector('.tile[data-id=\"{cid}\"]')?.classList.contains('compHid')", timeout=5000)
+    a.wait_for_function(f"() => document.querySelector('.tile[data-id=\"{cid}\"]')?.classList.contains('compHid')", timeout=5000)
     check(not a.is_visible(f'.tile[data-id="{cid}"]'), "the others don't see a companion's tile")  # pinned: hidden from the grid (Meet)
     a.click("#bPeople")
     a.wait_for_timeout(300)
@@ -71,12 +71,12 @@ with sync_playwright() as p:
     c.click("#bChat")
     c.fill("#chatText", "slides are up")
     c.press("#chatText", "Enter")
-    a.wait_for_function("__S.chat.some(m => m.text === 'slides are up')", timeout=5000)
+    a.wait_for_function("() => __S.chat.some(m => m.text === 'slides are up')", timeout=5000)
     check(True, "a companion can chat")
 
     # camera on: the tile shows (Meet shows a companion who turns the camera on)
     c.click("#bCam")
-    a.wait_for_function(f"!document.querySelector('.tile[data-id=\"{cid}\"]').classList.contains('compHid')", timeout=5000)
+    a.wait_for_function(f"() => !document.querySelector('.tile[data-id=\"{cid}\"]').classList.contains('compHid')", timeout=5000)
     check(a.is_visible(f'.tile[data-id="{cid}"]'), "a companion with the camera on is shown")
     check(c.evaluate("!__S.micTrack || !__S.micTrack.enabled"), "still without a microphone")
 
@@ -86,7 +86,7 @@ with sync_playwright() as p:
     check(c.evaluate("__S.micTrack && __S.micTrack.enabled"), "Use my audio turns the microphone on (it was on in the lobby)")
     check(c.evaluate(HEARD), "and the sound")
     check(c.is_hidden("#compBox"), "the Companion note goes away")
-    a.wait_for_function(f"!__S.comps.has('{cid}')", timeout=5000)
+    a.wait_for_function(f"() => !__S.comps.has('{cid}')", timeout=5000)
     check("(Companion)" not in a.text_content("#panel"), "the others see a normal participant again")
     b.close()
 

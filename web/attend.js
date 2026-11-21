@@ -70,7 +70,11 @@ export class Attendance {
       const s = Math.round(ms / 1000);
       return `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
     };
-    const cell = (v) => (/[",\r\n]/.test(v) || /^[=+\-@]/.test(v) ? `"${(/^[=+\-@]/.test(v) ? "'" : "") + v.replace(/"/g, '""')}"` : v);
+    // keep spreadsheets from running a name like "=HYPERLINK(...)" as a formula
+    const cell = (x) => {
+      const v = String(x ?? "");
+      return /[",\r\n;]/.test(v) || /^[=+\-@\t\r]/.test(v) ? `"${(/^[=+\-@\t\r]/.test(v) ? "'" : "") + v.replace(/"/g, '""')}"` : v;
+    };
     const head = [t("Name"), t("First joined"), t("Last left"), t("Time in the call"), t("Times joined")];
     const lines = [head.map(cell).join(",")];
     for (const r of this.rows(at)) lines.push([r.name, when(r.first), r.here ? t("still in the call") : when(r.last), long(r.ms), String(r.joins)].map(cell).join(","));

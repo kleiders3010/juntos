@@ -11,7 +11,7 @@ import time
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required",
         "--auto-select-desktop-capture-source=Entire screen"]
@@ -25,6 +25,7 @@ def check(ok, what):
 
 
 def wait(pg, js, arg=None, timeout=6000):
+    __import__("re").match(r"\s*(\([^()]*\)|\w+)\s*=>", js) or (js := "() => " + js)  # the pages forbid eval: Playwright polls functions without it
     try:
         pg.wait_for_function(js, arg=arg, timeout=timeout)
         return True
@@ -61,12 +62,12 @@ with sync_playwright() as p:
     a.fill("#name", "Ana")
     a.click("#enter")
     a.wait_for_selector("#call:not([hidden])")
-    a.wait_for_function("__S.isHost", timeout=15000)
+    a.wait_for_function("() => __S.isHost", timeout=15000)
     join = f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}"
     o = page("Beto", 1100, 760)  # another size: marks must still land on the same spot of the picture
     enter(o, "Beto", join)
     for pg in (a, o):
-        pg.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+        pg.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
     sid = o.evaluate("__S.mesh.id")
     aid = a.evaluate("__S.mesh.id")
 
@@ -76,7 +77,7 @@ with sync_playwright() as p:
     tile_a = f'#grid .tile[data-id="{sid}"]'
     check(wait(a, f"!!document.querySelector('{tile_a} .anBtn:not([hidden])')", timeout=10000), "Ana sees the pen button on Beto's shared screen")
     check(wait(o, "!!document.querySelector('#grid .tile[data-id=\"me\"] .anBtn:not([hidden])')"), "Beto has it on his own screen too")
-    a.wait_for_function(f"document.querySelector('{tile_a} video').videoWidth > 0", timeout=15000)
+    a.wait_for_function(f"() => document.querySelector('{tile_a} video').videoWidth > 0", timeout=15000)
 
     # ---- Ana draws ----
     a.click(f"{tile_a} .anBtn", force=True)
@@ -110,7 +111,7 @@ with sync_playwright() as p:
     a.click(f'{tile_a} .anBar [data-tool="text"]')
     a.mouse.click(*at(0.2, 0.7))
     a.wait_for_selector(f"{tile_a} .anText")
-    a.wait_for_function("document.activeElement?.classList.contains('anText')", timeout=5000)  # it takes focus a moment later
+    a.wait_for_function("() => document.activeElement?.classList.contains('anText')", timeout=5000)  # it takes focus a moment later
     a.keyboard.type("Look here")  # pinned: mark kinds pen/text/fade/rect are the wire format between app versions; the text is the one typed above; file name prefix "Juntos screen"
     a.keyboard.press("Enter")
     check(wait(o, "(sid) => [...(__S.an.shares.get(sid)?.items.values() || [])].some(i => i.t === 'text' && i.s === 'Look here')", arg=sid), "Ana writes a text and Beto gets it")  # pinned: mark kinds pen/text/fade/rect are the wire format between app versions; the text is the one typed above; file name prefix "Juntos screen"
@@ -140,11 +141,11 @@ with sync_playwright() as p:
     # ---- a late joiner (not a host) ----
     c = page("Carla")
     enter(c, "Carla", join)
-    c.wait_for_function("__S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+    c.wait_for_function("() => __S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
     check(wait(c, "(sid) => { const s = __S.an.shares.get(sid); return s && [...s.items.values()].filter(i => i.t !== 'fade').length === 2; }", arg=sid, timeout=10000),
           "Carla, joining late, gets the marks already there")
     tile_c = f'#grid .tile[data-id="{sid}"]'
-    c.wait_for_function(f"document.querySelector('{tile_c} video')?.videoWidth > 0", timeout=15000)
+    c.wait_for_function(f"() => document.querySelector('{tile_c} video')?.videoWidth > 0", timeout=15000)
     c.click(f"{tile_c} .anBtn", force=True)
     c.wait_for_selector(f"{tile_c} .anBar")
     fc = c.evaluate(f"__S.an.frame('{sid}')")

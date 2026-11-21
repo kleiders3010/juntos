@@ -20,7 +20,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 import websockets
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 HERE = os.path.dirname(os.path.abspath(__file__))
 KIN = os.path.join(HERE, "..", "kinetic")
 PORTS = [8801, 8802]
@@ -134,12 +134,13 @@ try:
             pg.click("#enter")
             pg.wait_for_selector("#call:not([hidden])")
             if wait:
-                pg.wait_for_function("__S.joined", timeout=30000)
+                pg.wait_for_function("() => __S.joined", timeout=30000)
             return pg
 
         full = "(n) => __S.mesh && __S.mesh.peers.size === n && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')"
 
         def wait(pg, js, what, arg=None, secs=20):
+            __import__("re").match(r"\s*(\([^()]*\)|\w+)\s*=>", js) or (js := "() => " + js)  # the pages forbid eval: Playwright polls functions without it
             try:
                 pg.wait_for_function(js, arg=arg, timeout=secs * 1000)
                 check(True, what)

@@ -6,7 +6,7 @@ import os, sys, tempfile
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 OUT = os.environ.get("BOARD_OUT") or tempfile.mkdtemp()
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
@@ -57,7 +57,7 @@ with sync_playwright() as p:
     a = person("Ana", f"{BASE}/?signal={WS}", viewport={"width": 1280, "height": 760})
     join = f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}"
     o = person("Beto", join, **PHONE)
-    a.wait_for_function("[...__S.mesh.peers.values()][0]?.dc.readyState === 'open'", timeout=20000)
+    a.wait_for_function("() => [...__S.mesh.peers.values()][0]?.dc.readyState === 'open'", timeout=20000)
     open_board(a)
     drag(a, "pen", (.2, .3), (.4, .5))
     drag(a, "rect", (.5, .2), (.7, .4))

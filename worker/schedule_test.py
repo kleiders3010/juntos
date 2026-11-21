@@ -17,7 +17,7 @@ import icalendar
 import numpy as np
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 TZ = "America/New_York"
@@ -142,7 +142,7 @@ with sync_playwright() as p:
     a.fill("#name", "Ana")
     a.click("#enter")
     a.wait_for_selector("#call:not([hidden])")
-    a.wait_for_function("__S.isHost", timeout=15000)
+    a.wait_for_function("() => __S.isHost", timeout=15000)
     check(True, "whoever planned it is the host when they open it")
 
     # ---- Invite people in the call ----

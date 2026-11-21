@@ -1,6 +1,6 @@
 # The second copy of the site (GitHub Pages, https://kleiders3010.github.io/juntos/): it works on its own under
 # /juntos/, and its calls are the same calls as on meet.jurisgames.com.
-#   local: python worker/mirror_test.py   (wrangler dev on 8797; builds the copy with tools/mirror.mjs and serves it
+#   local: python worker/mirror_test.py   (wrangler dev on 8798, or its address as the first argument; builds the copy with tools/mirror.mjs and serves it
 #          the way GitHub Pages does: files, "privacy" -> privacy.html, anything else -> 404.html)
 #   live:  python worker/mirror_test.py https://kleiders3010.github.io/juntos/ https://meet.jurisgames.com
 import asyncio
@@ -18,7 +18,8 @@ from playwright.sync_api import sync_playwright
 LIVE = len(sys.argv) > 1 and sys.argv[1].startswith("https://")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MIRROR = sys.argv[1] if LIVE else "http://127.0.0.1:8821/juntos/"
-MAIN = (sys.argv[2] if len(sys.argv) > 2 else "https://meet.jurisgames.com") if LIVE else "http://127.0.0.1:8797"
+# local: the wrangler dev given first (8798 by default: 8797 belongs to ChessTactics' test host)
+MAIN = (sys.argv[2] if len(sys.argv) > 2 else "https://meet.jurisgames.com") if LIVE else (sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798")
 WS = MAIN.replace("http", "ws", 1)
 RELAY_PORT = 8813
 Q = "" if LIVE else f"signal={WS}&relays=ws://127.0.0.1:{RELAY_PORT}"
@@ -133,7 +134,7 @@ with sync_playwright() as p:
                                f"shown: {pg.evaluate('[...document.querySelectorAll(`body > *`)].filter(e => !e.hidden && e.id).map(e => e.id)')}, log: {logs[-8:]}")
         pg.click("#enter")
         pg.wait_for_selector("#call:not([hidden])")
-        pg.wait_for_function("__S.joined", timeout=20000)
+        pg.wait_for_function("() => __S.joined", timeout=20000)
         return pg
 
     a = person("Ana", MIRROR + ("?" + Q if Q else ""))
@@ -142,7 +143,7 @@ with sync_playwright() as p:
     check(path.startswith("/juntos/r/"), f"a call started on the copy stays under /juntos/ ({path})")  # pinned: the copy lives at /juntos/
     check(a.evaluate("[...document.styleSheets].some(s => s.cssRules.length > 0)"), "the copy has its styles")
     inv = a.evaluate("`${location.origin}${location.pathname}`")
-    both = "__S.mesh.peers.size === {n} && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')"
+    both = "() => __S.mesh.peers.size === {n} && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')"
     o = person("Beto", f"{MAIN}/r/{code}" + ("?" + Q if Q else ""))
     a.wait_for_function(both.format(n=1), timeout=25000)
     o.wait_for_function(both.format(n=1), timeout=25000)
@@ -151,13 +152,13 @@ with sync_playwright() as p:
     for pg in (a, o, c):
         pg.wait_for_function(both.format(n=2), timeout=25000)
     check(True, "Carla opens the copy's call link (/juntos/r/<code>, served by 404.html): three people connected")
-    c.wait_for_function("[...__S.mesh.peers.values()].every(p => p.stream && p.stream.getAudioTracks().length > 0)", timeout=15000)
+    c.wait_for_function("() => [...__S.mesh.peers.values()].every(p => p.stream && p.stream.getAudioTracks().length > 0)", timeout=15000)
     check(True, "Carla hears both")
     pv = a.evaluate("fetch(new URL('privacy', document.baseURI.replace(/r\\/[^/]*$/, '')).href).then(r => r.status)")
     check(pv == 200, f"the copy's privacy page opens ({pv})")  # pinned: HTTP OK
     c.click("#bLeave"); c.query_selector("#justLeave") and c.click("#justLeave")  # a host is asked: just leave
     c.click("#homeBtn")
-    c.wait_for_function("!document.querySelector('#home').hidden", timeout=10000)
+    c.wait_for_function("() => !document.querySelector('#home').hidden", timeout=10000)
     check(c.evaluate("location.pathname") == "/juntos/", f"leaving goes back to the copy's start page ({c.evaluate('location.pathname')})")  # pinned: the copy lives at /juntos/
     a.wait_for_timeout(1500)
     check(not broken, f"no missing files on either site: {broken[:6]}")

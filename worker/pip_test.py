@@ -7,7 +7,7 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 # records the media-session handlers the page sets (to see that switching tabs opens the small window)
@@ -52,35 +52,35 @@ with sync_playwright() as p:
     join = f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}"
     o = page("Beto")
     enter(o, "Beto", join)
-    a.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
-    a.wait_for_function("document.querySelector('.tile[data-id]:not([data-id=\"me\"]) video')?.srcObject", timeout=30000)
+    a.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+    a.wait_for_function("() => document.querySelector('.tile[data-id]:not([data-id=\"me\"]) video')?.srcObject", timeout=30000)
 
     check(a.evaluate("!!__S.barBtns.bPip"), "the call has a small window button")
     has_doc = a.evaluate("'documentPictureInPicture' in window")
     check(has_doc, "this Edge has the small window (Document Picture-in-Picture)")
     a.click("#bMore")
     a.click(".sheet #bPip")
-    a.wait_for_function("window.__S.pip && __S.pip.document.querySelectorAll('#pipGrid .tile').length === 2", timeout=10000)
+    a.wait_for_function("() => window.__S.pip && __S.pip.document.querySelectorAll('#pipGrid .tile').length === 2", timeout=10000)
     w = "__S.pip.document"
     first = a.evaluate(f"{w}.querySelector('#pipGrid .tile:first-child .nm').textContent")
     check(first == "Beto" and a.evaluate(f"{w}.querySelector('#pipGrid .tile.pipMe').dataset.id") == "me",  # pinned: names this test typed
           "the small window shows Beto big and Ana herself small")
-    a.wait_for_function(f"{w}.querySelector('#pipGrid .tile:first-child video').videoWidth > 0", timeout=10000)
+    a.wait_for_function(f"() => {w}.querySelector('#pipGrid .tile:first-child video').videoWidth > 0", timeout=10000)
     check(True, "Beto's video plays in it")
     check(a.evaluate(f"{w}.querySelector('#pipGrid video').muted"), "the small window adds no second copy of the sound")
     check(a.evaluate("__S.barBtns.bPip.classList.contains('on')"), "the button shows the small window is open")
 
     # the buttons in the small window
     a.evaluate(f"{w}.getElementById('qMic').click(); 0")
-    o.wait_for_function("document.querySelector('.tile:not([data-id=\"me\"])').classList.contains('muted')", timeout=5000)
+    o.wait_for_function("() => document.querySelector('.tile:not([data-id=\"me\"])').classList.contains('muted')", timeout=5000)
     check(not a.evaluate("__S.mic") and a.evaluate(f"{w}.getElementById('qMic').classList.contains('danger')"), "mic off from the small window (Beto sees Ana muted)")
     a.evaluate(f"{w}.getElementById('qMic').click(); 0")
     a.evaluate(f"{w}.getElementById('qCam').click(); 0")
-    o.wait_for_function("document.querySelector('.tile:not([data-id=\"me\"])').classList.contains('camoff')", timeout=5000)
+    o.wait_for_function("() => document.querySelector('.tile:not([data-id=\"me\"])').classList.contains('camoff')", timeout=5000)
     check(True, "camera off from the small window")
     a.evaluate(f"{w}.getElementById('qCam').click(); 0")
     a.evaluate(f"{w}.getElementById('qHand').click(); 0")
-    o.wait_for_function("!document.querySelector('.tile:not([data-id=\"me\"]) .hand').hidden", timeout=5000)
+    o.wait_for_function("() => !document.querySelector('.tile:not([data-id=\"me\"]) .hand').hidden", timeout=5000)
     check(a.evaluate(f"{w}.getElementById('qHand').classList.contains('on')"), "raise a hand from the small window")
     a.evaluate(f"{w}.getElementById('qHand').click(); 0")
     a.evaluate(f"{w}.getElementById('qCaps').click(); 0")
@@ -90,12 +90,12 @@ with sync_playwright() as p:
     # notices reach the small window (Beto raises a hand)
     o.click("#grid")
     o.keyboard.press("h")
-    a.wait_for_function(f"{w}.getElementById('pipToasts').textContent.includes('Beto')", timeout=5000)
+    a.wait_for_function(f"() => {w}.getElementById('pipToasts').textContent.includes('Beto')", timeout=5000)
     check(True, "notices show in the small window")
 
     # back to the call
     a.evaluate(f"{w}.getElementById('qBack').click(); 0")
-    a.wait_for_function("!__S.pip", timeout=5000)
+    a.wait_for_function("() => !__S.pip", timeout=5000)
     check(not a.evaluate("__S.barBtns.bPip.classList.contains('on')"), "Back to the call closes the small window")
 
     # switching tabs is wired to open it
@@ -104,16 +104,16 @@ with sync_playwright() as p:
     # leaving closes it
     a.click("#bMore")
     a.click(".sheet #bPip")
-    a.wait_for_function("!!__S.pip", timeout=10000)
+    a.wait_for_function("() => !!__S.pip", timeout=10000)
     a.click("#bLeave"); a.query_selector("#justLeave") and a.click("#justLeave")  # a host is asked: just leave
     a.wait_for_selector("#ended:not([hidden])")
-    a.wait_for_function("!__S.pip", timeout=5000)
+    a.wait_for_function("() => !__S.pip", timeout=5000)
     check(True, "leaving the call closes the small window")
 
     # a browser without the small window floats the video of who's talking
     c = page("Carla", NO_DOC_PIP)
     enter(c, "Carla", join)
-    c.wait_for_function("document.querySelector('.tile[data-id]:not([data-id=\"me\"]) video')?.videoWidth > 0", timeout=30000)
+    c.wait_for_function("() => document.querySelector('.tile[data-id]:not([data-id=\"me\"]) video')?.videoWidth > 0", timeout=30000)
     c.click("#bMore")
     c.click(".sheet #bPip")
     c.wait_for_timeout(1500)

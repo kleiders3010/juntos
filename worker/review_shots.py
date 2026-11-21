@@ -1,13 +1,13 @@
 # Screens for a cold review (C:/AI/Hub/docs/HARNESS.md "three Haiku reviews"), in the order someone meets them:
 # a computer at 1280x720 (the host, Ana), then a phone at 360x640 (Beto). Fake cameras; captions are a stub.
-#   python worker/review_shots.py <out folder> [base-url]   (local: npx wrangler dev --port 8797)
+#   python worker/review_shots.py <out folder> [base-url]   (local: npx wrangler dev --port 8798)
 import os
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
 OUT = sys.argv[1]
-BASE = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:8797"
+BASE = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 os.makedirs(OUT, exist_ok=True)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
@@ -76,7 +76,7 @@ with sync_playwright() as p:
         pg.click("#enter")
         pg.wait_for_selector("#call:not([hidden])")
         others.append(pg)
-    a.wait_for_function("__S.mesh.peers.size === 3 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=40000)
+    a.wait_for_function("() => __S.mesh.peers.size === 3 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=40000)
     a.wait_for_timeout(2500)
     shot(a, "pc-call-four")
 
@@ -91,7 +91,7 @@ with sync_playwright() as p:
     shot(a, "pc-captions-sheet")
     a.check('input[name="caps"]')
     a.click(".capSheet .primary")
-    others[1].wait_for_function("__sr.length === 1", timeout=8000)
+    others[1].wait_for_function("() => __sr.length === 1", timeout=8000)
     others[1].evaluate("__say('Good morning everyone, shall we start with the budget?', true)")
     a.wait_for_timeout(800)
     shot(a, "pc-captions-on")

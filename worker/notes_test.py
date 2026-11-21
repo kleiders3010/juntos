@@ -10,7 +10,7 @@ import time
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 errors = []
@@ -83,12 +83,12 @@ with sync_playwright() as p:
     a.fill("#name", "Ana")
     a.click("#enter")
     a.wait_for_selector("#call:not([hidden])")
-    a.wait_for_function("__S.isHost", timeout=15000)
+    a.wait_for_function("() => __S.isHost", timeout=15000)
     join = f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}"
     o = page("Beto")
     enter(o, "Beto", join)
     for pg in (a, o):
-        pg.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+        pg.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
 
     # ---- the panel and the template ----
     notes(o)
@@ -97,7 +97,7 @@ with sync_playwright() as p:
     o.click('#notesPane [name="template"]')
     text = value(o)
     check(all(s in text for s in ["Notes · ", "Attendees: Beto, Ana", "Action items", "[ ] "]), "the template has the date, who is in the call, notes and action items")
-    a.wait_for_function("[...document.querySelectorAll('.toast')].some(t => t.textContent.includes('Beto is taking notes'))", timeout=5000)
+    a.wait_for_function("() => [...document.querySelectorAll('.toast')].some(t => t.textContent.includes('Beto is taking notes'))", timeout=5000)
     check(a.evaluate("__S.barBtns.bNotes.classList.contains('badge') && document.querySelector('#bMore').classList.contains('badge')"), "Ana is told Beto is taking notes (notice and a dot on the button)")
     notes(a)
     check(value(a) == text, "Ana sees the same notes")
@@ -137,7 +137,7 @@ with sync_playwright() as p:
     # ---- only the host can edit ----
     check(a.is_visible('#notesPane select[name="who"]'), "Ana (the host) can choose who edits")
     a.select_option('#notesPane select[name="who"]', "host")
-    o.wait_for_function("document.querySelector('#notesPane textarea').readOnly", timeout=5000)
+    o.wait_for_function("() => document.querySelector('#notesPane textarea').readOnly", timeout=5000)
     check("Only the host can edit" in o.inner_text(".notesWho"), "Beto now can't edit, and is told why")
     before = value(a)
     # even typed into the box some other way, Beto's change is put back and not sent
@@ -148,13 +148,13 @@ with sync_playwright() as p:
     time.sleep(1)
     check(value(o).endswith("(host)"), "the host still writes and everyone sees it")
     a.select_option('#notesPane select[name="who"]', "all")
-    o.wait_for_function("!document.querySelector('#notesPane textarea').readOnly", timeout=5000)
+    o.wait_for_function("() => !document.querySelector('#notesPane textarea').readOnly", timeout=5000)
     check(True, "everyone can edit again")
 
     # ---- a late joiner ----
     c = page("Carla")
     enter(c, "Carla", join)
-    c.wait_for_function("__S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+    c.wait_for_function("() => __S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
     notes(c)
     c.wait_for_function("(v) => document.querySelector('#notesPane textarea').value === v", arg=value(a), timeout=8000)
     check(True, "Carla, joining late, gets the whole text")

@@ -1,7 +1,7 @@
 # Raised hands, like Meet's ("Raise your hand in Google Meet"): People lists them in the order they went up, hosts
 # lower one ("Lower hand") or all ("Lower all"), someone who isn't a host can't, and a hand goes down by itself once its
 # owner has spoken a little.
-#   python worker/hands_test.py   (wrangler dev on 8797; a local Nostr relay, so no room server is used)
+#   python worker/hands_test.py   (wrangler dev on 8798; a local Nostr relay, so no room server is used)
 import asyncio
 import json
 import sys
@@ -10,7 +10,7 @@ import threading
 import websockets
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 RELAY_PORT = 8816
 Q = f"signal={WS}&relays=ws://127.0.0.1:{RELAY_PORT}"
@@ -100,13 +100,13 @@ with sync_playwright() as p:
         pg.fill("#name", name)
         pg.click("#enter")
         pg.wait_for_selector("#call:not([hidden])")
-        pg.wait_for_function("__S.joined", timeout=20000)
+        pg.wait_for_function("() => __S.joined", timeout=20000)
         return pg
 
     def mute(pg):
         if pg.evaluate("__S.mic"):
             pg.evaluate("document.getElementById('bMic').click()")
-        pg.wait_for_function("!__S.mic", timeout=5000)
+        pg.wait_for_function("() => !__S.mic", timeout=5000)
 
     def hand(pg):
         pg.evaluate("document.activeElement?.blur()")
@@ -122,15 +122,15 @@ with sync_playwright() as p:
     o = person("Beto", link)
     c = person("Carla", link)
     for pg in (a, o, c):
-        pg.wait_for_function("__S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')", timeout=30000)
+        pg.wait_for_function("() => __S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')", timeout=30000)
         mute(pg)
     ids = {n: pg.evaluate("__S.mesh.id") for n, pg in (("Ana", a), ("Beto", o), ("Carla", c))}
 
     hand(c)
-    c.wait_for_function("__S.hands.has('me')", timeout=3000)
+    c.wait_for_function("() => __S.hands.has('me')", timeout=3000)
     a.wait_for_timeout(400)
     hand(o)
-    a.wait_for_function(f"__S.hands.has('{ids['Beto']}') && __S.hands.has('{ids['Carla']}')", timeout=10000)
+    a.wait_for_function(f"() => __S.hands.has('{ids['Beto']}') && __S.hands.has('{ids['Carla']}')", timeout=10000)
     people(a)
     order = a.evaluate("[...document.querySelectorAll('#peopleList .handsRow ol li span')].map(s => s.textContent)")
     check(order == ["Carla", "Beto"], f"People lists raised hands in the order they went up: {order}")  # pinned: Meet's order
@@ -146,32 +146,32 @@ with sync_playwright() as p:
 
     # the host lowers Carla's hand
     a.evaluate("[...document.querySelectorAll('#peopleList .handsRow ol li')].find(li => li.textContent.includes('Carla')).querySelector('[name=lowerHand]').click()")
-    c.wait_for_function("!__S.hands.has('me')", timeout=8000)
+    c.wait_for_function("() => !__S.hands.has('me')", timeout=8000)
     check("lowered your hand" in c.evaluate("document.getElementById('toasts').textContent"), "the host lowers Carla's hand: it goes down and she is told")
-    o.wait_for_function(f"!__S.hands.has('{ids['Carla']}') && __S.hands.has('me')", timeout=8000)
+    o.wait_for_function(f"() => !__S.hands.has('{ids['Carla']}') && __S.hands.has('me')", timeout=8000)
     check(True, "everyone sees it, Beto's hand stays up")
 
     # Lower all
     hand(c)
-    a.wait_for_function(f"__S.hands.has('{ids['Carla']}') && __S.hands.has('{ids['Beto']}')", timeout=8000)
+    a.wait_for_function(f"() => __S.hands.has('{ids['Carla']}') && __S.hands.has('{ids['Beto']}')", timeout=8000)
     people(a)
     a.click('#peopleList .handsRow [name="lowerAll"]')
     for pg in (o, c):
-        pg.wait_for_function("!__S.hands.has('me')", timeout=8000)
-    a.wait_for_function("__S.hands.size === 0", timeout=8000)
+        pg.wait_for_function("() => !__S.hands.has('me')", timeout=8000)
+    a.wait_for_function("() => __S.hands.size === 0", timeout=8000)
     check(a.query_selector("#peopleList .handsRow") is None, "Lower all: every hand goes down and the list goes away")
 
     # a hand goes down after its owner speaks (the fake microphone makes sound)
     hand(o)
-    a.wait_for_function(f"__S.hands.has('{ids['Beto']}')", timeout=8000)
+    a.wait_for_function(f"() => __S.hands.has('{ids['Beto']}')", timeout=8000)
     o.evaluate("document.getElementById('bMic').click()")
     try:
-        o.wait_for_function("!__S.hands.has('me')", timeout=20000)
+        o.wait_for_function("() => !__S.hands.has('me')", timeout=20000)
     except Exception:
         print("DEBUG", o.evaluate("({ mic: __S.mic, handTalk: __S.handTalk, speaking: document.querySelector('#grid .tile[data-id=me]')?.className, ac: (window.__acState || null), track: __S.micTrack ? [__S.micTrack.enabled, __S.micTrack.readyState, __S.micTrack.muted] : null })"))
         raise
     check("because you spoke" in o.evaluate("document.getElementById('toasts').textContent"), "Beto speaks: his hand goes down by itself and he is told")
-    a.wait_for_function(f"!__S.hands.has('{ids['Beto']}')", timeout=8000)
+    a.wait_for_function(f"() => !__S.hands.has('{ids['Beto']}')", timeout=8000)
     check(True, "and the others see it go down")
     check(not [e for e in errors if e.startswith("pageerror")], "no page errors")
     b.close()

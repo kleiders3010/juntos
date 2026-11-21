@@ -4,14 +4,14 @@
 # Checked: Ana saves a .csv from People with everyone, their first join, last exit, time in the call and how many
 # times they joined; someone still there says so; Beto (not a host) has no such button; after Ana leaves she can
 # still save it, with her own time ended.
-#   python worker/attend_test.py [base-url]   (local: npx wrangler dev --port 8797)
+#   python worker/attend_test.py [base-url]   (local: npx wrangler dev --port 8798)
 import csv
 import io
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 OPEN_PEOPLE = "(() => { if (document.getElementById('peoplePane')?.offsetParent) return; if (!document.getElementById('bPeople')) document.getElementById('bMore')?.click(); document.getElementById('bPeople').click() })()"
@@ -40,7 +40,7 @@ with sync_playwright() as p:
         pg.wait_for_selector("#call:not([hidden])")
 
     def peers(pg, n):
-        pg.wait_for_function(f"__S.mesh.peers.size === {n} && [...__S.mesh.peers.values()].every(p => p.name)", timeout=30000)
+        pg.wait_for_function(f"() => __S.mesh.peers.size === {n} && [...__S.mesh.peers.values()].every(p => p.name)", timeout=30000)
 
     def rows(pg, sel):
         with pg.expect_download() as dl:
@@ -64,12 +64,12 @@ with sync_playwright() as p:
     peers(a, 2)
     a.wait_for_timeout(1500)
     o.context.close()  # Beto's connection drops; he comes back
-    a.wait_for_function("__S.mesh.peers.size === 1", timeout=60000)
+    a.wait_for_function("() => __S.mesh.peers.size === 1", timeout=60000)
     o = page("Beto")
     enter(o, "Beto", join)
     peers(a, 2)
     c.evaluate("document.getElementById('bLeave').click(); document.getElementById('justLeave')?.click()")
-    a.wait_for_function("__S.mesh.peers.size === 1", timeout=60000)
+    a.wait_for_function("() => __S.mesh.peers.size === 1", timeout=60000)
 
     a.evaluate(OPEN_PEOPLE)
     a.wait_for_selector('button[name="attSave"]')

@@ -1,10 +1,10 @@
 # Recording check in headless Edge with a fake camera: the saved file must be a plain MP4 (H.264 + AAC, one moov
 # with the real length, then one mdat) so phones and WhatsApp take it. Run: python rec_test.py [base-url]
 # [firefox | msedge | encoder]  (encoder = Edge forced onto the Firefox path: WebCodecs H.264 + MP3)
-# (start the local server first: npx wrangler dev --port 8797). Needs ffprobe on PATH.
+# (start the local server first: npx wrangler dev --port 8798). Needs ffprobe on PATH.
 import sys, os, json, struct, subprocess, tempfile
 from playwright.sync_api import sync_playwright
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 MODE = sys.argv[2] if len(sys.argv) > 2 else "msedge"
 SECONDS = float(sys.argv[3]) if len(sys.argv) > 3 else 5
 with sync_playwright() as p:

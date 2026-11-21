@@ -5,7 +5,7 @@ import re, sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 OTHER = '.tile:not([data-id="me"])'
@@ -37,14 +37,14 @@ with sync_playwright() as p:
     a.fill("#name", "Ana")
     a.click("#enter")
     a.wait_for_selector("#call:not([hidden])")
-    a.wait_for_function("__S.joined && !document.getElementById('netState').hidden", timeout=10000)
+    a.wait_for_function("() => __S.joined && !document.getElementById('netState').hidden", timeout=10000)
     check(True, "alone: the top line tells you (waiting for others)")
     o = person()
     o.goto(f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}")
     o.fill("#name", "Beto")
     o.click("#enter")
     a.wait_for_selector(OTHER + " video", timeout=20000)
-    a.wait_for_function(f"document.querySelector('{OTHER} .status').hidden", timeout=20000)
+    a.wait_for_function(f"() => document.querySelector('{OTHER} .status').hidden", timeout=20000)
     check(a.evaluate("document.getElementById('netState').hidden"), "connected: the top line is gone")
     check(a.evaluate(FRAMES, OTHER + " video") > 10, "Ana sees Beto's picture")
 
@@ -64,7 +64,7 @@ with sync_playwright() as p:
     check(any(r.startswith("Camera") for r in rows) and any(r.startswith("Microphone") for r in rows), f"devices sheet: {rows}")
     before = a.evaluate("__S.micTrack.id")
     a.evaluate(f"(() => {{ const s = {MIC_SELECT}; s.selectedIndex = (s.selectedIndex + 1) % s.options.length; s.dispatchEvent(new Event('change')) }})()")
-    a.wait_for_function(f"__S.micTrack.id !== '{before}'", timeout=10000)
+    a.wait_for_function(f"() => __S.micTrack.id !== '{before}'", timeout=10000)
     check(a.evaluate("[...__S.mesh.peers.values()][0].audio.sender.track?.id === __S.micTrack.id"), "the new microphone is the one sent to Beto")
     a.evaluate("[...document.querySelectorAll('.sheet button.primary')].pop().click()")
 
@@ -104,11 +104,11 @@ with sync_playwright() as p:
     a.wait_for_timeout(1200)
     dot2 = a.evaluate("document.getElementById('recDot').textContent")
     check(bool(re.search(r"\d:\d\d", dot)) and dot != dot2, f"a timer runs at the top: '{dot}' then '{dot2}'")
-    o.wait_for_function("!document.getElementById('recDot').hidden", timeout=5000)
+    o.wait_for_function("() => !document.getElementById('recDot').hidden", timeout=5000)
     check("Ana" in o.evaluate("document.getElementById('recDot').textContent"), "Beto sees that Ana is recording")
     with a.expect_download(timeout=20000):
         a.evaluate("document.getElementById('recDot').click()")
-    o.wait_for_function("document.getElementById('recDot').hidden", timeout=5000)
+    o.wait_for_function("() => document.getElementById('recDot').hidden", timeout=5000)
     a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).click()")
     check(a.evaluate(SHEET)[0] == "grid" and a.evaluate("!document.querySelector('.recSheet input[name=\"chat\"]').checked"),
           "next time the sheet remembers the choices")  # pinned: layout ids speaker/grid are stored on devices
@@ -120,7 +120,7 @@ with sync_playwright() as p:
     a.wait_for_selector(OTHER + " .status button", timeout=5000)
     check("Beto" in a.evaluate(f"document.querySelector('{OTHER} .status').textContent"), "gave up: says who and offers Try again")
     a.click(OTHER + " .status button")
-    a.wait_for_function(f"document.querySelector('{OTHER} .status').hidden", timeout=30000)
+    a.wait_for_function(f"() => document.querySelector('{OTHER} .status').hidden", timeout=30000)
     a.wait_for_timeout(1500)
     check(a.evaluate(FRAMES, OTHER + " video") > 10, "after Try again, Ana sees Beto again")
     check(o.evaluate(FRAMES, OTHER + " video") > 10, "and Beto sees Ana")

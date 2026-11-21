@@ -13,7 +13,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 import websockets
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 RELAY_PORT = 8811
 RELAY = f"ws://127.0.0.1:{RELAY_PORT}"
@@ -95,7 +95,7 @@ with sync_playwright() as p:
         pg.click("#enter")
         pg.wait_for_selector("#call:not([hidden])")
         if wait:
-            pg.wait_for_function("__S.joined", timeout=15000)
+            pg.wait_for_function("() => __S.joined", timeout=15000)
         return pg
 
     LIVE = BASE.startswith("https://")  # the live site: the public relays, no test parameters
@@ -104,11 +104,11 @@ with sync_playwright() as p:
     link = a.url.split("?")[0] + ("?" + Q if Q else "")
     check(a.evaluate("__S.isHost"), "Ana started the call: she has the host controls without the server")
     o = person("Beto", link)
-    both = "__S.mesh.peers.size === {n} && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')"
+    both = "() => __S.mesh.peers.size === {n} && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')"
     a.wait_for_function(both.format(n=1), timeout=20000)
     o.wait_for_function(both.format(n=1), timeout=20000)
     check(True, "Beto found Ana through the relay and they are connected")
-    o.wait_for_function("[...__S.mesh.peers.values()][0].stream.getAudioTracks().length > 0", timeout=10000)
+    o.wait_for_function("() => [...__S.mesh.peers.values()][0].stream.getAudioTracks().length > 0", timeout=10000)
     check(True, "Beto gets Ana's sound")
     c = person("Carla", link)
     for pg in (a, o, c):
@@ -120,20 +120,20 @@ with sync_playwright() as p:
           "the relay saw only encrypted messages")
 
     c.click("#bLeave"); c.query_selector("#justLeave") and c.click("#justLeave")  # a host is asked: just leave
-    a.wait_for_function("__S.mesh.peers.size === 1", timeout=10000)
-    o.wait_for_function("__S.mesh.peers.size === 1", timeout=10000)
+    a.wait_for_function("() => __S.mesh.peers.size === 1", timeout=10000)
+    o.wait_for_function("() => __S.mesh.peers.size === 1", timeout=10000)
     check(True, "Carla leaves: Ana and Beto see her gone")
 
     # a passcode needs the server (only a gatekeeper can limit guesses): the call moves to it, connections stay
     # (locking, muting, co-hosts and removing work without it: hostctl_test.py)
     beto_pc = a.evaluate("[...__S.mesh.peers.values()][0].cid")
     a.evaluate("__S.mesh.host({ t: 'pass', pass: '482916' })")
-    a.wait_for_function("__S.hasPass === true", timeout=15000)
-    o.wait_for_function("__S.mesh.srv && __S.mesh.ws && __S.mesh.ws.readyState === 1", timeout=15000)
+    a.wait_for_function("() => __S.hasPass === true", timeout=15000)
+    o.wait_for_function("() => __S.mesh.srv && __S.mesh.ws && __S.mesh.ws.readyState === 1", timeout=15000)
     check(a.evaluate("[...__S.mesh.peers.values()][0].cid") == beto_pc and a.evaluate(both.format(n=1)),
           "Ana sets a passcode: both move to the server, the connection between them stays")
     d = person("Dan", link, wait=False)
-    d.wait_for_function("!__S.mesh && !document.querySelector('#lobby').hidden", timeout=20000)
+    d.wait_for_function("() => !__S.mesh && !document.querySelector('#lobby').hidden", timeout=20000)
     check(True, "Dan looks on the relay, is sent to the server, and is asked for the passcode")
     b.close()
 

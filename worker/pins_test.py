@@ -1,6 +1,6 @@
 # Pins, like Meet's ("Pin or mute Google Meet participants"): pin several people for yourself (they share the big
 # space), Esc unpins; a host pins someone for everyone, newcomers get it too, and nobody else can.
-#   python worker/pins_test.py   (wrangler dev on 8797; a local Nostr relay)
+#   python worker/pins_test.py   (wrangler dev on 8798; a local Nostr relay)
 import os
 import asyncio
 import json
@@ -10,7 +10,7 @@ import threading
 import websockets
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 RELAY_PORT = 8817
 Q = f"signal={WS}&relays=ws://127.0.0.1:{RELAY_PORT}"
@@ -104,7 +104,7 @@ with sync_playwright() as p:
         pg.fill("#name", name)
         pg.click("#enter")
         pg.wait_for_selector("#call:not([hidden])")
-        pg.wait_for_function("__S.joined", timeout=20000)
+        pg.wait_for_function("() => __S.joined", timeout=20000)
         return pg
 
     def people(pg):
@@ -124,7 +124,7 @@ with sync_playwright() as p:
     c = person("Carla", link)
     d = person("Dan", link)
     for pg in (a, o, c, d):
-        pg.wait_for_function("__S.mesh.peers.size === 3 && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')", timeout=30000)
+        pg.wait_for_function("() => __S.mesh.peers.size === 3 && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')", timeout=30000)
     ids = {n: pg.evaluate("__S.mesh.id") for n, pg in (("Ana", a), ("Beto", o), ("Carla", c), ("Dan", d))}
 
     pin_btn(a, ids["Beto"])
@@ -151,7 +151,7 @@ with sync_playwright() as p:
     for pg in (o, c):
         pg.wait_for_function("(id) => [...document.querySelectorAll('#grid .tile.spot')].some(x => x.dataset.id === id)", arg=ids["Dan"], timeout=8000)
     check("pinned Dan for everyone" in o.evaluate("document.getElementById('toasts').textContent"), "the host pins Dan for everyone: Beto and Carla see him big and are told")
-    d.wait_for_function("!!document.querySelector('#grid .tile.spot[data-id=me]')", timeout=8000)
+    d.wait_for_function("() => !!document.querySelector('#grid .tile.spot[data-id=me]')", timeout=8000)
     check(True, "Dan sees himself pinned")
     people(o)
     check(o.query_selector("#peopleList [name=pinAll]") is None, "Beto (not a host) has no Pin for everyone")

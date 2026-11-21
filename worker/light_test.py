@@ -1,13 +1,13 @@
 # Adjust video lighting, like Meet's (Settings > Video > "Adjust video lighting"; Meet suggests it when you look
 # underexposed): a camera in a dark room gets the suggestion after a few seconds, turning it on makes the picture the
 # OTHER person receives brighter, it keeps working under a background effect, it is remembered, and it turns off.
-#   python worker/light_test.py [base-url]   (local: npx wrangler dev --port 8797)
+#   python worker/light_test.py [base-url]   (local: npx wrangler dev --port 8798)
 import os
 import sys
 
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 # a dark room: a dim face-like blob that moves a little on a near-black background
 CAM = os.path.join(os.environ.get("TEMP", "."), "juntos_dark.y4m")
@@ -67,7 +67,7 @@ with sync_playwright() as p:
     a.wait_for_selector('#toasts [name="lightOn"]', timeout=15000)
     check("You look dark" in a.evaluate("document.getElementById('toasts').textContent"), "Ana gets the suggestion after a few seconds in the dark")
     a.click('#toasts [name="lightOn"]')
-    a.wait_for_function("__S.lightOn && window.__juntosLight?.gain > 1", timeout=10000)
+    a.wait_for_function("() => __S.lightOn && window.__juntosLight?.gain > 1", timeout=10000)
     o.wait_for_timeout(2500)
     after = o.evaluate(SEEN, OTHER)
     o.locator(".tile:not([data-id=\"me\"])").first.screenshot(path=os.path.join(os.environ.get("TEMP", "."), "juntos_light_after.png"))
@@ -85,7 +85,7 @@ with sync_playwright() as p:
     a.evaluate("(document.getElementById('bBg') || __S.barBtns.bBg).click()")
     a.wait_for_timeout(500)
     a.evaluate("[...document.querySelectorAll('.bgChoice')].find(e => e.title === 'Blur').click()")
-    a.wait_for_function("(window.__juntosBg?.stats.draws || 0) > 5", timeout=30000)
+    a.wait_for_function("() => (window.__juntosBg?.stats.draws || 0) > 5", timeout=30000)
     check(a.evaluate("window.__juntosBg.camera === window.__juntosLight.track"), "a background effect works on the brightened picture")
     a.evaluate("[...document.querySelectorAll('.bgChoice')].find(e => e.title === 'None').click()")
     a.wait_for_timeout(1500)
@@ -96,7 +96,7 @@ with sync_playwright() as p:
     a.wait_for_selector("input[name=light]", timeout=5000)
     check(a.is_checked("input[name=light]"), "the settings show it on")
     a.click("input[name=light]", force=True)
-    a.wait_for_function("!__S.lightOn && !__S.light", timeout=5000)
+    a.wait_for_function("() => !__S.lightOn && !__S.light", timeout=5000)
     o.wait_for_timeout(2500)
     off = o.evaluate(SEEN, OTHER)
     check(off < after - 20, f"turned off: back to the camera as it is ({off:.0f})")

@@ -7,7 +7,7 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
 SENT = "() => [...__S.mesh.peers.values()].map(p => p.audio && p.audio.sender.track ? p.audio.sender.track.readyState : 'none')"
@@ -37,7 +37,7 @@ with sync_playwright() as p:
 
     # Kleider (hub #335): before joining the screen shows the devices in use, to tell it's all good
     SEL = "id => { const s = document.getElementById(id); return s.selectedIndex < 0 ? '' : s.options[s.selectedIndex].text }"
-    a.wait_for_function("document.querySelector('#ldMic').options.length > 0 && document.querySelector('#ldCam').options.length > 0", timeout=5000)
+    a.wait_for_function("() => document.querySelector('#ldMic').options.length > 0 && document.querySelector('#ldCam').options.length > 0", timeout=5000)
     mic, cam = a.evaluate(SEL, "ldMic"), a.evaluate(SEL, "ldCam")
     real = a.evaluate("() => navigator.mediaDevices.enumerateDevices().then(l => l.map(d => d.label))")
     check(mic in real and cam in real, f"the lobby names the microphone and camera in use: {mic!r}, {cam!r}")
@@ -46,10 +46,10 @@ with sync_playwright() as p:
     check(a.is_visible("#pMeter"), "the microphone's level is next to it")
     a.evaluate("window.__played = 0; const pl = HTMLMediaElement.prototype.play; HTMLMediaElement.prototype.play = function () { if (this instanceof HTMLAudioElement) __played++; return pl.call(this) }; 0")
     a.click("#ldTest")
-    a.wait_for_function("!document.querySelector('#ldTest').disabled", timeout=8000)
+    a.wait_for_function("() => !document.querySelector('#ldTest').disabled", timeout=8000)
     check(a.evaluate("__played") == 1, "Test plays a sound on the speaker from the lobby")
     a.click("#pMic")
-    a.wait_for_function("!document.querySelector('#lobbyOk').classList.contains('ok')", timeout=3000)
+    a.wait_for_function("() => !document.querySelector('#lobbyOk').classList.contains('ok')", timeout=3000)
     check("muted" in a.text_content("#lobbyOk") and a.evaluate("document.querySelector('.ldRow[data-k=mic]').classList.contains('bad')"), f"a muted microphone shows before joining: {a.text_content('#lobbyOk')!r}")  # pinned: before joining the lobby says when the microphone is muted (Meet warns too)
     a.click("#pMic")
     a.wait_for_selector("#lobbyOk.ok", timeout=3000)
@@ -61,12 +61,12 @@ with sync_playwright() as p:
     o.fill("#name", "Beto")
     o.click("#enter")
     o.wait_for_selector("#call:not([hidden])")
-    a.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.pc.connectionState === 'connected')", timeout=30000)
+    a.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.pc.connectionState === 'connected')", timeout=30000)
 
     # the microphone stops by itself (what unplugging does to the track)
     a.evaluate("__S.micTrack.stop()")
     try:
-        a.wait_for_function("__S.micTrack && __S.micTrack.readyState === 'live'", timeout=6000)
+        a.wait_for_function("() => __S.micTrack && __S.micTrack.readyState === 'live'", timeout=6000)
     except Exception:
         pass
     check(a.evaluate("__S.micTrack.readyState") == "live", "a microphone that stopped is opened again")  # pinned: MediaStreamTrack state name
@@ -77,13 +77,13 @@ with sync_playwright() as p:
     # the camera stops by itself
     a.evaluate("__S.camTrack.stop()")
     try:
-        a.wait_for_function("!__S.cam", timeout=6000)
+        a.wait_for_function("() => !__S.cam", timeout=6000)
     except Exception:
         pass
     check(not a.evaluate("__S.cam"), "a camera that stopped is turned off")
     a.click("#bCam")
     try:
-        a.wait_for_function("__S.cam && __S.camTrack.readyState === 'live'", timeout=6000)
+        a.wait_for_function("() => __S.cam && __S.camTrack.readyState === 'live'", timeout=6000)
     except Exception:
         pass
     check(a.evaluate("__S.cam && __S.camTrack.readyState === 'live'"), "turning it on opens it again")  # pinned: MediaStreamTrack state name

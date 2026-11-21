@@ -6,7 +6,7 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 # a steady tone instead of the fake microphone's short beeps: someone talking
@@ -35,7 +35,7 @@ with sync_playwright() as p:
     a.click("#start")
     a.wait_for_selector("#lobby:not([hidden])")
     # the lobby shows the microphone hearing you
-    a.wait_for_function("parseFloat(document.querySelector('#pMeter i').style.width) > 0", timeout=8000)
+    a.wait_for_function("() => parseFloat(document.querySelector('#pMeter i').style.width) > 0", timeout=8000)
     check(a.is_visible("#pMeter"), "lobby: the microphone level moves")
 
     # Check sound: the devices sheet with the noise switch and the two tests
@@ -43,20 +43,20 @@ with sync_playwright() as p:
     a.wait_for_selector(".sheet .devices")
     check(a.is_checked('input[name="noise"]'), "background noise reduction is on by default")
     a.uncheck('input[name="noise"]')
-    a.wait_for_function("__S.micTrack && __S.micTrack.getSettings().noiseSuppression === false", timeout=8000)
+    a.wait_for_function("() => __S.micTrack && __S.micTrack.getSettings().noiseSuppression === false", timeout=8000)
     check(a.evaluate("localStorage.getItem('juntos.noise')") == "off", "turned off: the microphone runs without it, remembered")
     a.check('input[name="noise"]')
-    a.wait_for_function("__S.micTrack.getSettings().noiseSuppression === true", timeout=8000)
+    a.wait_for_function("() => __S.micTrack.getSettings().noiseSuppression === true", timeout=8000)
     check(True, "turned back on")
 
     a.evaluate("window.__played = 0; const pl = HTMLMediaElement.prototype.play; HTMLMediaElement.prototype.play = function () { if (this instanceof HTMLAudioElement) __played++; return pl.call(this) }; 0")
     a.click('button[name="testSpeaker"]')
-    a.wait_for_function("document.querySelector('button[name=testSpeaker]').disabled", timeout=3000)
-    a.wait_for_function("!document.querySelector('button[name=testSpeaker]').disabled", timeout=8000)
+    a.wait_for_function("() => document.querySelector('button[name=testSpeaker]').disabled", timeout=3000)
+    a.wait_for_function("() => !document.querySelector('button[name=testSpeaker]').disabled", timeout=8000)
     check(a.evaluate("__played") == 1, "test sound plays on the speaker")
     a.click('button[name="testMic"]')
-    a.wait_for_function("document.querySelector('button[name=testMic]').textContent.startsWith('Say something')", timeout=3000)
-    a.wait_for_function("!document.querySelector('button[name=testMic]').disabled", timeout=12000)
+    a.wait_for_function("() => document.querySelector('button[name=testMic]').textContent.startsWith('Say something')", timeout=3000)
+    a.wait_for_function("() => !document.querySelector('button[name=testMic]').disabled", timeout=12000)
     check(a.evaluate("__played") == 2 and not a.query_selector(".toast"), "microphone test records a few seconds and plays them back")
     a.click(".sheet .devices > .primary")
 
@@ -69,14 +69,14 @@ with sync_playwright() as p:
     o.fill("#name", "Beto")
     o.click("#enter")
     o.wait_for_selector("#call:not([hidden])")
-    a.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
-    o.wait_for_function("[...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+    a.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+    o.wait_for_function("() => [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
     ana_on_beto = "document.querySelector('#grid .tile:not([data-id=\"me\"])').classList.contains('muted')"
 
     # M mutes, everyone sees it; M again unmutes
     a.click("#grid")
     a.keyboard.press("m")
-    o.wait_for_function(ana_on_beto, timeout=5000)
+    o.wait_for_function("() => " + ana_on_beto, timeout=5000)
     check(not a.evaluate("__S.mic"), "M mutes (Beto sees Ana muted)")
 
     # talking while muted: the note says so, and Unmute works
@@ -84,38 +84,38 @@ with sync_playwright() as p:
     a.wait_for_selector("#mutedNote:not([hidden])", timeout=6000)
     check(a.is_visible("#mutedNote button"),"talking with the mic off: \"You're muted\" shows")
     a.click("#mutedNote button")
-    o.wait_for_function("!" + ana_on_beto, timeout=5000)
+    o.wait_for_function("() => !" + ana_on_beto, timeout=5000)
     check(a.evaluate("__S.mic") and a.is_hidden("#mutedNote"), "Unmute in the note turns the mic on")
 
     # hold Space to talk
     a.keyboard.press("m")
-    o.wait_for_function(ana_on_beto, timeout=5000)
+    o.wait_for_function("() => " + ana_on_beto, timeout=5000)
     a.keyboard.down(" ")
-    o.wait_for_function("!" + ana_on_beto, timeout=5000)
+    o.wait_for_function("() => !" + ana_on_beto, timeout=5000)
     check(a.evaluate("__S.mic") and a.is_visible("#pttNote"), "holding Space: the mic is on while held")
     a.wait_for_timeout(1500)
     check(a.is_hidden("#mutedNote"), "no \"You're muted\" while holding Space")
     a.keyboard.up(" ")
-    o.wait_for_function(ana_on_beto, timeout=5000)
+    o.wait_for_function("() => " + ana_on_beto, timeout=5000)
     check(not a.evaluate("__S.mic") and a.is_hidden("#pttNote"), "letting go of Space mutes again")
 
     # Ctrl+D (Meet's key) toggles the mic, V and Ctrl+E the camera
     a.keyboard.press("Control+d")
-    o.wait_for_function("!" + ana_on_beto, timeout=5000)
+    o.wait_for_function("() => !" + ana_on_beto, timeout=5000)
     check(a.evaluate("__S.mic"), "Ctrl+D turns the mic on")
     a.keyboard.press("v")
-    o.wait_for_function("document.querySelector('#grid .tile:not([data-id=\"me\"])').classList.contains('camoff')", timeout=5000)
+    o.wait_for_function("() => document.querySelector('#grid .tile:not([data-id=\"me\"])').classList.contains('camoff')", timeout=5000)
     check(not a.evaluate("__S.cam"), "V turns the camera off (Beto sees it)")
     a.keyboard.press("Control+e")
-    a.wait_for_function("__S.cam", timeout=3000)
+    a.wait_for_function("() => __S.cam", timeout=3000)
     check(True, "Ctrl+E turns it back on")
 
     # H raises a hand, Beto sees it
     a.keyboard.press("h")
-    o.wait_for_function("!document.querySelector('#grid .tile:not([data-id=\"me\"]) .hand').hidden", timeout=5000)
+    o.wait_for_function("() => !document.querySelector('#grid .tile:not([data-id=\"me\"]) .hand').hidden", timeout=5000)
     check(True, "H raises a hand (Beto sees it)")
     a.keyboard.press("h")
-    o.wait_for_function("document.querySelector('#grid .tile:not([data-id=\"me\"]) .hand').hidden", timeout=5000)
+    o.wait_for_function("() => document.querySelector('#grid .tile:not([data-id=\"me\"]) .hand').hidden", timeout=5000)
     check(True, "H again lowers it")
 
     # C opens the chat; typing there sends letters, not shortcuts
@@ -127,7 +127,7 @@ with sync_playwright() as p:
     a.keyboard.up(" ")
     check(a.evaluate("__S.mic && __S.cam && !__S.hands.has('me')") and a.input_value("#chatText") == "my video ham  ", "typing in the chat: M, V, H and Space stay letters")  # pinned: the text is what this test typed
     a.keyboard.press("Enter")
-    o.wait_for_function("document.body.innerText.includes('my video ham')", timeout=5000)
+    o.wait_for_function("() => document.body.innerText.includes('my video ham')", timeout=5000)
     check(True, "and the message is sent")
 
     # ? lists the keys

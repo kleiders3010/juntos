@@ -46,9 +46,9 @@ No piece has to be up for a call to work; each job has a second way:
 - Tests that take a piece away: `worker/failover_test.py`, `worker/fwd_test.py`, `worker/serverless_test.py`, `worker/hostctl_test.py`, `worker/mirror_test.py`.
 
 ## Run locally
-    cd worker && npx wrangler dev --port 8787
+    cd worker && npm ci && npx wrangler dev --port 8798   (npm ci: the wrangler version the Worker is deployed with, worker/package.json)
     # serve web/ with any static server that falls back to index.html, then open
-    # http://localhost:8080/?signal=ws://127.0.0.1:8787
+    # http://localhost:8080/?signal=ws://127.0.0.1:8798
 
 License: Apache-2.0. Background segmentation: MediaPipe (Apache-2.0, vendored in `web/vendor/mediapipe`, see its NOTICE.md). MP3 sound in Firefox recordings: lamejs (LGPL-3.0, vendored unchanged in `web/vendor/lamejs` with its full source `lame.all.js`; replace it with any build of lamejs).
 

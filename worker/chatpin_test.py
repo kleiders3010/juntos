@@ -1,7 +1,7 @@
 # Pinned chat messages, like Meet's (help 'Send chat messages to video meeting participants'; Workspace update
 # 'Pin chat messages in Google Meet', 2024-01): you pin and unpin your own messages, hosts may unpin anyone's; pinned
 # messages sit at the top of the chat for everyone, people who join later too. A host and three others.
-#   python worker/chatpin_test.py   (wrangler dev on 8797; a local Nostr relay, so no room server is used)
+#   python worker/chatpin_test.py   (wrangler dev on 8798; a local Nostr relay, so no room server is used)
 import os
 import asyncio
 import json
@@ -11,7 +11,7 @@ import threading
 import websockets
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 RELAY_PORT = 8817
 Q = f"signal={WS}&relays=ws://127.0.0.1:{RELAY_PORT}"
@@ -87,13 +87,13 @@ with sync_playwright() as p:
         pg.fill("#name", name)
         pg.click("#enter")
         pg.wait_for_selector("#call:not([hidden])")
-        pg.wait_for_function("__S.joined", timeout=20000)
+        pg.wait_for_function("() => __S.joined", timeout=20000)
         return pg
 
     def chat(pg):
         if not pg.evaluate("!!document.getElementById('chatLog')?.offsetParent"):
             pg.evaluate("document.getElementById('bChat').click()")
-        pg.wait_for_function("!!document.getElementById('chatLog')?.offsetParent", timeout=5000)
+        pg.wait_for_function("() => !!document.getElementById('chatLog')?.offsetParent", timeout=5000)
 
     def msg(text):
         return f"[...document.querySelectorAll('#chatLog .msg')].find(m => m.querySelector(':scope > p').textContent === {json.dumps(text)})"
@@ -106,7 +106,7 @@ with sync_playwright() as p:
         return pg.evaluate(PINS)
 
     def wait_pins(pg, n):
-        pg.wait_for_function(f"document.querySelectorAll('#chatPins .pinRow').length === {n}", timeout=8000)
+        pg.wait_for_function(f"() => document.querySelectorAll('#chatPins .pinRow').length === {n}", timeout=8000)
 
     def shot(pg, name):
         if SHOTS:
@@ -118,13 +118,13 @@ with sync_playwright() as p:
     o = person("Beto", link)
     c = person("Carla", link)
     for pg in (a, o, c):
-        pg.wait_for_function("__S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')", timeout=30000)
+        pg.wait_for_function("() => __S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')", timeout=30000)
         chat(pg)
     check(a.is_hidden("#chatPins"), "no pinned messages: no pinned area")
     say(o, "Slides: page 12")
     say(c, "Can you hear me?")
     for pg in (a, o, c):
-        pg.wait_for_function(f"!!({msg('Slides: page 12')}) && !!({msg('Can you hear me?')})", timeout=8000)
+        pg.wait_for_function(f"() => !!({msg('Slides: page 12')}) && !!({msg('Can you hear me?')})", timeout=8000)
 
     # Beto pins his own message; it goes to the top of everyone's chat
     o.hover(f"#chatLog .msg >> nth=0")
@@ -163,7 +163,7 @@ with sync_playwright() as p:
     # tapping a pinned message shows it in the chat
     for k in range(30):
         say(o, f"filler {k}")
-    a.wait_for_function(f"!!({msg('filler 29')})", timeout=8000)
+    a.wait_for_function(f"() => !!({msg('filler 29')})", timeout=8000)
     a.locator("#chatPins .pinGo").click()
     a.wait_for_timeout(900)
     seen = a.evaluate(f"(() => {{ const r = {msg('Can you hear me?')}.getBoundingClientRect(), l = document.getElementById('chatLog').getBoundingClientRect(); return r.top >= l.top && r.bottom <= l.bottom; }})()")
@@ -172,14 +172,14 @@ with sync_playwright() as p:
     # someone who joins later sees what's pinned
     d = person("Dani", link)
     chat(d)
-    d.wait_for_function(f"!!({msg('Can you hear me?')})", timeout=15000)
+    d.wait_for_function(f"() => !!({msg('Can you hear me?')})", timeout=15000)
     wait_pins(d, 1)
     check(pins(d)[0]["text"] == "Can you hear me?" and not pins(d)[0]["x"], f"a late joiner sees the pinned message ({pins(d)})")
 
     # the author unpins their own
     c.locator("#chatPins .unpin").click()
     for pg in (a, o, c, d):
-        pg.wait_for_function("document.getElementById('chatPins').hidden", timeout=8000)
+        pg.wait_for_function("() => document.getElementById('chatPins').hidden", timeout=8000)
     check(True, "the author unpinned it; the pinned area goes for everyone")
 
     check(not [e for e in errors if e.startswith("pageerror")], "no page errors")

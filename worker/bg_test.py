@@ -1,9 +1,9 @@
 # Backgrounds in a two-person call (headless Edge, fake camera, software GPU): the other person must keep
 # receiving a moving picture through every background change, after "None", and after the browser pauses the
-# hidden camera video (phones do). Run: python bg_test.py [base-url]  (local: npx wrangler dev --port 8797)
+# hidden camera video (phones do). Run: python bg_test.py [base-url]  (local: npx wrangler dev --port 8798)
 import sys
 from playwright.sync_api import sync_playwright
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required",
         "--use-angle=swiftshader", "--enable-unsafe-swiftshader"]
@@ -27,7 +27,7 @@ with sync_playwright() as p:
     for label in ["Green", "None", "Warm", "Blur", "None"]:
         a.evaluate(f"[...document.querySelectorAll('.bgChoice')].find(e => e.title === '{label}').click()")
         if label != "None":  # the first switch loads the model (a few seconds on a software GPU)
-            a.wait_for_function("(window.__juntosBg?.stats.draws || 0) > 5", timeout=30000)
+            a.wait_for_function("() => (window.__juntosBg?.stats.draws || 0) > 5", timeout=30000)
         a.wait_for_timeout(3000)
         seen = o.evaluate(FRAMES, OTHER)
         print(f"{label:6} other person sees {seen} frames in 2 s", flush=True)

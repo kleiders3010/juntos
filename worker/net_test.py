@@ -11,7 +11,7 @@ import os, sys, tempfile
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 OUT = tempfile.mkdtemp()
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
@@ -71,12 +71,12 @@ with sync_playwright() as p:
     join = f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}"
     o = person("Beto", join)
     c = person("Caro", join)
-    a.wait_for_function("document.querySelectorAll('#grid .tile video').length === 3 && [...__S.mesh.peers.values()].every(p => p.state === 'connected')", timeout=30000)
+    a.wait_for_function("() => document.querySelectorAll('#grid .tile video').length === 3 && [...__S.mesh.peers.values()].every(p => p.state === 'connected')", timeout=30000)
     for pg in (a, o, c):
         pg.evaluate("document.getElementById('bMic').click()")  # quiet, so nobody takes the spotlight by beeping
 
     # --- bars ---
-    a.wait_for_function(f"Object.values({BARS}).every(b => b > 0)", timeout=15000)
+    a.wait_for_function(f"() => Object.values({BARS}).every(b => b > 0)", timeout=15000)
     bars = a.evaluate(BARS)
     check(all(v == 4 for v in bars.values()), f"bars on every picture, all good on this machine: {bars}")  # pinned: a local link is 4 bars
     a.wait_for_timeout(3000)
@@ -147,25 +147,25 @@ with sync_playwright() as p:
     # --- a weak connection: steps down, says so, steps back up ---
     a.wait_for_timeout(2500)
     a.evaluate("window.__netFake = { rtt: 420, loss: 8 }")
-    a.wait_for_function("__S.netq.level === 1", timeout=12000)
+    a.wait_for_function("() => __S.netq.level === 1", timeout=12000)
     line = a.inner_text("#netState")
     check("weak" in line and "warn" in a.get_attribute("#netState", "class"), f"weak: the line at the top says so: {line!r}")
     a.wait_for_timeout(2000)
     pz = a.evaluate(PAUSED)
     check(sum(1 for v in pz.values() if not v) == 1, f"weak: only one picture kept {pz}")
-    o.wait_for_function(f"(() => {{ const b = {BARS}; return b.Ana > 0 && b.Ana <= 2 }})()", timeout=10000)
+    o.wait_for_function(f"() => (() => {{ const b = {BARS}; return b.Ana > 0 && b.Ana <= 2 }})()", timeout=10000)
     check(True, "the others see Ana's connection is weak on her picture")
     cap = o.evaluate("(async () => { await new Promise(r => setTimeout(r, 3000)); const p = [...__S.mesh.peers.values()].find(p => p.name === 'Ana'); const r = await p.pc.getStats(); let h = 0; r.forEach(x => { if (x.type === 'inbound-rtp' && x.kind === 'video') h = x.frameHeight }); return h })()")
     check(0 < cap <= 360, f"weak: Ana sends less ({cap}p)")
     a.evaluate("window.__netFake = { rtt: 900, loss: 30 }")
-    a.wait_for_function("__S.netq.level === 2", timeout=15000)
+    a.wait_for_function("() => __S.netq.level === 2", timeout=15000)
     a.wait_for_timeout(2500)
     f = flow(a)
     check(all(v["frames"] == 0 for v in f.values()) and all(v["audio"] > 50 for v in f.values()), f"very weak: videos paused, sound keeps going {f}")
     check("very weak" in a.inner_text("#netState"), "very weak: the line says so")
     a.screenshot(path=os.path.join(OUT, "net_weak.png"))
     a.evaluate("window.__netFake = null")
-    a.wait_for_function("__S.netq.level === 0", timeout=40000)
+    a.wait_for_function("() => __S.netq.level === 0", timeout=40000)
     a.wait_for_timeout(3000)
     f = flow(a)
     check(all(v["frames"] > 20 for v in f.values()) and a.is_hidden("#netState"), f"connection good again: back to full video, line gone {f}")
@@ -178,10 +178,10 @@ with sync_playwright() as p:
         cdp.send("Network.emulateNetworkConditions", {"offline": False, "latency": 250, "downloadThroughput": -1, "uploadThroughput": -1, "packetLoss": 15})
     e = person("Eva", join, pre=lossy)
     try:
-        e.wait_for_function("__S.netq.level >= 1", timeout=40000)
+        e.wait_for_function("() => __S.netq.level >= 1", timeout=40000)
         real = e.evaluate("JSON.stringify([...__S.netq.links.values()].map(l => [l.rtt, l.loss, l.bars]))")
         check("weak" in e.inner_text("#netState"), f"real lost packets and delay: Eva's call steps down by itself and says so (measured rtt/loss/bars {real})")
-        a.wait_for_function(f"(() => {{ const b = {BARS}; return b.Eva > 0 && b.Eva <= 2 }})()", timeout=15000)
+        a.wait_for_function(f"() => (() => {{ const b = {BARS}; return b.Eva > 0 && b.Eva <= 2 }})()", timeout=15000)
         check(True, "the others see Eva's weak connection on her picture")
     except Exception as ex:
         check(False, f"real bad link: {ex}")
@@ -189,7 +189,7 @@ with sync_playwright() as p:
 
     # --- mobile data: Data saver by default; Spanish ---
     d = person("Dani", join, init="Object.defineProperty(navigator, 'connection', { value: { saveData: false, type: 'cellular', addEventListener() {} } })", locale="es-AR")
-    d.wait_for_function("__S.netq.pref === 'saver'", timeout=5000)
+    d.wait_for_function("() => __S.netq.pref === 'saver'", timeout=5000)
     d.evaluate(OPEN_DEV)
     d.wait_for_selector(".qualityBox")
     box = d.inner_text(".qualityBox")

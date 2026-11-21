@@ -9,7 +9,7 @@ import urllib.request
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 # JUNTOS_SIGNAL: another room server (the Kinetic one: kinetic/server.mjs) with the same protocol
 WS = __import__("os").environ.get("JUNTOS_SIGNAL") or BASE.replace("http", "ws", 1)
 SIG = "" if BASE.startswith("https://meet.") else f"?signal={WS}"
@@ -58,7 +58,7 @@ with sync_playwright() as p:
         pg.fill("#passcode", code)
         pg.evaluate("document.getElementById('lobbyMsg').textContent = ''")
         pg.click("#enter")
-        pg.wait_for_function("!document.getElementById('lobby').hidden && document.getElementById('lobbyMsg').textContent || __S.waiting || __S.joined", timeout=15000)
+        pg.wait_for_function("() => !document.getElementById('lobby').hidden && document.getElementById('lobbyMsg').textContent || __S.waiting || __S.joined", timeout=15000)
 
     # --- the start page: who can join ---
     a = page("Ana")
@@ -79,7 +79,7 @@ with sync_playwright() as p:
     check(a.is_hidden("#passcode"), "the host is never asked for the passcode")
     a.fill("#name", "Ana")
     a.click("#enter")
-    a.wait_for_function("__S.joined", timeout=15000)
+    a.wait_for_function("() => __S.joined", timeout=15000)
     code = a.evaluate("__S.code")
     check(a.evaluate("__S.isHost && __S.locked && __S.hasPass"), "the call starts locked and with a passcode")
     check(info(code) == {"pass": True, "server": True}, "the server only says that a passcode is needed (and that the call uses the server)")
@@ -96,7 +96,7 @@ with sync_playwright() as p:
     try_pass(o, "abc123")
     check("isn't right" in msg(o), "the passcode is case-sensitive (like Zoom's)")
     try_pass(o, "Abc123")
-    o.wait_for_function("__S.waiting", timeout=10000)
+    o.wait_for_function("() => __S.waiting", timeout=10000)
     check(o.evaluate("__S.waiting"), "the right passcode, and the call asks: Beto waits for the host")
     a.wait_for_selector(".knock")
     check("Beto wants to join" in a.evaluate("document.getElementById('knocks').textContent"), "Ana sees who is asking by name")
@@ -111,13 +111,13 @@ with sync_playwright() as p:
     check("#p=" not in c.evaluate("location.href"), "the passcode is taken off the address bar")
     check(c.input_value("#passcode") == "Abc123", "the passcode from the link is filled in")  # pinned: the value this test set
     c.click("#enter")
-    c.wait_for_function("__S.waiting", timeout=10000)
+    c.wait_for_function("() => __S.waiting", timeout=10000)
     a.wait_for_selector(".knockAll")
     check("2 people want to join" in a.evaluate("document.querySelector('.knockAll').textContent"), "two waiting: Ana gets 'Let everyone in'")
     a.click('[name="admitAll"]')
-    a.wait_for_function("__S.mesh.peers.size === 2", timeout=20000)
-    o.wait_for_function("__S.joined && !__S.waiting", timeout=10000)
-    c.wait_for_function("__S.joined && !__S.waiting", timeout=10000)
+    a.wait_for_function("() => __S.mesh.peers.size === 2", timeout=20000)
+    o.wait_for_function("() => __S.joined && !__S.waiting", timeout=10000)
+    c.wait_for_function("() => __S.joined && !__S.waiting", timeout=10000)
     check(not a.query_selector(".knock"), "both are in, the cards are gone")
 
     # --- the host changes and removes the passcode ---
@@ -130,7 +130,7 @@ with sync_playwright() as p:
     a.keyboard.press("Control+A")
     a.keyboard.type("77x7")  # real keys: the field must take typing
     a.click('[name="savePass"]')
-    o.wait_for_function("localStorage.getItem('juntos.pass.' + __S.code) === '77x7'", timeout=5000)
+    o.wait_for_function("() => localStorage.getItem('juntos.pass.' + __S.code) === '77x7'", timeout=5000)
     check("set a passcode" in o.evaluate("document.getElementById('toasts').textContent"), "Beto is told, and his invite link gets the new passcode")
     check(o.evaluate("__S.mesh.pass") == "77x7",  # pinned: the value this test set
            "Beto reconnects with the new one if his link drops")
@@ -140,7 +140,7 @@ with sync_playwright() as p:
     d.context.close()
     people(a)
     a.click('[name="removePass"]')
-    o.wait_for_function("!__S.hasPass", timeout=5000)
+    o.wait_for_function("() => !__S.hasPass", timeout=5000)
     # the host's panel redraws when the server answers, which can come a moment after Beto hears it
     try:
         a.wait_for_selector('[name="addPass"]', timeout=5000)

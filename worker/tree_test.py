@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 20
 CAMS = int(sys.argv[2]) if len(sys.argv) > 2 else 3
-BASE = sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1:8797"
+BASE = sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1:8798"
 # JUNTOS_SIGNAL: another room server (the Kinetic one: kinetic/server.mjs) with the same protocol
 WS = __import__("os").environ.get("JUNTOS_SIGNAL") or BASE.replace("http", "ws", 1)
 PER_BROWSER = 4
@@ -220,7 +220,7 @@ with sync_playwright() as p:
         return pg
 
     x = joiner(link, "NoTree", True)
-    x.wait_for_function("__toasts.some(t => t.includes('full')) || __S.mesh.peers.size > 0", timeout=20000)
+    x.wait_for_function("() => __toasts.some(t => t.includes('full')) || __S.mesh.peers.size > 0", timeout=20000)
     check(x.evaluate("__toasts.some(t => t.includes('full')) && __S.mesh.peers.size === 0"),
           "a device that can't take part in the tree is told the big call is full")
     check(all(pg.evaluate(f"__S.mesh.peers.size === {N - 2}") for pg in rest), "and nobody in the call is disturbed")
@@ -241,7 +241,7 @@ with sync_playwright() as p:
     small = [h]
     while True:
         y = joiner(room, f"S{len(small)}")
-        y.wait_for_function("__toasts.some(t => t.includes('full')) || __S.mesh.peers.size > 0", timeout=20000)
+        y.wait_for_function("() => __toasts.some(t => t.includes('full')) || __S.mesh.peers.size > 0", timeout=20000)
         if y.evaluate("__toasts.some(t => t.includes('full'))"):
             break
         small.append(y)
@@ -250,7 +250,7 @@ with sync_playwright() as p:
     n = len(small)
     # the last ones in may still be connecting to everyone (16 browsers on one machine next to the big call)
     try:
-        h.wait_for_function(f"__S.mesh.peers.size === {n - 1}", timeout=30000)
+        h.wait_for_function(f"() => __S.mesh.peers.size === {n - 1}", timeout=30000)
     except Exception:
         pass
     print("   ", h.evaluate("({ big: !!__S.mesh.big, peers: __S.mesh.peers.size, closed: !!__S.mesh.closed })"), flush=True)

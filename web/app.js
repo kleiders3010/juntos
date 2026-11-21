@@ -1,3 +1,5 @@
+import "./keys.js";
+import { cleanName } from "./names.js";
 import { Mesh, randomId } from "./rtc.js";
 import { newHost } from "./hostauth.js";
 import { Background, BACKGROUNDS } from "./bg.js";
@@ -125,7 +127,7 @@ const S = {
   micTrack: null,
   camTrack: null,
   bg: null,
-  bgMode: localStorage.getItem("bg") || "none",
+  bgMode: localStorage.getItem("juntos.bg") || "none",
   screen: null,
   mesh: null,
   board: null,
@@ -289,7 +291,7 @@ async function getMedia() {
     return false;
   }
   try {
-    const s = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(localStorage.getItem("micId")), video: camConstraints(localStorage.getItem("camId")) });
+    const s = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(localStorage.getItem("juntos.micId")), video: camConstraints(localStorage.getItem("juntos.camId")) });
     S.camStream = s;
     S.micTrack = s.getAudioTracks()[0] || null;
     S.camTrack = s.getVideoTracks()[0] || null;
@@ -358,7 +360,7 @@ function videoOut() {
 
 async function applyBackground(mode) {
   S.bgMode = mode;
-  localStorage.setItem("bg", mode);
+  localStorage.setItem("juntos.bg", mode);
   if (!S.camTrack) return;
   if (mode === "none") {
     if (S.bg) await S.bg.set("none"); // back to the live camera (stop() alone left the call on the last drawn picture)
@@ -442,7 +444,7 @@ function setMic(on) {
 
 async function setCam(on) {
   // a camera that stopped (unplugged, taken by another app) is opened again when turned back on
-  if (on && S.camTrack && S.camTrack.readyState === "ended" && !(await useCamera(camConstraints(localStorage.getItem("camId"))))) return;
+  if (on && S.camTrack && S.camTrack.readyState === "ended" && !(await useCamera(camConstraints(localStorage.getItem("juntos.camId"))))) return;
   S.cam = on;
   if (S.camTrack) S.camTrack.enabled = on;
   refreshLocalVideo();
@@ -505,7 +507,7 @@ function switchSheet() {
   const u = new URL(callUrl(S.code));
   const h = new URLSearchParams(u.hash.slice(1));
   h.set("sw", S.mySwitch);
-  h.set("n", localStorage.getItem("name") || "");
+  h.set("n", localStorage.getItem("juntos.name") || "");
   u.hash = h.toString();
   const sheet = document.createElement("div");
   sheet.className = "sheet";
@@ -549,7 +551,7 @@ function switched(from, tok) {
 async function openLobby() {
   show("lobby");
   $("lobbyCode").textContent = S.code || "";
-  $("name").value = S.switchName || localStorage.getItem("name") || "";
+  $("name").value = S.switchName || localStorage.getItem("juntos.name") || "";
   askPass();
   paintSwitch();
   $("pBg").innerHTML = svg("bg");
@@ -752,7 +754,7 @@ async function join(comp) {
     $("lobbyMsg").textContent = t("Type your name so people know who you are.");
     return;
   }
-  localStorage.setItem("name", name);
+  localStorage.setItem("juntos.name", name);
   if (!$("passcode").hidden) {
     const pass = $("passcode").value.trim();
     if (!PASS_RE.test(pass)) {
@@ -1047,7 +1049,7 @@ function onMessage(from, m) {
 function buildGrid() {
   const grid = $("grid");
   grid.innerHTML = "";
-  grid.appendChild(makeTile("me", `${localStorage.getItem("name")} ${t("(you)")}`));
+  grid.appendChild(makeTile("me", `${localStorage.getItem("juntos.name")} ${t("(you)")}`));
   const v = grid.querySelector('.tile[data-id="me"] video');
   v.muted = true;
   watchMe();
@@ -1818,7 +1820,7 @@ function chatQuoteIn(q) {
   if (!q || typeof q !== "object") return null;
   const text = String(q.text ?? "").slice(0, 300);
   if (!text.trim()) return null;
-  return { id: chatIdOk(q.id) ? q.id : "", name: String(q.name ?? "").slice(0, 60), text };
+  return { id: chatIdOk(q.id) ? q.id : "", name: cleanName(q.name, 60), text };
 }
 function chatReIn(re) {
   const out = {};
@@ -1838,9 +1840,9 @@ function chatOut(c) {
   const re = {};
   for (const [e, who] of Object.entries(c.re || {})) {
     re[e] = {};
-    for (const [k, v] of Object.entries(who)) re[e][mine(k)] = k === "me" ? localStorage.getItem("name") || "" : v;
+    for (const [k, v] of Object.entries(who)) re[e][mine(k)] = k === "me" ? localStorage.getItem("juntos.name") || "" : v;
   }
-  return { id: c.id, from: mine(c.from), name: c.from === "me" ? localStorage.getItem("name") || "" : c.name, text: c.text, at: c.at, q: c.q || null, re, pin: c.pin || 0 };
+  return { id: c.id, from: mine(c.from), name: c.from === "me" ? localStorage.getItem("juntos.name") || "" : c.name, text: c.text, at: c.at, q: c.q || null, re, pin: c.pin || 0 };
 }
 function chatHistoryIn(from, list) {
   if (!Array.isArray(list)) return;
@@ -1857,7 +1859,7 @@ function chatHistoryIn(from, list) {
     }
     const f = typeof raw.from === "string" ? raw.from.slice(0, 40) : "";
     const pin = chatIdOk(raw.id) && +raw.pin > 0 ? +raw.pin : 0;
-    S.chat.push({ id: chatIdOk(raw.id) ? raw.id : "", from: f === S.mesh.id ? "me" : f, name: String(raw.name ?? "").slice(0, 60), text, at: +raw.at || Date.now(), q: chatQuoteIn(raw.q), re, room: 0, pin });
+    S.chat.push({ id: chatIdOk(raw.id) ? raw.id : "", from: f === S.mesh.id ? "me" : f, name: cleanName(raw.name, 60), text, at: +raw.at || Date.now(), q: chatQuoteIn(raw.q), re, room: 0, pin });
   }
   S.chat.sort((a, b) => a.at - b.at);
   renderChat(true);
@@ -1948,7 +1950,7 @@ function renderChatPins(log) {
 }
 function chatUse() {
   try {
-    return JSON.parse(localStorage.getItem("chatEmoji") || "{}") || {};
+    return JSON.parse(localStorage.getItem("juntos.chatEmoji") || "{}") || {};
   } catch {
     return {};
   }
@@ -1963,10 +1965,10 @@ function chatReact(c, e) {
   const on = !c.re?.[e]?.me;
   c.re ||= {};
   if (on) {
-    (c.re[e] ||= {}).me = localStorage.getItem("name") || "";
+    (c.re[e] ||= {}).me = localStorage.getItem("juntos.name") || "";
     const use = chatUse();
     use[e] = (+use[e] || 0) + 1;
-    localStorage.setItem("chatEmoji", JSON.stringify(use));
+    localStorage.setItem("juntos.chatEmoji", JSON.stringify(use));
   } else {
     delete c.re[e].me;
     if (!Object.keys(c.re[e]).length) delete c.re[e];
@@ -1976,7 +1978,7 @@ function chatReact(c, e) {
   renderChat(true);
 }
 function chatQuoteSet(c) {
-  S.chatQuote = c ? { id: c.id, name: c.from === "me" ? localStorage.getItem("name") || "" : c.name, text: c.text.slice(0, 300) } : null;
+  S.chatQuote = c ? { id: c.id, name: c.from === "me" ? localStorage.getItem("juntos.name") || "" : c.name, text: c.text.slice(0, 300) } : null;
   S.chatOpen = "";
   const bar = $("chatQuote");
   bar.hidden = !S.chatQuote;
@@ -1997,7 +1999,7 @@ function addChat(c) {
   c.room = S.br?.here || 0;
   c.re ||= {};
   S.chat.push(c);
-  S.recorder?.event({ kind: "chat", name: c.from === "me" ? localStorage.getItem("name") || "" : c.name, text: c.text });
+  S.recorder?.event({ kind: "chat", name: c.from === "me" ? localStorage.getItem("juntos.name") || "" : c.name, text: c.text });
   renderChat();
   if (S.panel !== "chat") {
     badge("bChat");
@@ -2143,7 +2145,7 @@ $("chatForm").onsubmit = (e) => {
   if (!may("me", "chat")) return toast(t("A host turned off chat"));
   $("chatText").value = "";
   const q = S.chatQuote;
-  const c = { id: chatNewId(), from: "me", name: localStorage.getItem("name"), text, at: Date.now(), q, re: {} };
+  const c = { id: chatNewId(), from: "me", name: localStorage.getItem("juntos.name"), text, at: Date.now(), q, re: {} };
   S.mesh.roomcast(q ? { k: "chat", text, id: c.id, q } : { k: "chat", text, id: c.id });
   if (q) chatQuoteSet(null);
   addChat(c);
@@ -2618,7 +2620,7 @@ function renderPeople() {
   S.passEditor = editing || null;
   ul.innerHTML = "";
   // who hosts the call, for everyone to see
-  const owner = S.isOwner ? `${localStorage.getItem("name")} ${t("(you)")}` : [...S.mesh.peers.values()].find((p) => S.mesh.owners.has(p.id))?.name;
+  const owner = S.isOwner ? `${localStorage.getItem("juntos.name")} ${t("(you)")}` : [...S.mesh.peers.values()].find((p) => S.mesh.owners.has(p.id))?.name;
   if (owner) {
     const li = document.createElement("li");
     li.className = "hostLine";
@@ -2713,7 +2715,7 @@ function renderPeople() {
     ul.append(li);
   };
   handsRow(ul);
-  add(`${localStorage.getItem("name")} ${t("(you)")}${S.comp ? ` ${t("(Companion)")}` : ""}`, S.hands.has("me") ? "✋" : "", null);
+  add(`${localStorage.getItem("juntos.name")} ${t("(you)")}${S.comp ? ` ${t("(Companion)")}` : ""}`, S.hands.has("me") ? "✋" : "", null);
   // hosts first, then raised hands (they may be asking to speak), then everyone else as they came
   const order = (p) => (roleOf(p.id) === "host" ? 0 : roleOf(p.id) ? 1 : S.hands.has(p.id) ? 2 : 3);
   for (const p of [...S.mesh.peers.values()].sort((a, b) => order(a) - order(b)))
@@ -2747,7 +2749,7 @@ function handsRow(ul) {
   for (const id of S.hands) {
     const row = document.createElement("li");
     const nm = document.createElement("span");
-    nm.textContent = id === "me" ? `${localStorage.getItem("name")} ${t("(you)")}` : S.mesh.peers.get(id)?.name || "";
+    nm.textContent = id === "me" ? `${localStorage.getItem("juntos.name")} ${t("(you)")}` : S.mesh.peers.get(id)?.name || "";
     row.append(nm);
     if (id === "me" || S.isHost) {
       const b = document.createElement("button");
@@ -3503,7 +3505,7 @@ function showCap(id, name, text, final, note, lang) {
   if (final) {
     L.done = `${L.done} ${text}`.trim().slice(-400);
     if (!note) {
-      if (!L.entry) S.transcript.push((L.entry = { at: Date.now(), name: id === "me" ? localStorage.getItem("name") || name : name, text: "" }));
+      if (!L.entry) S.transcript.push((L.entry = { at: Date.now(), name: id === "me" ? localStorage.getItem("juntos.name") || name : name, text: "" }));
       L.entry.text = L.done;
     }
   }
@@ -3927,7 +3929,7 @@ async function useCamera(video) {
     S.camTrack?.stop();
     S.camTrack = s.getVideoTracks()[0];
     S.camTrack.enabled = S.cam;
-    localStorage.setItem("camId", S.camTrack.getSettings().deviceId || "");
+    localStorage.setItem("juntos.camId", S.camTrack.getSettings().deviceId || "");
     S.facing = S.camTrack.getSettings().facingMode || S.facing;
     if (S.bg) {
       S.bg.stop();
@@ -3968,7 +3970,7 @@ async function useMic(id) {
     }
     S.micTrack = s.getAudioTracks()[0];
     S.micTrack.enabled = micLive();
-    localStorage.setItem("micId", S.micTrack.getSettings().deviceId || id);
+    localStorage.setItem("juntos.micId", S.micTrack.getSettings().deviceId || id);
     await S.mesh?.setTracks(audioOut(), videoOut());
     capRestart();
     return true;
@@ -3989,7 +3991,7 @@ function watchDevices() {
     watchDevices.busy = true;
     try {
       if (S.micTrack && S.micTrack.readyState === "ended") {
-        const ok = await useMic(localStorage.getItem("micId") || "");
+        const ok = await useMic(localStorage.getItem("juntos.micId") || "");
         toast(ok && S.micTrack?.readyState === "live" ? t("Your microphone stopped. It's back: {name}", { name: S.micTrack.label || t("Microphone") }) : t("Your microphone stopped working. Check it, or pick another in Devices"));
       }
       if (S.camTrack && S.camTrack.readyState === "ended" && S.cam) {
@@ -4005,11 +4007,11 @@ function watchDevices() {
 // where the others' voices come out (computers and Android; iPhones choose it in the system)
 function useSpeaker(id) {
   S.sink = id;
-  localStorage.setItem("sinkId", id);
+  localStorage.setItem("juntos.sinkId", id);
   for (const v of document.querySelectorAll('.tile:not([data-id="me"]) audio')) v.setSinkId?.(id).catch(() => {});
   S.out?.setSinkId?.(id).catch(() => {}); // boosted voices
 }
-S.sink = localStorage.getItem("sinkId") || "";
+S.sink = localStorage.getItem("juntos.sinkId") || "";
 S.noise = localStorage.getItem("juntos.noise") !== "off"; // the browser's own noise reduction (on unless turned off)
 S.lightOn = localStorage.getItem("juntos.light") === "on"; // off until chosen, like Meet (which suggests it when you look dark)
 
@@ -4102,7 +4104,7 @@ async function openDevices() {
   noise.firstChild.onchange = async () => {
     S.noise = noise.firstChild.checked;
     localStorage.setItem("juntos.noise", S.noise ? "on" : "off");
-    await useMic(S.micTrack?.getSettings().deviceId || localStorage.getItem("micId"));
+    await useMic(S.micTrack?.getSettings().deviceId || localStorage.getItem("juntos.micId"));
     startMeter();
   };
   inner.append(noise);
@@ -4332,7 +4334,7 @@ function startRec(opts) {
     [...document.querySelectorAll("#grid .tile:not(.away)")].map((t) => ({
       id: t.dataset.id,
       video: t.querySelector("video"),
-      name: t.dataset.id === "me" ? localStorage.getItem("name") || "" : t.querySelector(".nm").textContent, // no "(you)" in the file
+      name: t.dataset.id === "me" ? localStorage.getItem("juntos.name") || "" : t.querySelector(".nm").textContent, // no "(you)" in the file
       camoff: t.classList.contains("camoff") || t.classList.contains("paused"), // paused to save data: the name, not a frozen picture
       screen: t.dataset.id === "me" ? !!S.screen : t.classList.contains("screen"),
       hand: S.hands.has(t.dataset.id),
@@ -4461,7 +4463,7 @@ function callControls() {
     ms.setActionHandler("enterpictureinpicture", () => openPip());
   } catch (_) {}
 }
-$("rejoin").onclick = () => enterCall(localStorage.getItem("name"));
+$("rejoin").onclick = () => enterCall(localStorage.getItem("juntos.name"));
 $("homeBtn").onclick = () => {
   for (const t of S.camStream?.getTracks() || []) t.stop();
   S.camStream = null;
@@ -4486,7 +4488,7 @@ S.act = new Activities({
   sendTo: (id, m) => S.mesh?.sendTo(id, m),
   hosts: () => S.mesh?.hosts || new Set(),
   amHost: () => !!S.isHost,
-  myName: () => localStorage.getItem("name") || "",
+  myName: () => localStorage.getItem("juntos.name") || "",
   notify: toast,
   badge: () => {
     if (S.panel !== "act") {
@@ -4504,8 +4506,8 @@ S.notes = new Notes({
   sendTo: (id, m) => S.mesh?.sendTo(id, m),
   hosts: () => S.mesh?.hosts || new Set(),
   amHost: () => !!S.isHost,
-  myName: () => localStorage.getItem("name") || "",
-  names: () => [localStorage.getItem("name") || "", ...[...(S.mesh?.peers.values() || [])].map((p) => p.name || "")],
+  myName: () => localStorage.getItem("juntos.name") || "",
+  names: () => [localStorage.getItem("juntos.name") || "", ...[...(S.mesh?.peers.values() || [])].map((p) => p.name || "")],
   notify: toast,
   badge: () => {
     if (S.panel !== "notes") {
@@ -4522,10 +4524,10 @@ S.an = new Annotate({
   send: (m) => S.mesh?.roomcast(m),
   sendTo: (id, m) => S.mesh?.sendTo(id, m),
   myId: () => S.mesh?.id || "me",
-  myName: () => localStorage.getItem("name") || "",
+  myName: () => localStorage.getItem("juntos.name") || "",
   amHost: () => !!S.isHost,
   isHost: (id) => !!S.mesh?.hosts.has(id),
-  name: (id) => (id === S.mesh?.id ? localStorage.getItem("name") || "" : S.mesh?.peers.get(id)?.name || t("Someone")),
+  name: (id) => (id === S.mesh?.id ? localStorage.getItem("juntos.name") || "" : S.mesh?.peers.get(id)?.name || t("Someone")),
   sharing: (id) => {
     if (id === "me") return !!S.screen;
     const tile = document.querySelector(`#grid .tile[data-id="${CSS.escape(id)}"]`);

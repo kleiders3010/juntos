@@ -9,12 +9,12 @@
 # leaves, Carla's captions say they stopped (nobody else can); a browser that can't listen to a given voice doesn't
 # offer.
 # pinned: the names and words compared are the ones this test types.
-#   python worker/caphelp_test.py [base-url]   (local: npx wrangler dev --port 8797)
+#   python worker/caphelp_test.py [base-url]   (local: npx wrangler dev --port 8798)
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 # a recognition that can listen to a given track (refuses a stopped one, like Chrome 135+); the page's own
@@ -88,8 +88,8 @@ with sync_playwright() as p:
     c = page("Carla", NO_SR)
     enter(c, "Carla", join)
     for pg in (a, o, c):
-        pg.wait_for_function("__S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
-    c.wait_for_function("__S.capCan.size === 2", timeout=15000)
+        pg.wait_for_function("() => __S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+    c.wait_for_function("() => __S.capCan.size === 2", timeout=15000)
     check(c.evaluate("[...__S.capCan.entries()].filter(([, x]) => x.tk).length") == 1, "only Ana's browser offers (Beto's can't listen to a given voice)")
     check(c.evaluate("__S.capHelper") is None, "nobody listens before anyone wants captions")
 
@@ -99,18 +99,18 @@ with sync_playwright() as p:
     o.check('input[name="caps"]')
     o.click(".capSheet .primary")
     a_id = a.evaluate("__S.mesh.id")
-    c.wait_for_function(f"__S.capHelper === '{a_id}'", timeout=10000)
+    c.wait_for_function(f"() => __S.capHelper === '{a_id}'", timeout=10000)
     check("Ana" in toasts(c), "Carla is told Ana's browser makes her captions")
-    a.wait_for_function("__others().length === 1", timeout=10000)
+    a.wait_for_function("() => __others().length === 1", timeout=10000)
     check("Carla" in toasts(a), "Ana is told her browser makes Carla's captions")
     check(a.evaluate("__others()[0].track.id") != a.evaluate("[...__local][0]"), "Ana's browser listens to Carla's voice as it arrives, not to Ana's microphone")
 
     a.evaluate("__sayOthers('good morning every', false)")
-    o.wait_for_function("[...document.querySelectorAll('#captions .capLine')].some(l => l.lastChild.textContent === 'good morning every')", timeout=5000)
+    o.wait_for_function("() => [...document.querySelectorAll('#captions .capLine')].some(l => l.lastChild.textContent === 'good morning every')", timeout=5000)
     check(o.evaluate("[...document.querySelectorAll('#captions .capLine')].find(l => l.lastChild.textContent === 'good morning every').firstChild.textContent") == "Carla",
           "Beto reads Carla's words with her name, while she talks")
     a.evaluate("__sayOthers('good morning everyone', true)")
-    o.wait_for_function("[...document.querySelectorAll('#captions .capLine')].some(l => l.lastChild.textContent === 'good morning everyone')", timeout=5000)
+    o.wait_for_function("() => [...document.querySelectorAll('#captions .capLine')].some(l => l.lastChild.textContent === 'good morning everyone')", timeout=5000)
     check(True, "and when she ends the sentence")
     check(o.evaluate("__S.transcript.some(x => x.name === 'Carla' && x.text === 'good morning everyone')"), "it's in Beto's transcript as Carla's")
 
@@ -119,7 +119,7 @@ with sync_playwright() as p:
     c.wait_for_selector(".capSheet")
     check(c.is_visible('select[name="capLang"]') and "Ana" in c.inner_text(".capHelpNote"), "Carla's sheet has 'I speak' and says Ana's browser makes her captions")
     c.select_option('select[name="capLang"]', "es-ES")
-    a.wait_for_function("__others().length === 1 && __others()[0].lang === 'es-ES'", timeout=8000)
+    a.wait_for_function("() => __others().length === 1 && __others()[0].lang === 'es-ES'", timeout=8000)
     check(True, "Carla picks Spanish: Ana's browser listens for Spanish")
     c.click(".capSheet .primary")
     c.wait_for_selector(".capSheet", state="detached")
@@ -132,15 +132,15 @@ with sync_playwright() as p:
 
     # Carla mutes: the listening stops
     c.keyboard.press("m")
-    a.wait_for_function("__others().length === 0", timeout=8000)
+    a.wait_for_function("() => __others().length === 0", timeout=8000)
     check(True, "Carla muting stops Ana's browser listening to her")
     c.keyboard.press("m")
-    a.wait_for_function("__others().length === 1", timeout=8000)
+    a.wait_for_function("() => __others().length === 1", timeout=8000)
     check(True, "and it starts again when she unmutes")
 
     # Ana leaves: nobody else can, so Beto is told Carla's captions stopped
     a.close()
-    o.wait_for_function("[...document.querySelectorAll('#captions .capLine')].some(l => /browser can't make captions/.test(l.lastChild.textContent))", timeout=20000)
+    o.wait_for_function("() => [...document.querySelectorAll('#captions .capLine')].some(l => /browser can't make captions/.test(l.lastChild.textContent))", timeout=20000)
     check(True, "Ana leaves and nobody else can: Beto is told Carla's browser can't make captions")
     check(c.evaluate("__S.capHelper") is None, "Carla has no helper any more")
 

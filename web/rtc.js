@@ -1,3 +1,4 @@
+import { cleanName } from "./names.js";
 import { VIDEO_CAP } from "./net.js";
 import { NostrSignal, NOSTR_OK } from "./nsig.js";
 import { Big, BIG_OK, makeKeys } from "./big.js";
@@ -410,7 +411,7 @@ export class Mesh extends EventTarget {
     } else if (m.t === "name") {
       const p = this.peers.get(m.id);
       if (p) {
-        p.name = m.name;
+        p.name = cleanName(m.name, 60);
         this.emit("peer", { id: m.id });
       }
     } else if (m.t === "full") {
@@ -815,9 +816,9 @@ export class Mesh extends EventTarget {
       if (!p || (data.for && data.for !== p.cid) || p.pc.signalingState !== "have-local-offer") return;
     }
     if (data.sdp) {
-      if (!p) p = this.peer(from, data.name);
+      if (!p) p = this.peer(from, cleanName(data.name, 60));
       if (data.cid) p.rcid = data.cid;
-      if (data.name) p.name = data.name;
+      if (data.name) p.name = cleanName(data.name, 60);
       await p.pc.setRemoteDescription(data.sdp);
       if (data.sdp.type === "offer") {
         const ts = p.pc.getTransceivers();

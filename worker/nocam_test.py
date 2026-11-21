@@ -7,7 +7,7 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--auto-select-desktop-capture-source=Entire screen"]
 errors = []
@@ -20,6 +20,7 @@ def check(ok, what):
 
 
 def wait(pg, js, timeout=8000):
+    __import__("re").match(r"\s*(\([^()]*\)|\w+)\s*=>", js) or (js := "() => " + js)  # the pages forbid eval: Playwright polls functions without it
     try:
         pg.wait_for_function(js, timeout=timeout)
         return True
@@ -50,7 +51,7 @@ with sync_playwright() as p:
     o = page("Beto")
     enter(o, "Beto", f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}")
     for pg in (a, o):
-        pg.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+        pg.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
     check(not a.evaluate("__S.cam") and not o.evaluate("__S.cam"), "both cameras are off")
     sid = o.evaluate("__S.mesh.id")
     tile = f'#grid .tile[data-id="{sid}"]'
@@ -58,7 +59,7 @@ with sync_playwright() as p:
     # my own tile lights up while I talk (the fake microphone beeps), and stays dark while muted
     check(wait(a, "document.querySelector('#grid .tile[data-id=\"me\"]').classList.contains('speaking')", 8000), "my own tile lights up when my microphone hears me")
     a.click("#bMic")
-    a.wait_for_function("!__S.mic", timeout=3000)
+    a.wait_for_function("() => !__S.mic", timeout=3000)
     a.evaluate("window.__lit = false; window.__w = setInterval(() => { if (document.querySelector('#grid .tile[data-id=\"me\"]').classList.contains('speaking')) __lit = true }, 50)")
     a.wait_for_timeout(2500)
     check(not a.evaluate("__lit"), "muted: my own tile stays dark")

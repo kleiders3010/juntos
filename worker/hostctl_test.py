@@ -16,7 +16,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 import websockets
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 RELAY_PORT = 8812
 RELAY = f"ws://127.0.0.1:{RELAY_PORT}"
@@ -103,7 +103,7 @@ with sync_playwright() as p:
         pg.click("#enter")
         pg.wait_for_selector("#call:not([hidden])")
         if wait:
-            pg.wait_for_function("__S.joined", timeout=15000)
+            pg.wait_for_function("() => __S.joined", timeout=15000)
         return pg
 
     LIVE = BASE.startswith("https://")  # the live site: the public relays, no test parameters
@@ -111,6 +111,7 @@ with sync_playwright() as p:
     full = "(n) => __S.mesh && __S.mesh.peers.size === n && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')"
 
     def wait(pg, js, what, arg=None, secs=15):
+        __import__("re").match(r"\s*(\([^()]*\)|\w+)\s*=>", js) or (js := "() => " + js)  # the pages forbid eval: Playwright polls functions without it
         try:
             pg.wait_for_function(js, arg=arg, timeout=secs * 1000)
             check(True, what)
@@ -178,7 +179,7 @@ with sync_playwright() as p:
     # refusing someone
     e = person("Eve", link, wait=False)
     wait(e, "__S.waiting === true", "Eve has to ask to join", secs=20)
-    a.wait_for_function("__S.knocks.size === 1", timeout=15000)
+    a.wait_for_function("() => __S.knocks.size === 1", timeout=15000)
     eid = e.evaluate("__S.mesh.id")
     a.evaluate("(id) => __S.mesh.host({ t: 'deny', id })", eid)
     wait(e, "!__S.mesh", "Ana says no: Eve is told and leaves")

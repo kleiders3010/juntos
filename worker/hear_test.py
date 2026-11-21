@@ -7,7 +7,7 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 # no --autoplay-policy flag: the page plays sound the way it does for people, after their clicks
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
@@ -49,7 +49,7 @@ def call(b, cams):
     label = "cameras on" if cams else "cameras off"
     for who, pg in (("Ana", a), ("Beto", o)):
         try:
-            pg.wait_for_function(f"(({VOICE})() || {{}}).time > 0.5", timeout=15000)
+            pg.wait_for_function(f"() => (({VOICE})() || {{}}).time > 0.5", timeout=15000)
         except Exception:
             pass
         v1 = pg.evaluate(VOICE)

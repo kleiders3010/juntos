@@ -9,7 +9,7 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 STUB = """
@@ -61,8 +61,8 @@ with sync_playwright() as p:
     join = f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}"
     o = page("Beto", STUB)
     enter(o, "Beto", join)
-    a.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
-    o.wait_for_function("[...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+    a.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+    o.wait_for_function("() => [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
     a.wait_for_timeout(500)
     check(listening(a) == 0 and listening(o) == 0, "nobody's voice is turned into text until someone wants captions")
 
@@ -70,17 +70,17 @@ with sync_playwright() as p:
     o.click("#bCaps")
     o.wait_for_selector(".capSheet")
     o.check('input[name="caps"]')
-    a.wait_for_function("__sr.length === 1", timeout=5000)
+    a.wait_for_function("() => __sr.length === 1", timeout=5000)
     check(listening(o) == 1, "Beto turns captions on: Ana's browser (and his own) start listening")
     check(a.is_visible(".toast"), "Ana is told her voice is being turned into text")
     o.click(".capSheet .primary")
 
     a.evaluate("__say('hello every', false)")
-    o.wait_for_function("document.querySelector('#captions .capLine span')?.textContent.includes('hello every')", timeout=5000)
+    o.wait_for_function("() => document.querySelector('#captions .capLine span')?.textContent.includes('hello every')", timeout=5000)
     check(o.inner_text("#captions .capLine b") == "Ana", "Beto sees Ana's words while she talks, with her name")  # pinned: the name she typed
     a.evaluate("__say('hello everyone', true)")
     a.evaluate("__say('how are you', true)")
-    o.wait_for_function("document.querySelector('#captions .capLine span').textContent.includes('how are you')", timeout=5000)
+    o.wait_for_function("() => document.querySelector('#captions .capLine span').textContent.includes('how are you')", timeout=5000)
     line = o.inner_text("#captions .capLine span")
     check("hello everyone how are you" in line and "hello every " not in line, "finished sentences replace the words in progress and stay together")  # pinned: the words this test said
     check(o.locator("#captions .capLine").count() == 1 and not a.is_visible("#captions"), "one line per speaker; Ana (captions off) sees none")
@@ -88,15 +88,15 @@ with sync_playwright() as p:
     # muted: nothing is listened to
     a.click("#grid")
     a.keyboard.press("m")
-    a.wait_for_function("__sr.length === 0", timeout=5000)
+    a.wait_for_function("() => __sr.length === 0", timeout=5000)
     check(True, "Ana mutes: her browser stops listening")
     a.keyboard.press("m")
-    a.wait_for_function("__sr.length === 1", timeout=5000)
+    a.wait_for_function("() => __sr.length === 1", timeout=5000)
     check(True, "and starts again when she unmutes")
 
     # Beto's own voice shows as "You"
     o.evaluate("__say('fine thanks', true)")
-    o.wait_for_function("[...document.querySelectorAll('#captions .capLine')].some(l => l.dataset.id === 'me' && l.textContent.includes('fine thanks'))", timeout=5000)
+    o.wait_for_function("() => [...document.querySelectorAll('#captions .capLine')].some(l => l.dataset.id === 'me' && l.textContent.includes('fine thanks'))", timeout=5000)
     check(True, "Beto sees his own words too")
 
     # a dialogue, not one running stream: a long turn breaks into lines, the name shows where the speaker changes
@@ -105,7 +105,7 @@ with sync_playwright() as p:
     lines_js = "[...document.querySelectorAll('#captions .capLine')].map(l => [l.dataset.id, getComputedStyle(l.firstChild).display !== 'none', l.lastChild.textContent])"
     a.evaluate(f"__say('{LONG}', true)")
     a.evaluate("__say('and then we rest', true)")
-    o.wait_for_function("document.querySelector('#captions').textContent.includes('we rest')", timeout=5000)
+    o.wait_for_function("() => document.querySelector('#captions').textContent.includes('we rest')", timeout=5000)
     ls = o.evaluate(lines_js)
     long_i = next(i for i, x in enumerate(ls) if x[2] == LONG)
     check(ls[long_i][1] and ls[long_i + 1][2] == "and then we rest" and not ls[long_i + 1][1],
@@ -113,16 +113,16 @@ with sync_playwright() as p:
     a.evaluate("__say('one more thing', true)")
     o.wait_for_timeout(1800)
     a.evaluate("__say('bye', true)")
-    o.wait_for_function("document.querySelector('#captions').textContent.includes('bye')", timeout=5000)
+    o.wait_for_function("() => document.querySelector('#captions').textContent.includes('bye')", timeout=5000)
     ls = o.evaluate(lines_js)
     check(["one more thing" in x[2] and "bye" not in x[2] for x in ls].count(True) == 1 and ls[-1][2] == "bye", "a pause starts a new line")
     o.evaluate("__say('see you', true)")
-    o.wait_for_function("document.querySelector('#captions').textContent.includes('see you')", timeout=5000)
+    o.wait_for_function("() => document.querySelector('#captions').textContent.includes('see you')", timeout=5000)
     ls = o.evaluate(lines_js)
     check(ls[-1][0] == "me" and ls[-1][1] and len(ls) <= 4, "another speaker gets a line with their name; a few lines on screen")
     o.wait_for_timeout(1800)
     a.evaluate("__say('half a sen', false)")
-    o.wait_for_function("document.querySelector('#captions').textContent.includes('half a sen')", timeout=5000)
+    o.wait_for_function("() => document.querySelector('#captions').textContent.includes('half a sen')", timeout=5000)
     ls = o.evaluate(lines_js)
     check(ls[-1][2] == "half a sen" and ls[-1][1], "words in progress after someone else spoke start a new line with the name")
     a.evaluate("__say('half a sentence', true)")
@@ -148,16 +148,16 @@ with sync_playwright() as p:
     # Carla can't make captions
     c = page("Carla", NO_SR)
     enter(c, "Carla", join)
-    o.wait_for_function("[...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Carla'))", timeout=30000)
+    o.wait_for_function("() => [...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Carla'))", timeout=30000)
     check(True, "Carla's browser can't make captions: Beto is told so")
     c.click("#bCaps")
     c.wait_for_selector(".capSheet")
     check(not c.query_selector('input[name="capShare"]') and c.is_visible('input[name="caps"]'), "Carla can still turn on captions to read the others")
     c.check('input[name="caps"]')
     c.click(".capSheet .primary")
-    a.wait_for_function("__S.capWant.size === 2", timeout=10000)  # Carla's ask reached Ana (live network)
+    a.wait_for_function("() => __S.capWant.size === 2", timeout=10000)  # Carla's ask reached Ana (live network)
     a.evaluate("__say('welcome Carla', true)")
-    c.wait_for_function("document.querySelector('#captions')?.textContent.includes('welcome Carla')", timeout=5000)
+    c.wait_for_function("() => document.querySelector('#captions')?.textContent.includes('welcome Carla')", timeout=5000)
     check(True, "and she reads Ana")
     c.click("#bCaps")
     c.uncheck('input[name="caps"]')
@@ -167,7 +167,7 @@ with sync_playwright() as p:
     # (Kleider, 2026-11-18: his mother on Brave shared her voice as subtitles and nobody saw them.)
     d = page("Dani", STUB + "Object.defineProperty(navigator, 'brave', { value: { isBrave: () => Promise.resolve(true) } });")
     enter(d, "Dani", join)
-    o.wait_for_function("[...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Dani'))", timeout=30000)
+    o.wait_for_function("() => [...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Dani'))", timeout=30000)
     check(listening(d) == 0, "Brave: Dani's browser doesn't pretend to listen; Beto is told her browser can't make captions")
     d.click("#bCaps")
     d.wait_for_selector(".capSheet")
@@ -179,7 +179,7 @@ with sync_playwright() as p:
     e = page("Eva", STUB.replace("start() { if (this.on) throw new Error(\"already started\"); this.on = true; __sr.push(this); }",
                                  "start() { setTimeout(() => { this.onerror && this.onerror({ error: 'network' }); this.onend && this.onend(); }, 50); }"))
     enter(e, "Eva", join)
-    o.wait_for_function("[...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Eva'))", timeout=30000)
+    o.wait_for_function("() => [...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Eva'))", timeout=30000)
     check(True, "a speech service that never answers: Eva's browser gives up and Beto is told")
     e.close()
 
@@ -189,7 +189,7 @@ with sync_playwright() as p:
     f = page("Fay", STUB.replace("start() { if (this.on) throw new Error(\"already started\"); this.on = true; __sr.push(this); }",
                                  "start() { setTimeout(() => { this.onerror && this.onerror({ error: 'audio-capture' }); this.onend && this.onend(); }, 50); }"))
     enter(f, "Fay", join)
-    o.wait_for_function("[...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Fay'))", timeout=30000)
+    o.wait_for_function("() => [...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Fay'))", timeout=30000)
     check(f.evaluate("document.querySelector('#bCaps')?.classList.contains('warn')") is True, "Fay's captions button warns (it stays, not just a toast)")
     f.click("#bCaps")
     f.wait_for_selector(".capSheet")
@@ -200,32 +200,32 @@ with sync_playwright() as p:
     # Gus's browser listens but never makes text while he talks: after a while he is warned, and Beto told
     g = page("Gus", STUB)
     enter(g, "Gus", join)
-    g.wait_for_function("__sr.length === 1", timeout=10000)
+    g.wait_for_function("() => __sr.length === 1", timeout=10000)
     g.evaluate("""() => { const ac = new AudioContext(), o = ac.createOscillator(), d = ac.createMediaStreamDestination(), gn = ac.createGain();
       gn.gain.value = 0.3; o.connect(gn); gn.connect(d); o.start(); __S.micTrack = d.stream.getAudioTracks()[0]; }""")  # he keeps talking
-    check(g.wait_for_function("document.querySelector('#bCaps').classList.contains('warn')", timeout=25000) is not None, "talking with no text coming out: Gus is warned")
-    o.wait_for_function("[...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Gus'))", timeout=10000)
+    check(g.wait_for_function("() => document.querySelector('#bCaps').classList.contains('warn')", timeout=25000) is not None, "talking with no text coming out: Gus is warned")
+    o.wait_for_function("() => [...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Gus'))", timeout=10000)
     check(True, "and Beto is told Gus's captions aren't working")
     g.evaluate("__say('now it works', true)")
-    g.wait_for_function("!document.querySelector('#bCaps').classList.contains('warn')", timeout=5000)
+    g.wait_for_function("() => !document.querySelector('#bCaps').classList.contains('warn')", timeout=5000)
     check(True, "the warning goes as soon as text comes out")
     g.close()
 
     # Ana turns off captions of her voice
     a.click("#bCaps")
     a.uncheck('input[name="capShare"]')
-    a.wait_for_function("__sr.length === 0", timeout=5000)
-    o.wait_for_function("[...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Ana'))", timeout=5000)
+    a.wait_for_function("() => __sr.length === 0", timeout=5000)
+    o.wait_for_function("() => [...document.querySelectorAll('#captions .capLine.note')].some(l => l.textContent.includes('Ana'))", timeout=5000)
     check(True, "Ana turns off captions of her voice: her browser stops, Beto is told")
     a.check('input[name="capShare"]')
-    a.wait_for_function("__sr.length === 1", timeout=5000)
+    a.wait_for_function("() => __sr.length === 1", timeout=5000)
     a.click(".capSheet .primary")
 
     # Beto turns captions off: nobody listens any more
     o.click("#bCaps")
     o.uncheck('input[name="caps"]')
     o.click(".capSheet .primary")
-    a.wait_for_function("__sr.length === 0", timeout=5000)
+    a.wait_for_function("() => __sr.length === 0", timeout=5000)
     check(listening(o) == 0 and o.is_hidden("#captions"), "captions off: everyone stops listening, the box goes")
     check(o.evaluate("localStorage.getItem('juntos.captions')") == "off", "the choice is remembered")
 

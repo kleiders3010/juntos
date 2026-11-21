@@ -15,6 +15,7 @@ async function sha(s) {
   const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(s)));
   return [...new Uint8Array(b)].slice(0, 12).map((x) => x.toString(16).padStart(2, "0")).join("");
 }
+import { cleanName } from "./names.js";
 const clip = (s, n) => String(s ?? "").slice(0, n);
 const KINDS = ["act", "actdel", "vote", "qup", "actset", "actsync"];
 const POLLS = ["hosts", "all", "approve"]; // who starts polls
@@ -25,10 +26,10 @@ function clean(it) {
   if (it.type === "poll") {
     const opts = (Array.isArray(it.opts) ? it.opts : []).slice(0, MAXOPT).map((x) => clip(x, 200));
     if (opts.length < 2 || !clip(it.q, 300).trim()) return null;
-    return { ...base, type: "poll", q: clip(it.q, 300), opts, byName: clip(it.byName, 60), anon: !!it.anon, show: !!it.show, ended: !!it.ended, hidden: !!it.hidden, approved: it.approved !== false };
+    return { ...base, type: "poll", q: clip(it.q, 300), opts, byName: cleanName(it.byName, 60), anon: !!it.anon, show: !!it.show, ended: !!it.ended, hidden: !!it.hidden, approved: it.approved !== false };
   }
   if (it.type === "q" && clip(it.text, 500).trim()) {
-    return { ...base, type: "q", text: clip(it.text, 500), anon: !!it.anon, byName: it.anon ? "" : clip(it.byName, 60), answered: !!it.answered, hidden: !!it.hidden, approved: it.approved !== false };
+    return { ...base, type: "q", text: clip(it.text, 500), anon: !!it.anon, byName: it.anon ? "" : cleanName(it.byName, 60), answered: !!it.answered, hidden: !!it.hidden, approved: it.approved !== false };
   }
   return null;
 }
@@ -189,7 +190,7 @@ export class Activities {
     if (!this.votes.has(poll)) this.votes.set(poll, new Map());
     const v = this.votes.get(poll);
     if (v.has(ballot) || v.size > 5000) return;
-    v.set(ballot, { opt, name: p?.anon ? "" : clip(name, 60) });
+    v.set(ballot, { opt, name: p?.anon ? "" : cleanName(name, 60) });
     if (!quiet) this.changed();
   }
   addUp(q, key, on, quiet) {

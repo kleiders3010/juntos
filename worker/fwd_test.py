@@ -1,7 +1,7 @@
 # Two people who can't connect to each other (strict routers on both sides, no relay): someone connected to both
 # passes their sound, video and messages on (web/fwd.js), the messages sealed so the helper can't read them; when the
 # helper leaves, another one takes over. No server needed: the call runs on a local Nostr relay.
-#   python worker/fwd_test.py            (wrangler dev on 8797 serves the page; no TURN key there, so no relay)
+#   python worker/fwd_test.py            (wrangler dev on 8798 serves the page; no TURN key there, so no relay)
 import asyncio
 import json
 import sys
@@ -10,7 +10,7 @@ import threading
 import websockets
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 RELAY_PORT = 8815
 Q = f"signal={WS}&relays=ws://127.0.0.1:{RELAY_PORT}"
@@ -93,7 +93,7 @@ with sync_playwright() as p:
         pg.fill("#name", name)
         pg.click("#enter")
         pg.wait_for_selector("#call:not([hidden])")
-        pg.wait_for_function("__S.joined", timeout=20000)
+        pg.wait_for_function("() => __S.joined", timeout=20000)
         pg.evaluate("""() => { window.__got = []; const m = __S.mesh, o = m.emit.bind(m);
             m.emit = (t, d) => { if (t === 'message') window.__got.push({ from: d.from, msg: d.msg }); return o(t, d); }; }""")
         return pg
@@ -107,29 +107,29 @@ with sync_playwright() as p:
     direct = "(id) => { const p = __S.mesh.peers.get(id); return !!p && !p.via && p.state === 'connected' && p.dc.readyState === 'open'; }"
     for pg, others in ((a, ("Carla", "Dan")), (o, ("Carla", "Dan")), (c, ("Ana", "Beto", "Dan"))):
         for n in others:
-            pg.wait_for_function(f"({direct})('{ids[n]}')", timeout=30000)
+            pg.wait_for_function(f"() => ({direct})('{ids[n]}')", timeout=30000)
     check(True, "Carla and Dan connect to everyone; Ana and Beto can't connect to each other")
 
     via = "([id, h]) => { const p = __S.mesh.peers.get(id); return !!p && (h ? p.via === h : !!p.via); }"
-    a.wait_for_function(f"({via})(['{ids['Beto']}', null])", timeout=90000)
-    o.wait_for_function(f"({via})(['{ids['Ana']}', null])", timeout=20000)
+    a.wait_for_function(f"() => ({via})(['{ids['Beto']}', null])", timeout=90000)
+    o.wait_for_function(f"() => ({via})(['{ids['Ana']}', null])", timeout=20000)
     helper = a.evaluate(f"__S.mesh.peers.get('{ids['Beto']}').via")
     hname = [n for n, i in ids.items() if i == helper][0]
     check(o.evaluate(f"__S.mesh.peers.get('{ids['Ana']}').via") == helper, f"no direct way: {hname} passes things on between Ana and Beto")
 
     live = "(id) => { const p = __S.mesh.peers.get(id); const ts = p ? p.stream.getTracks() : []; return ts.some(t => t.kind === 'audio' && t.readyState === 'live' && !t.muted) && ts.some(t => t.kind === 'video' && t.readyState === 'live' && !t.muted); }"
-    a.wait_for_function(f"({live})('{ids['Beto']}')", timeout=20000)
-    o.wait_for_function(f"({live})('{ids['Ana']}')", timeout=20000)
+    a.wait_for_function(f"() => ({live})('{ids['Beto']}')", timeout=20000)
+    o.wait_for_function(f"() => ({live})('{ids['Ana']}')", timeout=20000)
     check(True, "Ana gets Beto's sound and video, and Beto gets Ana's, through the helper")
     # the picture really moves: frames arrive on the forwarded video
     fr = "async (id) => { const t = __S.mesh.peers.get(id).stream.getVideoTracks()[0]; const v = document.createElement('video'); v.muted = true; v.srcObject = new MediaStream([t]); await v.play().catch(() => {}); await new Promise(r => setTimeout(r, 1500)); return v.videoWidth; }"
     check(a.evaluate(fr, ids["Beto"]) > 0, "Beto's forwarded picture has frames at Ana's")
 
     a.evaluate(f"__S.mesh.sendTo('{ids['Beto']}', {{ k: 'fwdtest', text: 'pineapple-42' }})")
-    o.wait_for_function(f"__got.some(g => g.from === '{ids['Ana']}' && g.msg.k === 'fwdtest' && g.msg.text === 'pineapple-42')", timeout=15000)
+    o.wait_for_function(f"() => __got.some(g => g.from === '{ids['Ana']}' && g.msg.k === 'fwdtest' && g.msg.text === 'pineapple-42')", timeout=15000)
     check(True, "a private message from Ana reaches Beto through the helper")
     o.evaluate(f"__S.mesh.sendTo('{ids['Ana']}', {{ k: 'fwdtest', text: 'mango-7' }})")
-    a.wait_for_function(f"__got.some(g => g.from === '{ids['Beto']}' && g.msg.text === 'mango-7')", timeout=15000)
+    a.wait_for_function(f"() => __got.some(g => g.from === '{ids['Beto']}' && g.msg.text === 'mango-7')", timeout=15000)
     check(True, "and Beto's answer reaches Ana")
     hp = c if hname == "Carla" else d
     seen = hp.evaluate("JSON.stringify(__got) + __dcOut.join('')")
@@ -139,12 +139,12 @@ with sync_playwright() as p:
     # the helper leaves: the other one takes over
     hp.click("#bLeave"); hp.query_selector("#justLeave") and hp.click("#justLeave")  # a host is asked: just leave
     other = "Dan" if hname == "Carla" else "Carla"
-    a.wait_for_function(f"({via})(['{ids['Beto']}', '{ids[other]}'])", timeout=90000)
-    o.wait_for_function(f"({via})(['{ids['Ana']}', '{ids[other]}'])", timeout=30000)
-    a.wait_for_function(f"({live})('{ids['Beto']}')", timeout=20000)
+    a.wait_for_function(f"() => ({via})(['{ids['Beto']}', '{ids[other]}'])", timeout=90000)
+    o.wait_for_function(f"() => ({via})(['{ids['Ana']}', '{ids[other]}'])", timeout=30000)
+    a.wait_for_function(f"() => ({live})('{ids['Beto']}')", timeout=20000)
     check(True, f"{hname} leaves: {other} takes over, Ana and Beto still see and hear each other")
     a.evaluate(f"__S.mesh.sendTo('{ids['Beto']}', {{ k: 'fwdtest', text: 'kiwi-3' }})")
-    o.wait_for_function("__got.some(g => g.msg.text === 'kiwi-3')", timeout=15000)
+    o.wait_for_function("() => __got.some(g => g.msg.text === 'kiwi-3')", timeout=15000)
     check(True, "messages go through the new helper")
     check(not [e for e in errors if e.startswith("pageerror")], "no page errors")
     b.close()

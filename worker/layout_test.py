@@ -6,7 +6,7 @@ import os, sys, tempfile
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 OUT = os.environ.get("LAYOUT_OUT") or tempfile.mkdtemp()
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
@@ -66,7 +66,7 @@ with sync_playwright() as p:
     join = f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}"
     o = person("Beto", join)
     c = person("Caro", join, **PHONE)
-    a.wait_for_function("document.querySelectorAll('#grid .tile video').length === 3 && [...__S.mesh.peers.values()].every(p => p.state === 'connected')", timeout=30000)
+    a.wait_for_function("() => document.querySelectorAll('#grid .tile video').length === 3 && [...__S.mesh.peers.values()].every(p => p.state === 'connected')", timeout=30000)
     # quiet everyone (the fake microphones beep), so who talks is clear
     for pg in (a, o, c):
         pg.evaluate("document.getElementById('bMic').click()")
@@ -82,7 +82,7 @@ with sync_playwright() as p:
     check(len(shown) == 1 and t1[shown[0]][1] and shown[0] != "Ana", f"spotlight: only one person, not me ({shown})")
     c.evaluate(TONE)
     c.evaluate("document.getElementById('bMic').click()")
-    a.wait_for_function("document.querySelector('#grid .tile.main .nm').textContent.startsWith('Caro')", timeout=10000)
+    a.wait_for_function("() => document.querySelector('#grid .tile.main .nm').textContent.startsWith('Caro')", timeout=10000)
     check(True, "Caro talks: she takes the spotlight")
     a.screenshot(path=f"{OUT}/spotlight.png")
 
@@ -104,7 +104,7 @@ with sync_playwright() as p:
     a.wait_for_timeout(400)
     check(a.evaluate("document.querySelector('#grid .tile.main .nm').textContent.startsWith('Beto')"), "pinning Beto puts him big, even while Caro talks")
     a.keyboard.press("Escape")
-    a.wait_for_function("document.querySelector('#grid .tile.main .nm').textContent.startsWith('Caro')", timeout=5000)
+    a.wait_for_function("() => document.querySelector('#grid .tile.main .nm').textContent.startsWith('Caro')", timeout=5000)
     check(True, "Esc unpins: back to who's talking")
 
     # own picture: small in a corner, then hidden
@@ -119,7 +119,7 @@ with sync_playwright() as p:
 
     # hide people with the camera off
     o.evaluate("document.getElementById('bCam').click()")
-    a.wait_for_function("document.querySelector('#grid .tile:not([data-id=\"me\"]) .nm') && [...document.querySelectorAll('#grid .tile.camoff')].length === 1", timeout=8000)
+    a.wait_for_function("() => document.querySelector('#grid .tile:not([data-id=\"me\"]) .nm') && [...document.querySelectorAll('#grid .tile.camoff')].length === 1", timeout=8000)
     a.check('.layoutSheet input[name="hideNoVideo"]')
     a.wait_for_timeout(250)
     check(not tiles(a)["Beto"][0] and tiles(a)["Caro"][0], "Beto's camera is off: he's hidden, Caro still shows")
@@ -138,13 +138,13 @@ with sync_playwright() as p:
     close_sheet(a)
 
     # auto: a shared screen leads, with the people beside (Caro's picture stands in for a screen)
-    a.wait_for_function("document.querySelectorAll('#grid .tile video').length === 3", timeout=30000)
-    c.wait_for_function("__S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')", timeout=30000)
+    a.wait_for_function("() => document.querySelectorAll('#grid .tile video').length === 3", timeout=30000)
+    c.wait_for_function("() => __S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')", timeout=30000)
     c.evaluate("__S.mesh.broadcast({ k: 'state', mic: true, cam: true, screen: true })")
-    a.wait_for_function("document.getElementById('grid').dataset.mode === 'sidebar'", timeout=8000)
+    a.wait_for_function("() => document.getElementById('grid').dataset.mode === 'sidebar'", timeout=8000)
     check(a.evaluate("document.querySelector('#grid .tile.main .nm').textContent.startsWith('Caro')"), "auto: someone shares their screen, it goes big with the people beside")
     c.evaluate("__S.mesh.broadcast({ k: 'state', mic: true, cam: true, screen: false })")
-    a.wait_for_function("document.getElementById('grid').dataset.mode === 'tiled'", timeout=8000)
+    a.wait_for_function("() => document.getElementById('grid').dataset.mode === 'tiled'", timeout=8000)
     check(True, "they stop sharing: back to everyone the same size")
 
     # Caro's phone: sidebar is a row at the bottom

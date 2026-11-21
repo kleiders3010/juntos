@@ -1,13 +1,13 @@
 # A shared screen in its own window, like Meet's "Open in new window" (Workspace update 2026-02): Beto opens Ana's
 # shared screen in a window of its own, which shows her moving screen while his call shows the people; closing it
 # (or "Back to the call") brings it back, and it closes by itself when she stops sharing.
-#   python worker/popout_test.py [base-url]   (local: npx wrangler dev --port 8797)
+#   python worker/popout_test.py [base-url]   (local: npx wrangler dev --port 8798)
 import os
 import sys
 
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 PICKER = """
@@ -58,7 +58,7 @@ with sync_playwright() as p:
     with o.context.expect_page() as info:
         o.click(".tile.screen .popBtn")
     w = info.value
-    w.wait_for_function("document.querySelector('video')?.videoWidth > 0", timeout=10000)
+    w.wait_for_function("() => document.querySelector('video')?.videoWidth > 0", timeout=10000)
     seen = w.evaluate(FRAMES)
     check(seen >= 8, f"the new window shows her moving screen ({seen} frames in 2 s)")
     check(w.evaluate("document.querySelector('video').muted"), "without a second copy of the sound")
@@ -68,7 +68,7 @@ with sync_playwright() as p:
     o.screenshot(path=SHOT)
 
     w.close()
-    o.wait_for_function("!document.querySelector('.tile.popped')", timeout=5000)
+    o.wait_for_function("() => !document.querySelector('.tile.popped')", timeout=5000)
     check(o.evaluate("document.getElementById('grid').dataset.mode") == "sidebar", "closing the window brings it back into the call")  # pinned: auto layout puts a shared screen big (sidebar)
 
     with o.context.expect_page() as info:
@@ -76,7 +76,7 @@ with sync_playwright() as p:
     w = info.value
     w.wait_for_selector("[name=dock]")
     w.click("[name=dock]")
-    o.wait_for_function("!document.querySelector('.tile.popped')", timeout=5000)
+    o.wait_for_function("() => !document.querySelector('.tile.popped')", timeout=5000)
     check(w.is_closed(), "Back to the call closes it and brings it back")
 
     with o.context.expect_page() as info:
@@ -84,7 +84,7 @@ with sync_playwright() as p:
     w = info.value
     w.wait_for_selector("video")
     a.click("#bScreen")  # she stops sharing
-    o.wait_for_function("!document.querySelector('.tile.popped')", timeout=10000)
+    o.wait_for_function("() => !document.querySelector('.tile.popped')", timeout=10000)
     w.wait_for_event("close", timeout=5000) if not w.is_closed() else None
     check(w.is_closed(), "it closes by itself when she stops sharing")
     check(not [e for e in errors if e.startswith("pageerror")], "no page errors")

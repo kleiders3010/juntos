@@ -6,7 +6,7 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
 PICKER = """
@@ -63,15 +63,15 @@ with sync_playwright() as p:
     o.click("#enter")
     o.wait_for_selector("#call:not([hidden])")
     for pg in (a, o):
-        pg.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+        pg.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
 
     # Ana mutes, then shares a tab that plays sound
     a.click("#bMic")
-    a.wait_for_function("!__S.mic", timeout=3000)
+    a.wait_for_function("() => !__S.mic", timeout=3000)
     a.wait_for_timeout(1500)
     quiet = grows(o)
     a.click("#bScreen")
-    a.wait_for_function("!!__S.screen", timeout=8000)
+    a.wait_for_function("() => !!__S.screen", timeout=8000)
     check(a.evaluate("!!(__asked && __asked.audio)"), "the share asks the browser for the tab's or screen's sound")
     check(a.evaluate("!!(__asked && __asked.audio && __asked.audio.restrictOwnAudio)"), "and asks it to leave the call's own sound out")
     a.wait_for_timeout(1500)
@@ -81,7 +81,7 @@ with sync_playwright() as p:
 
     # stopping the share stops its sound
     a.click("#bScreen")
-    a.wait_for_function("!__S.screen", timeout=8000)
+    a.wait_for_function("() => !__S.screen", timeout=8000)
     check(a.evaluate("__tabSound.readyState") == "ended", "stopping the share stops its sound")  # pinned: MediaStreamTrack state name
     a.wait_for_timeout(1500)
     after = grows(o)

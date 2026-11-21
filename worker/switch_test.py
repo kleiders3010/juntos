@@ -4,12 +4,12 @@
 # device "too". Checked: the link carries a one-time code and her name, kept off the address bar; the lobby offers
 # "Switch here" and "Join here too" with her name filled in; after switching the old device leaves and says why,
 # the new one is a host and Beto sees one Ana; "Join here too" leaves nobody; a normal link shows "Join now" alone.
-#   python worker/switch_test.py [base-url]   (local: npx wrangler dev --port 8797)
+#   python worker/switch_test.py [base-url]   (local: npx wrangler dev --port 8798)
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 OPEN_SWITCH = "(() => { if (!(document.getElementById('bSwitch') || __S.barBtns.bSwitch)) document.getElementById('bMore')?.click(); (document.getElementById('bSwitch') || __S.barBtns.bSwitch).click() })()"
@@ -49,7 +49,7 @@ with sync_playwright() as p:
     a.fill("#name", "Ana")
     a.click("#enter")
     a.wait_for_selector("#call:not([hidden])")
-    a.wait_for_function("__S.isHost", timeout=15000)
+    a.wait_for_function("() => __S.isHost", timeout=15000)
     join = f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}"
     o = page("Beto")
     o.goto(join)
@@ -57,7 +57,7 @@ with sync_playwright() as p:
     o.fill("#name", "Beto")
     o.click("#enter")
     o.wait_for_selector("#call:not([hidden])")
-    a.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
+    a.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.dc && p.dc.readyState === 'open')", timeout=30000)
 
     link = switch_link(a)
     check("#" in link and "sw=" in link.split("#")[1] and "n=Ana" in link.split("#")[1], "Ana's switch link carries a one-time code and her name after '#'")
@@ -72,9 +72,9 @@ with sync_playwright() as p:
     a2.wait_for_selector("#call:not([hidden])")
     a.wait_for_selector("#ended:not([hidden])", timeout=30000)
     check("other device" in a.inner_text("#endedMsg"), "the old device leaves and says she switched")
-    a2.wait_for_function("__S.isHost", timeout=15000)
+    a2.wait_for_function("() => __S.isHost", timeout=15000)
     check(True, "the new device is a host")
-    o.wait_for_function("__S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.name === 'Ana')", timeout=30000)
+    o.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()].every(p => p.name === 'Ana')", timeout=30000)
     check(True, "Beto sees one Ana")
 
     # a third device joins "too": nobody leaves
@@ -85,7 +85,7 @@ with sync_playwright() as p:
     a3.wait_for_selector("#joinToo")
     a3.click("#joinToo")
     a3.wait_for_selector("#call:not([hidden])")
-    o.wait_for_function("__S.mesh.peers.size === 2", timeout=30000)
+    o.wait_for_function("() => __S.mesh.peers.size === 2", timeout=30000)
     a2.wait_for_timeout(2500)
     check(a2.is_visible("#call") and not a2.is_visible("#ended"), "Join here too: her phone stays in the call")
 

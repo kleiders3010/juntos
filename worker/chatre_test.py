@@ -3,7 +3,7 @@
 # show under the message with a count, yours highlighted, tap to take yours back, pointing says who; the author hears
 # of a reaction while chat is closed; a quote keeps the original words; a late joiner gets it all, names right, no
 # doubles; Escape drops a reply; a reaction from someone the host stopped from chatting is ignored.
-#   python worker/chatre_test.py   (wrangler dev on 8797; a local Nostr relay, so no room server is used)
+#   python worker/chatre_test.py   (wrangler dev on 8798; a local Nostr relay, so no room server is used)
 import asyncio
 import json
 import sys
@@ -12,7 +12,7 @@ import threading
 import websockets
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 RELAY_PORT = 8817
 Q = f"signal={WS}&relays=ws://127.0.0.1:{RELAY_PORT}"
@@ -85,14 +85,14 @@ with sync_playwright() as p:
         pg.fill("#name", name)
         pg.click("#enter")
         pg.wait_for_selector("#call:not([hidden])")
-        pg.wait_for_function("__S.joined", timeout=20000)
+        pg.wait_for_function("() => __S.joined", timeout=20000)
         return pg
 
     def chat(pg, on=True):
         shown = pg.evaluate("!!document.getElementById('chatLog')?.offsetParent")
         if shown != on:
             pg.evaluate("document.getElementById('bChat').click()")
-        pg.wait_for_function("!!document.getElementById('chatLog')?.offsetParent === " + ("true" if on else "false"), timeout=5000)
+        pg.wait_for_function("() => !!document.getElementById('chatLog')?.offsetParent === " + ("true" if on else "false"), timeout=5000)
 
     def msgs(pg):
         return pg.evaluate(MSGS)
@@ -105,14 +105,14 @@ with sync_playwright() as p:
     o = person("Beto", link, 1)
     c = person("Carla", link, 2)
     for pg in (a, o, c):
-        pg.wait_for_function("__S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')", timeout=30000)
+        pg.wait_for_function("() => __S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every(p => p.dc.readyState === 'open')", timeout=30000)
 
     chat(a)
     a.fill("#chatText", "Hello everyone")
     a.press("#chatText", "Enter")
     for pg in (o, c):
         chat(pg)
-        pg.wait_for_function(f"!!({msg(pg, 'Hello everyone')})", timeout=8000)
+        pg.wait_for_function(f"() => !!({msg(pg, 'Hello everyone')})", timeout=8000)
     chat(a, False)
 
     # Beto points at the message: quick reactions and Quote in reply show
@@ -125,7 +125,7 @@ with sync_playwright() as p:
     check(len(quick) == 6, f"quick reactions: {quick}")  # pinned: six quick ones, like the call's reaction bar
     o.click("#chatLog .msg .reQuick >> nth=0")
     first = quick[0]
-    a.wait_for_function(f"{msg(a, 'Hello everyone')}?.querySelector('.reChip')?.textContent === '{first} 1'", timeout=8000)
+    a.wait_for_function(f"() => {msg(a, 'Hello everyone')}?.querySelector('.reChip')?.textContent === '{first} 1'", timeout=8000)
     m = msgs(a)[0]["re"][0]
     check(m["title"] == "Beto" and not m["on"], f"Ana sees Beto's reaction with his name on it: {m}")  # pinned: test data, who reacted
     check(f"Beto reacted {first} to your message" in a.evaluate("document.getElementById('toasts').textContent"), "Ana, chat closed, is told of the reaction")
@@ -134,21 +134,21 @@ with sync_playwright() as p:
     # Carla adds the same one, then takes it back
     c.click(f"#chatLog .msg .reChip >> nth=0")
     for pg in (a, o):
-        pg.wait_for_function(f"{msg(pg, 'Hello everyone')}?.querySelector('.reChip')?.textContent === '{first} 2'", timeout=8000)
+        pg.wait_for_function(f"() => {msg(pg, 'Hello everyone')}?.querySelector('.reChip')?.textContent === '{first} 2'", timeout=8000)
     check(True, "Carla taps the reaction: 2 for everyone")
     t = msgs(a)[0]["re"][0]["title"]
     check("Beto" in t and "Carla" in t, f"pointing says who: {t}")
     c.click(f"#chatLog .msg .reChip >> nth=0")
-    a.wait_for_function(f"{msg(a, 'Hello everyone')}?.querySelector('.reChip')?.textContent === '{first} 1'", timeout=8000)
+    a.wait_for_function(f"() => {msg(a, 'Hello everyone')}?.querySelector('.reChip')?.textContent === '{first} 1'", timeout=8000)
     check(not msgs(c)[0]["re"][0]["on"], "Carla taps it again: hers is taken back")
 
     # more emoji
     c.locator("#chatLog .msg").first.hover()
     c.click("#chatLog .msg [name=reMore]")
     c.click("#chatLog .msg .reGrid button:has-text('🔥')")
-    o.wait_for_function(f"[...{msg(o, 'Hello everyone')}.querySelectorAll('.reChip')].some(c => c.textContent === '🔥 1')", timeout=8000)
+    o.wait_for_function(f"() => [...{msg(o, 'Hello everyone')}.querySelectorAll('.reChip')].some(c => c.textContent === '🔥 1')", timeout=8000)
     check(True, "an emoji from More reaches everyone")
-    check(c.evaluate("JSON.parse(localStorage.chatEmoji)['🔥']") == 1, "what you use is counted for your quick reactions")
+    check(c.evaluate("JSON.parse(localStorage['juntos.chatEmoji'])['🔥']") == 1, "what you use is counted for your quick reactions")
 
     # Beto quotes Ana's message in his reply
     o.locator("#chatLog .msg").first.hover()
@@ -160,7 +160,7 @@ with sync_playwright() as p:
     o.click("#chatLog .msg [name=quote]")
     o.fill("#chatText", "Hi Ana!")
     o.press("#chatText", "Enter")
-    a.wait_for_function(f"!!({msg(a, 'Hi Ana!')})", timeout=8000)
+    a.wait_for_function(f"() => !!({msg(a, 'Hi Ana!')})", timeout=8000)
     chat(a)
     m = [x for x in msgs(a) if x["text"] == "Hi Ana!"][0]
     check(m["quote"] == "AnaHello everyone" and m["who"] == "Beto", f"everyone sees the quote with the original words: {m}")  # pinned: test data, a quote keeps the words
@@ -169,7 +169,7 @@ with sync_playwright() as p:
     # a late joiner gets everything: names right, reactions, quotes, no doubles
     d = person("Dani", link, 3)
     chat(d)
-    d.wait_for_function("document.querySelectorAll('#chatLog .msg').length >= 2", timeout=15000)
+    d.wait_for_function("() => document.querySelectorAll('#chatLog .msg').length >= 2", timeout=15000)
     d.wait_for_timeout(1500)
     ms = msgs(d)
     check(len(ms) == 2, f"no message twice ({len(ms)}: {[x['text'] for x in ms]})")
@@ -178,7 +178,7 @@ with sync_playwright() as p:
     check(res == sorted([f"{first} 1", "🔥 1"]), f"the newcomer sees the reactions: {res}")
     check(ms[1]["quote"] == "AnaHello everyone", "and the quote")  # pinned: test data
     d.click(f"#chatLog .msg .reChip >> nth=0")
-    a.wait_for_function(f"[...{msg(a, 'Hello everyone')}.querySelectorAll('.reChip')].some(c => c.textContent === '{first} 2')", timeout=8000)
+    a.wait_for_function(f"() => [...{msg(a, 'Hello everyone')}.querySelectorAll('.reChip')].some(c => c.textContent === '{first} 2')", timeout=8000)
     check(True, "the newcomer's reaction reaches everyone")
 
     # someone the host stopped from chatting can't react either
@@ -186,7 +186,7 @@ with sync_playwright() as p:
     o.evaluate("window.__fake = 1")
     did = a.evaluate("""() => { const b = [...document.querySelectorAll('#peopleList button, #peopleList input')].find(x => /chat/i.test(x.textContent + (x.title||'') + (x.name||'') + (x.closest('label')?.textContent||''))); if (!b) return false; b.click(); return true; }""")
     if did:
-        o.wait_for_function("document.getElementById('chatText').disabled", timeout=8000)
+        o.wait_for_function("() => document.getElementById('chatText').disabled", timeout=8000)
         o.evaluate(f"__S.mesh.roomcast({{ k: 'chatre', id: __S.chat[0].id, e: '🚀', on: true }})")
         a.wait_for_timeout(1500)
         check(not any(r["t"].startswith("🚀") for r in msgs(a)[0]["re"]), "a reaction sent while chat is off for you is ignored")

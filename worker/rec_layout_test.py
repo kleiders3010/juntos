@@ -1,12 +1,12 @@
 # Recording layout with two people, one holding a phone upright (a portrait camera): the file must be landscape,
 # the portrait person must be shown whole (not cut), and whoever talks takes the big spot.
 # Saves frames as PNG next to the file for a look. Run: python rec_layout_test.py [base-url]
-# (start the local server first: npx wrangler dev --port 8797). Needs ffmpeg/ffprobe on PATH.
+# (start the local server first: npx wrangler dev --port 8798). Needs ffmpeg/ffprobe on PATH.
 import sys, os, json, subprocess, tempfile
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
-BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8797"
+BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 OUT = os.environ.get("REC_OUT") or tempfile.mkdtemp()
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
@@ -43,10 +43,10 @@ with sync_playwright() as p:
     o.goto(f"{a.url}{'&' if '?' in a.url else '?'}signal={WS}")
     o.fill("#name", "Beto")
     o.click("#enter")
-    a.wait_for_function(f"document.querySelector('{OTHER} .status')?.hidden", timeout=20000)
+    a.wait_for_function(f"() => document.querySelector('{OTHER} .status')?.hidden", timeout=20000)
     o.evaluate(PORTRAIT)
     o.evaluate("document.getElementById('bMic').click()")  # Beto mutes: only Ana talks
-    a.wait_for_function(f"document.querySelector('{OTHER} video').videoHeight > document.querySelector('{OTHER} video').videoWidth", timeout=10000)
+    a.wait_for_function(f"() => document.querySelector('{OTHER} video').videoHeight > document.querySelector('{OTHER} video').videoWidth", timeout=10000)
     a.evaluate("(document.getElementById('bRec') || __S.barBtns.bRec).click()")
     a.click('#recGo')  # the sheet that says what is recorded
     a.wait_for_timeout(3000)
@@ -55,7 +55,7 @@ with sync_playwright() as p:
     # Ana talks: her microphone becomes a steady tone (the fake one only beeps once a second); Beto is muted
     a.evaluate("""() => { const ac = new AudioContext(), o = ac.createOscillator(), d = ac.createMediaStreamDestination(), g = ac.createGain();
       g.gain.value = 0.3; o.connect(g); g.connect(d); o.start(); __S.micTrack = d.stream.getAudioTracks()[0]; return __S.mesh.setTracks(__S.micTrack, __S.mesh.videoTrack) }""")
-    a.wait_for_function("__S.recorder.main === 'me'", timeout=8000)
+    a.wait_for_function("() => __S.recorder.main === 'me'", timeout=8000)
     check(True, "Ana talks: she takes the big spot")
     a.wait_for_timeout(500)
     # what happens in the call shows in the picture: Beto reacts, raises his hand, writes in the chat

@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 16
 CAMS = int(sys.argv[2]) if len(sys.argv) > 2 else N
-BASE = sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1:8797"
+BASE = sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 PER_BROWSER = 4  # people per browser process, spreads the work over processes like separate devices
 ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
