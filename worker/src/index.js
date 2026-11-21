@@ -23,6 +23,29 @@ export function keyMakesCode(key, code) {
   }
 }
 
+// limits (APP-RULES safety 5), far above a real call: setting up links to 15 others is a few hundred messages
+const BUDGET_MS = 10000;
+const BUDGET = { in: 1500, none: 10 }; // messages per socket per 10 s (in: has said hello), then it is closed
+const MAX_SOCKETS = 250; // per room (MAX_PEOPLE in the call + people waiting to be let in)
+const HELLO_MS = 10000; // a socket that has not said hello by then is closed
+
+// a socket that never says who it is does not stay open
+export function idleClose(ws) {
+  setTimeout(() => {
+    if (!(ws.deserializeAttachment() || {}).id) try { ws.close(1008, "no hello"); } catch (_) {}
+  }, HELLO_MS);
+}
+// each socket's message budget; over it, the socket is closed
+export function overBudget(room, ws) {
+  const b = (room.budget ||= new Map());
+  const now = Date.now();
+  let x = b.get(ws);
+  if (!x || now - x.t > BUDGET_MS) b.set(ws, (x = { t: now, n: 0 }));
+  if (++x.n <= ((ws.deserializeAttachment() || {}).id ? BUDGET.in : BUDGET.none)) return false;
+  try { ws.close(1008, "too many messages"); } catch (_) {}
+  return true;
+}
+
 const MESH_MAX = 16;
 const MAX_PEOPLE = 200;
 const MAX_KIDS = 6; // the most children a device may say it can feed
@@ -241,9 +264,11 @@ export class Room {
       const server = pass || !!(await this.state.storage.get("locked")) || this.peers(true).length > 0;
       return Response.json({ pass, server }, { headers: { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" } });
     }
+    if (this.state.getWebSockets().length >= MAX_SOCKETS) return new Response("full", { status: 429 });
     const pair = new WebSocketPair();
     // the room's name (for the passcode hash) and a daily hash of the network (for the wrong-passcode limit)
     this.state.acceptWebSocket(pair[1], [req.headers.get("x-room") || "", req.headers.get("x-ip-key") || "ip:none"]);
+    idleClose(pair[1]);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -255,6 +280,7 @@ export class Room {
 
   async webSocketMessage(ws, raw) {
     if (typeof raw !== "string" || raw.length > MAX_MSG) return;
+    if (overBudget(this, ws)) return;
     let msg;
     try {
       msg = JSON.parse(raw);
@@ -469,6 +495,7 @@ export class Room {
   }
 
   async webSocketClose(ws) {
+    this.budget?.delete(ws);
     this.left(ws);
   }
 

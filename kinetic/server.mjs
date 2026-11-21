@@ -21,7 +21,7 @@ if (!globalThis.crypto) globalThis.crypto = webcrypto;
 if (typeof Response.json !== "function")
   Response.json = (d, init = {}) => new Response(JSON.stringify(d), { ...init, headers: { ...(init.headers || {}), "content-type": "application/json" } });
 
-const { Room } = await import(process.env.JUNTOS_ROOM || "./room.mjs");
+const { Room, idleClose } = await import(process.env.JUNTOS_ROOM || "./room.mjs");
 
 const PORT = Number(process.env.PORT) || 8799;
 const BIND = process.env.BIND || "0.0.0.0";
@@ -191,6 +191,7 @@ server.on("upgrade", async (req, socket, head) => {
     ws.serializeAttachment = (v) => (att = clone(v));
     ws.deserializeAttachment = () => clone(att);
     r.state.acceptWebSocket(ws, [m[2], ip]);
+    idleClose(ws);
     // one room's messages are handled one at a time, in order (a Durable Object does the same)
     const run = (f) => (r.chain = (r.chain || Promise.resolve()).then(f).catch((e) => console.error("juntos room error:", e && e.message)));
     ws.on("message", (data, binary) => {
