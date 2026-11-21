@@ -8,6 +8,8 @@
 // (_can) is asked to help (_fwd). The helper sends each one the other's sound and video on new transceivers, under
 // a stream id it announces first (_fwdon), and passes sealed messages (_fw). When the helper or one of them goes,
 // the helper says so (_fwdoff) and the two try a direct connection again.
+import { cleanName } from "./names.js";
+
 const b64u = (u) => btoa(String.fromCharCode(...u)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
 const enc = new TextEncoder();
@@ -66,7 +68,7 @@ export class Fwd {
         via: from,
         pc: null,
         dc: { readyState: "open", send: (s) => this.seal(from, of, s) },
-        name: (old && old.name) || name || "",
+        name: (old && old.name) || cleanName(name, 60),
         stream: old ? old.stream : new MediaStream(),
         audio: null,
         video: null,

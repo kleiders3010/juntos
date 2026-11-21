@@ -9,6 +9,12 @@
 // one parent and a few children, and sound, pictures and messages are passed along it, device to device.
 import { schnorr } from "../../web/vendor/noble-secp256k1/index.js";
 
+// A name as others see it, cleaned here too (safety round 2, J16): the same rule as web/names.js, copied so the
+// game host's copy (kinetic/pack.mjs) needs no other file; safety2_test.py checks the two stay the same.
+const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u115f\u1160\u180e\u200b\u200c\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\u3164\ufeff\uffa0\ufff9-\ufffb]/g;
+const LONE_JOINER = /(?<![\p{Extended_Pictographic}\p{Emoji_Modifier}\ufe0f])\u200d|\u200d(?!\p{Extended_Pictographic})/gu;
+const cleanName = (v, n) => String(v ?? "").replace(/\s+/g, " ").replace(INVISIBLE, "").replace(LONE_JOINER, "").replace(/ {2,}/g, " ").trim().slice(0, n);
+
 // The call's code is made from the host's public key (web/hostauth.js codeOf): whoever holds a key that makes
 // this code started the call (APP-RULES safety 2). Old calls (a random code) can't prove it and keep the old rule.
 const CABC = "abcdefghijkmnpqrstuvwxyz";
@@ -304,7 +310,7 @@ export class Room {
     if (msg.t === "hello") {
       if (me.id) return;
       const id = String(msg.id || "").slice(0, 40);
-      const name = String(msg.name || "").slice(0, 60);
+      const name = cleanName(msg.name, 60);
       // how many children this device says it can feed in a big call, and its public key (relayed messages are signed)
       const cap = Math.max(1, Math.min(MAX_KIDS, Math.floor(Number(msg.cap)) || 2));
       const pub = typeof msg.pub === "string" && /^[A-Za-z0-9_-]{40,120}(\.[A-Za-z0-9_-]{40,120})?$/.test(msg.pub) ? msg.pub : "";
@@ -407,7 +413,7 @@ export class Room {
     if (me.wait) return;
     if ((me.host || me.co) && HOST_CMDS.has(msg.t)) return this.hostCmd(me, msg, ws);
     if (msg.t === "name") {
-      const name = String(msg.name || "").slice(0, 60);
+      const name = cleanName(msg.name, 60);
       ws.serializeAttachment({ ...me, name });
       for (const p of this.peers()) if (p.ws !== ws) this.send(p.ws, { t: "name", id: me.id, name });
     }

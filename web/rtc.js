@@ -179,7 +179,7 @@ export class Mesh extends EventTarget {
   async onRelay(m) {
     if (this.closed || !m || typeof m.from !== "string" || m.from === this.id || (m.to && m.to !== this.id)) return;
     if (!/^[A-Za-z0-9_-]{6,40}$/.test(m.from)) return;
-    const name = typeof m.name === "string" ? m.name.slice(0, 60) : "";
+    const name = typeof m.name === "string" ? cleanName(m.name, 60) : "";
     if (m.t === "hello") {
       this.helloSeen.add(m.from);
       await this.hproofP;
@@ -357,6 +357,10 @@ export class Mesh extends EventTarget {
   }
 
   onSignal(m) {
+    // every name the server passes on is cleaned once, here (safety round 2, J16), whatever the server did
+    if (!m || typeof m !== "object") return;
+    for (const k of ["name", "by"]) if (k in m) m[k] = cleanName(m[k], 60);
+    if (Array.isArray(m.peers)) for (const p of m.peers) if (p && typeof p === "object") p.name = cleanName(p.name, 60);
     if (m.t === "peers") {
       this.admitted = true;
       for (const c of (this.hostQueue || []).splice(0)) this.sendSignal(c);
