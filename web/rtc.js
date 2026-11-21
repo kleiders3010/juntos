@@ -146,7 +146,7 @@ export class Mesh extends EventTarget {
 
   // listen on the relays (also in a call that uses the server: newcomers there are told to use it)
   listen() {
-    if (!this.ns) this.ns = new NostrSignal({ room: this.room, relays: this.relays && this.relays.length ? this.relays : null, onMsg: (m) => this.onRelay(m) });
+    if (!this.ns) this.ns = new NostrSignal({ room: this.room, relays: this.relays && this.relays.length ? this.relays : null, onMsg: (m, pub) => this.onRelay(m, pub), signer: this.signer });
     return this.ns.ready;
   }
 
@@ -178,9 +178,12 @@ export class Mesh extends EventTarget {
     if (!this.closed && !this.srv) this.ns.send({ t: "hello", from: this.id, name: this.name, ck: this.signer.pub, ...(this.knock ? { knock: 1 } : {}), ...this.proof() });
   }
 
-  async onRelay(m) {
+  async onRelay(m, pub) {
     if (this.closed || !m || typeof m.from !== "string" || m.from === this.id || (m.to && m.to !== this.id)) return;
     if (!/^[A-Za-z0-9_-]{6,40}$/.test(m.from)) return;
+    // the sender is whoever signed the event (nsig.js checks the signature): an id is the start of its key, so
+    // nobody can speak as someone else (safety round 2, J1); the key they show co-hosts by is that same key
+    if (typeof pub !== "string" || m.from !== idOf(pub) || (m.ck !== undefined && m.ck !== pub)) return;
     const name = typeof m.name === "string" ? cleanName(m.name, 60) : "";
     if (m.t === "hello") {
       this.helloSeen.add(m.from);

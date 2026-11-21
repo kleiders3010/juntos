@@ -6,6 +6,8 @@
 #      only from people the server listed.
 # J2:  on the room server an id is no password: taking over a link, being a co-host or coming back into a locked
 #      call needs the visit's own key (its id is the start of that key); its own key still reconnects.
+# J1:  on the relays the sender is the key that signed the event (checked in the browser), and an id is the start
+#      of that key: nobody can speak as someone else.
 # Run against the TEST server: npx wrangler dev -c wrangler.test.toml --port 8798, then python safety2_test.py [base-url]
 
 import os
@@ -201,6 +203,49 @@ with sync_playwright() as p:
     code, got = raw.evaluate(TRY, [WS, room, bid, {}])
     check("waiting" in got and "peers" not in got, f"J2 Bea's old id without her key waits to be let in ({code}, {got})")  # pinned: safety round 2 J2
     hc.close()
+
+    # J1, the relay layer: a signed event reaches the call with its signer; changed in any way, it reaches nobody
+    pg = b.new_context().new_page()
+    pg.on("pageerror", lambda e: errors.append(f"pageerror (J1): {e}"))
+    pg.goto(BASE + "/privacy.html")
+    res = pg.evaluate("""async (base) => {
+      const { NostrSignal } = await import(base + "/nsig.js");
+      const got = [];
+      const mk = (onMsg) => new NostrSignal({ room: "jfo-tqbx-wmj", relays: ["wss://down.invalid"], onMsg });
+      const a = mk(() => {}), b = mk((m, pub) => got.push([m.t, pub]));
+      await Promise.all([a.ready, b.ready]);
+      let raw = null;
+      a.socks = new Map([["x", { readyState: 1, send: (s) => (raw = s) }]]);
+      await a.send({ t: "hello", from: "anyone" });
+      const ev = JSON.parse(raw)[1];
+      await b.onEvent(JSON.stringify(["EVENT", "s", ev]));
+      const other = mk(() => {});
+      for (const bad of [{ ...ev, id: ev.id.replace(/^./, (c) => (c === "0" ? "1" : "0")) }, { ...ev, pubkey: other.pub }, { ...ev, sig: ev.sig.replace(/^./, (c) => (c === "0" ? "1" : "0")) }, { ...ev, sig: undefined }])
+        await b.onEvent(JSON.stringify(["EVENT", "s", bad]));
+      a.closed = b.closed = other.closed = true;
+      return { got, pub: a.pub };
+    }""", BASE)
+    check(len(res["got"]) == 1 and res["got"][0][1] == res["pub"], f"J1 a relay event arrives once, with the key that signed it; changed copies never ({len(res['got'])} arrived)")  # pinned: safety round 2 J1
+
+    # J1, the call: a relay message whose id is not the start of the signing key is ignored
+    ctx = b.new_context(locale="en-US", permissions=["camera", "microphone"])
+    h = ctx.new_page()
+    h.on("pageerror", lambda e: errors.append(f"pageerror (J1 call): {e}"))
+    h.goto(f"{BASE}/?signal={WS}")
+    h.click("#start")
+    h.fill("#name", "Host")
+    h.click("#enter")
+    h.wait_for_function("() => window.__S && __S.joined", timeout=15000)
+    seen = h.evaluate("""async () => {
+      const m = __S.mesh;
+      m.ns ||= { send() {} }; // a page on the server only: answers to the relays go nowhere
+      const k1 = "aa".repeat(32), k2 = "bb".repeat(32);
+      await m.onRelay({ t: "hello", from: k1.slice(0, 16), name: "Eve as someone" }, k2);
+      await m.onRelay({ t: "hello", from: k2.slice(0, 16), name: "Bo" }, k2);
+      return [m.helloSeen.has(k1.slice(0, 16)), m.helloSeen.has(k2.slice(0, 16))];
+    }""")
+    check(seen == [False, True], f"J1 a relay message counts only as the one who signed it (claimed id taken: {seen[0]}, own id taken: {seen[1]})")  # pinned: safety round 2 J1
+    ctx.close()
     b.close()
 
 print("\n" + ("ALL OK" if not errors else f"{len(errors)} FAILED:\n" + "\n".join(errors)))

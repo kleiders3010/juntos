@@ -44,21 +44,24 @@ const hex = (u) => Array.from(u, (b) => b.toString(16).padStart(2, "0")).join(""
 const sha = async (s) => new Uint8Array(await crypto.subtle.digest("SHA-256", typeof s === "string" ? te.encode(s) : s));
 const b64 = (u) => btoa(String.fromCharCode(...u));
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+const unhexb = (s) => Uint8Array.from(s.match(/../g) || [], (h) => parseInt(h, 16));
 
 export const NOSTR_OK = typeof WebSocket === "function" && !!globalThis.crypto?.subtle;
 
 export class NostrSignal {
-  /** onMsg(obj) gets every readable message for this call (my own excluded by the caller). */
-  constructor({ room, relays, onMsg }) {
+  /** onMsg(obj, pub) gets every readable message for this call (my own excluded by the caller) and the key that
+   *  signed it, checked here (safety round 2, J1): the sender is that key, whatever the message says. */
+  constructor({ room, relays, onMsg, signer }) {
     this.room = room;
     this.list = relays && relays.length ? relays : RELAYS;
     this.onMsg = onMsg;
     this.socks = new Map(); // url -> WebSocket
     this.seen = new Set();
     this.closed = false;
-    const k = schnorr.keygen();
-    this.sk = k.secretKey;
-    this.pub = hex(k.publicKey);
+    // events are signed with the visit's own key (rtc.js: the id is the start of it), or a new one
+    const k = signer || (() => { const g = schnorr.keygen(); return { sk: g.secretKey, pub: hex(g.publicKey) }; })();
+    this.sk = k.sk;
+    this.pub = k.pub;
     this.ready = this.start();
   }
 
@@ -126,11 +129,19 @@ export class NostrSignal {
     this.seen.add(ev.id);
     if (this.seen.size > 5000) this.seen = new Set([...this.seen].slice(-2500));
     if (Math.abs(Date.now() / 1000 - ev.created_at) > MAX_AGE) return;
+    // the event's signature, checked: a relay or a listener can't make a message look like someone else's
+    if (typeof ev.pubkey !== "string" || !/^[0-9a-f]{64}$/.test(ev.pubkey) || typeof ev.sig !== "string" || !/^[0-9a-f]{128}$/.test(ev.sig)) return;
+    try {
+      const id = await sha(JSON.stringify([0, ev.pubkey, ev.created_at, ev.kind, ev.tags, ev.content]));
+      if (hex(id) !== ev.id || !(await schnorr.verifyAsync(unhexb(ev.sig), id, unhexb(ev.pubkey)))) return;
+    } catch (_) {
+      return;
+    }
     try {
       const all = unb64(ev.content);
       const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: all.subarray(0, 12) }, this.key, all.subarray(12));
       const obj = JSON.parse(td.decode(plain));
-      if (obj && typeof obj === "object" && Math.abs(Date.now() - (obj.at || 0)) < MAX_AGE * 1000) this.onMsg(obj);
+      if (obj && typeof obj === "object" && Math.abs(Date.now() - (obj.at || 0)) < MAX_AGE * 1000) this.onMsg(obj, ev.pubkey);
     } catch (_) {}
   }
 
