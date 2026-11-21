@@ -117,13 +117,23 @@ export default {
     const url = new URL(req.url);
     const m = url.pathname.match(/^\/(ws|info)\/([a-z0-9-]{4,64})$/);
     if (m) {
+      // new links and lobby questions: a few hundred a minute per address (wrangler.toml JOINS; safety round 2, J7), so
+      // nobody can wake rooms by the thousand; a school's whole class behind one address still gets in
+      const ipk = await ipKey(req);
+      if (env.JOINS) {
+        let ok = true;
+        try {
+          ok = (await env.JOINS.limit({ key: ipk })).success;
+        } catch (_) {}
+        if (!ok) return new Response("slow down", { status: 429 });
+      }
       const room = env.ROOMS.get(env.ROOMS.idFromName(m[2]));
       // the lobby asks whether a passcode is needed before joining (yes / no, nothing else)
       if (m[1] === "info") return room.fetch("https://room/info");
       if (req.headers.get("Upgrade") !== "websocket") return new Response("expected a websocket", { status: 426 });
       const h = new Headers(req.headers);
       h.set("x-room", m[2]);
-      h.set("x-ip-key", await ipKey(req));
+      h.set("x-ip-key", ipk);
       return room.fetch(new Request(req, { headers: h }));
     }
     if (url.pathname === "/health") return new Response("ok");
@@ -152,8 +162,18 @@ const TURN_PER_MONTH = 150;
 // One person can't use up everyone's budget: a few credentials per network per day.
 const TURN_PER_IP_DAY = 6;
 
+// One home line is one address: an IPv6 address counts by its /64 (a home gets billions of them), an IPv4 one as itself
+// (safety round 2, J7/J9). Only a hash of it is ever kept.
+function netOf(ip) {
+  ip = String(ip || "unknown").trim().replace(/^::ffff:(?=\d+\.)/i, "");
+  if (!ip.includes(":")) return ip;
+  const [a, b = ""] = ip.split("%")[0].split("::");
+  const head = a ? a.split(":") : [], tail = b ? b.split(":") : [];
+  const all = ip.includes("::") ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill("0"), ...tail] : head;
+  return all.slice(0, 4).map((x) => (parseInt(x, 16) || 0).toString(16)).join(":") + "::/64";
+}
 async function ipKey(req) {
-  const ip = req.headers.get("CF-Connecting-IP") || "unknown";
+  const ip = netOf(req.headers.get("CF-Connecting-IP") || "unknown");
   const day = new Date().toISOString().slice(0, 10);
   // Only a hash is kept (never the address), and only until the next day.
   const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(day + "|juntos|" + ip));
@@ -374,14 +394,13 @@ export class Room {
       const key = typeof msg.key === "string" ? msg.key.slice(0, 80) : "";
       if ((proven && (await hostOk(msg, room, id))) || keyMakesCode(key, room)) {
         host = true;
-        if (!(await st.get("hostProven"))) {
-          if (hostHash) {
-            for (const k of ["locked", "pass", "opened", "host"]) await st.delete(k);
-            this.locked = false;
-            // whoever claimed it before is in the call no longer as its host: they come back as a guest
-            for (const p of this.peers()) if (p.ws !== ws && p.a.host) p.ws.close(4001, "host changed");
-          }
+        if (hostHash && !(await st.get("hostProven"))) {
+          for (const k of ["locked", "pass", "opened", "host"]) await st.delete(k);
+          this.locked = false;
+          // whoever claimed it before is in the call no longer as its host: they come back as a guest
+          for (const p of this.peers()) if (p.ws !== ws && p.a.host) p.ws.close(4001, "host changed");
           await st.put("hostProven", true);
+          await this.touch();
         }
       } else if (key.length >= 16 && hostHash && !(await st.get("hostProven"))) host = (await sha(key)) === hostHash;
       // the host's own short link carrying the lock and the passcode (a planned call, the other server): applied,
@@ -398,8 +417,11 @@ export class Room {
       if (host && msg.claim && msg.opts && !(await st.get("opened"))) {
         if (msg.opts.lock) await st.put("locked", (this.locked = true));
         if (PASS_RE.test(msg.opts.pass || "")) await st.put("pass", await passHash(room, msg.opts.pass));
+        if (msg.opts.lock || msg.opts.pass) {
+          await st.put("opened", true);
+          await this.touch();
+        }
       }
-      if (host && !(await st.get("opened"))) await st.put("opened", true);
       // a passcode: everyone but the host types it (or has it in the link)
       const passH = await st.get("pass");
       if (passH && !host) {
@@ -430,11 +452,7 @@ export class Room {
             p.ws.close(4004, "replaced");
           } catch (_) {}
         }
-      // "last used" moves at most once a day (the room is forgotten a month after it)
-      if (Date.now() - ((await st.get("seen")) || 0) > 24 * 3600 * 1000) {
-        await st.put("seen", Date.now());
-        await st.setAlarm(Date.now() + ROOM_KEEP);
-      }
+      if (this.peers().some((p) => p.ws !== ws)) await this.touch();
       await this.loadPerms();
       const co = !host && proven && !!this.cos[id];
       const hosts = this.hosts();
@@ -465,7 +483,18 @@ export class Room {
     }
   }
 
+  // "last used" moves at most once a day, and only once a room holds something worth keeping: a second person or a
+  // host control (safety round 2, J7: a made-up room with one visitor writes nothing). Forgotten a month after it.
+  async touch() {
+    const st = this.state.storage;
+    if (Date.now() - ((await st.get("seen")) || 0) > 24 * 3600 * 1000) {
+      await st.put("seen", Date.now());
+      await st.setAlarm(Date.now() + ROOM_KEEP);
+    }
+  }
+
   async hostCmd(me, msg, ws) {
+    await this.touch();
     const all = this.peers(true);
     const target = all.find((p) => p.a.id === msg.id);
     if (msg.t === "lock") {

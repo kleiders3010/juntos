@@ -22,5 +22,11 @@ class_name = "Room"
 tag = "v1"
 new_sqlite_classes = ["Room"]
 
+# new links and lobby questions: 300 per address per minute in each Cloudflare location (index.js; safety round 2, J7)
+[[ratelimits]]
+name = "JOINS"
+namespace_id = "2102"
+simple = { limit = 300, period = 60 }
+
 [vars]
 TEST_LOCAL_CSP = "1"

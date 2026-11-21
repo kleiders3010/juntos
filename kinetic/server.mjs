@@ -169,8 +169,18 @@ async function sweep(force) {
 }
 setInterval(sweep, 60 * 1000).unref();
 
+// One home line is one address: an IPv6 address counts by its /64 (a home gets billions of them), an IPv4 one as itself
+// (safety round 2, J7/J9). Only a hash of it is ever kept.
+function netOf(ip) {
+  ip = String(ip || "unknown").trim().replace(/^::ffff:(?=\d+\.)/i, "");
+  if (!ip.includes(":")) return ip;
+  const [a, b = ""] = ip.split("%")[0].split("::");
+  const head = a ? a.split(":") : [], tail = b ? b.split(":") : [];
+  const all = ip.includes("::") ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill("0"), ...tail] : head;
+  return all.slice(0, 4).map((x) => (parseInt(x, 16) || 0).toString(16)).join(":") + "::/64";
+}
 async function ipKey(req) {
-  const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
+  const ip = netOf(String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0]);
   const day = new Date().toISOString().slice(0, 10);
   const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(day + "|juntos|" + ip));
   return "ip:" + day + ":" + [...new Uint8Array(h).slice(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -179,6 +189,12 @@ async function ipKey(req) {
 // ---- http and websockets ----
 
 const ROOM_PATH = /^\/(ws|info)\/([a-z0-9-]{4,64})$/;
+const JOIN_LIMIT = Number(process.env.JOIN_LIMIT) || 300; // links per address per minute (the Worker's JOINS)
+const NEW_PER_MINUTE = Number(process.env.NEW_PER_MINUTE) || 30; // rooms one address may open in a minute
+const MAX_FILES = 50000; // stored rooms; past this no new ones (rooms already kept still work)
+const joins = new Map();
+const starts = new Map();
+setInterval(() => (joins.clear(), starts.clear()), 60000).unref();
 let sockets = 0;
 const started = Date.now();
 
@@ -210,6 +226,16 @@ server.on("upgrade", async (req, socket, head) => {
   const m = (req.url || "").split("?")[0].match(ROOM_PATH);
   if (!m || m[1] !== "ws" || sockets >= MAX_SOCKETS) return socket.destroy();
   const ip = await ipKey(req);
+  // the same guards as Ronda's game host (safety round 2, J7): links per address per minute, new rooms per address per
+  // minute, and no new rooms once the data folder is full (it shares a disk with the other games)
+  const j = (joins.get(ip) || 0) + 1;
+  joins.set(ip, j);
+  if (j > JOIN_LIMIT) return socket.destroy();
+  if (!rooms.has(m[2])) {
+    const n = (starts.get(ip) || 0) + 1;
+    starts.set(ip, n);
+    if (n > NEW_PER_MINUTE || disk.size >= MAX_FILES) return socket.destroy();
+  }
   wss.handleUpgrade(req, socket, head, (ws) => {
     const r = roomOf(m[2]);
     sockets++;
