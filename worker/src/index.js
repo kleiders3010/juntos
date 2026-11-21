@@ -122,7 +122,7 @@ export default {
     if (m) {
       // new links and lobby questions: a few hundred a minute per address (wrangler.toml JOINS; safety round 2, J7), so
       // nobody can wake rooms by the thousand; a school's whole class behind one address still gets in
-      const ipk = await ipKey(req);
+      const ipk = await ipKey(req, env);
       if (env.JOINS) {
         let ok = true;
         try {
@@ -140,7 +140,17 @@ export default {
       return room.fetch(new Request(req, { headers: h }));
     }
     if (url.pathname === "/health") return new Response("ok");
-    if (url.pathname === "/turn") return turn(req, env);
+    if (url.pathname === "/turn") {
+      // the GitHub Pages copy asks from its own origin (safety round 2, J18: it never got the relay before)
+      const r = await turn(req, env);
+      if (req.headers.get("Origin") === "https://kleiders3010.github.io") {
+        const h = new Headers(r.headers);
+        h.set("Access-Control-Allow-Origin", "https://kleiders3010.github.io");
+        h.set("Vary", "Origin");
+        return new Response(r.body, { status: r.status, headers: h });
+      }
+      return r;
+    }
     // tests only (wrangler.test.toml: every request comes here first): the pages as shipped, plus this computer in
     // their CSP so test relays and test servers on other local ports can be reached. Never set when deployed.
     if (env.TEST_LOCAL_CSP === "1" && env.ASSETS) return testPage(req, env);
@@ -175,18 +185,22 @@ function netOf(ip) {
   const all = ip.includes("::") ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill("0"), ...tail] : head;
   return all.slice(0, 4).map((x) => (parseInt(x, 16) || 0).toString(16)).join(":") + "::/64";
 }
-async function ipKey(req) {
+async function ipKey(req, env) {
   const ip = netOf(req.headers.get("CF-Connecting-IP") || "unknown");
   const day = new Date().toISOString().slice(0, 10);
-  // Only a hash is kept (never the address), and only until the next day.
-  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(day + "|juntos|" + ip));
+  // Only a keyed hash is kept (never the address), and only until the next day. Keyed with the IP_SALT secret
+  // (wrangler secret put IP_SALT), so whoever reads the counters can't try every address (safety round 2, J18).
+  const text = new TextEncoder().encode(day + "|juntos|" + ip);
+  const h = env && env.IP_SALT
+    ? await crypto.subtle.sign("HMAC", await crypto.subtle.importKey("raw", new TextEncoder().encode(env.IP_SALT), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]), text)
+    : await crypto.subtle.digest("SHA-256", text);
   return "ip:" + day + ":" + [...new Uint8Array(h).slice(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function turn(req, env) {
   if (!env.TURN_KEY || !env.TURN_KEY_ID) return Response.json({ iceServers: [] });
   const budget = env.ROOMS.get(env.ROOMS.idFromName("~budget"));
-  const ok = await (await budget.fetch("https://budget/take", { headers: { "x-ip-key": await ipKey(req) } })).json();
+  const ok = await (await budget.fetch("https://budget/take", { headers: { "x-ip-key": await ipKey(req, env) } })).json();
   if (!ok.granted) return Response.json({ iceServers: [], reason: ok.reason }, { status: 429 });
   const r = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
     method: "POST",

@@ -44,6 +44,11 @@ const params = new URLSearchParams(location.search);
 const BASE = new URL("./", import.meta.url).pathname;
 // the copy on GitHub Pages (used when Cloudflare is down) has no room server of its own
 const MIRROR = location.hostname.endsWith(".github.io");
+// nobody puts the app inside their own page (the GitHub Pages copy can't send frame-ancestors; safety round 2, J18)
+if (window.top !== window.self) {
+  document.documentElement.textContent = "";
+  throw new Error("juntos: not in a frame");
+}
 const SIG_T = params.get("signal") ? testHost(params.get("signal")) : null;
 const SIGNAL = SIG_T || (location.protocol === "https:" && !MIRROR ? `wss://${location.host}` : "wss://meet.jurisgames.com");
 // the second room server (the game host, same room code): used when the first can't be reached; tests: ?signal2=
@@ -551,8 +556,15 @@ function switchSheet() {
 }
 
 // the other device says it is in with my code: hand over and leave
-function switched(from, tok) {
-  if (!S.mySwitch || tok !== S.mySwitch) return;
+// the one-time code of "Switch to another device", never sent itself: SHA-256(code | the new device's id)
+async function switchProof(code, id) {
+  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`juntos-switch|${code}|${id}`));
+  return Array.from(new Uint8Array(h), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function switched(from, tok) {
+  if (!S.mySwitch || typeof tok !== "string" || tok !== (await switchProof(S.mySwitch, from))) return;
+  if (!S.mySwitch) return;
   S.mySwitch = "";
   if (S.isHost && S.mesh) S.mesh.host({ t: "cohost", id: from, on: true });
   document.querySelector(".switchSheet")?.closest(".sheet")?.remove();
@@ -873,6 +885,10 @@ function enterCall(name) {
   const states = new Map();
   for (const ev of ["signal-open", "signal-lost", "joined", "full"]) mesh.addEventListener(ev, (e) => diag(ev, e.detail?.count != null ? { count: e.detail.count } : undefined));
   mesh.addEventListener("someone-joining", (e) => diag("join", { id: e.detail.id }));
+  // who came after me: they can't hand me the chat from before (safety round 2, J14)
+  S.later = new Set();
+  S.histFrom = new Set();
+  mesh.addEventListener("someone-joining", (e) => S.joined && (e.detail.at || Date.now()) > S.joinedAt && S.later.add(e.detail.id));
   mesh.addEventListener("left", (e) => diag("leave", { id: e.detail.id }));
   mesh.addEventListener("host", (e) => diag(`host:${e.detail.t}`));
   mesh.addEventListener("peer", (e) => {
@@ -912,6 +928,7 @@ function enterCall(name) {
   S.net = "connecting";
   S.joined = false;
   mesh.addEventListener("joined", () => {
+    if (!S.joined) S.joinedAt = Date.now();
     S.joined = true;
     paintNet();
   });
@@ -929,7 +946,9 @@ function enterCall(name) {
   mesh.addEventListener("channel-open", (e) => {
     // catch the newcomer up: board, chat, how I am
     mesh.sendTo(e.detail.id, { ...myState(), hand: S.hands.has("me") });
-    if (S.switchTo) mesh.sendTo(e.detail.id, { k: "switch", tok: S.switchTo }); // I came from another device of mine
+    // I came from another device of mine: it gets proof I hold its one-time code, made with my own id, so nobody who
+    // sees it can use it (safety round 2, J12)
+    if (S.switchTo) switchProof(S.switchTo, mesh.id).then((tok) => S.mesh === mesh && mesh.sendTo(e.detail.id, { k: "switch", tok }));
     if (S.isHost && S.pinAll.length) mesh.sendTo(e.detail.id, { k: "pinall", ids: S.pinAll });
     if (S.board && S.board.items.length) mesh.sendTo(e.detail.id, S.board.snapshot());
     const mainChat = S.chat.filter((c) => !c.room); // a breakout room's chat stays in the room
@@ -978,7 +997,22 @@ function paintNet() {
 }
 $("netState").onclick = () => $("invite").click();
 
+// Messages per person (safety round 2, J14): a script sending thousands can't freeze everyone's browser. Generous
+// enough for drawing on the board; chat has its own, smaller allowance.
+const BUDGET = { all: [1500, 10000], chat: [40, 10000] };
+const budgets = new Map(); // "kind|id" -> { n, at }
+function withinBudget(from, kind) {
+  const [max, ms] = BUDGET[kind];
+  const k = kind + "|" + from;
+  const b = budgets.get(k) || { n: 0, at: Date.now() };
+  if (Date.now() - b.at > ms) Object.assign(b, { n: 0, at: Date.now() });
+  budgets.set(k, b);
+  return ++b.n <= max;
+}
+
 function onMessage(from, m) {
+  if (!withinBudget(from, "all")) return;
+  if (["chat", "chatre", "chatpin", "history"].includes(m.k) && !withinBudget(from, "chat")) return;
   const p = S.mesh.peers.get(from);
   const who = (p && p.name) || t("Someone");
   if (S.netq.receive(from, m)) return; // what they need from my picture, how their connection is
@@ -1869,8 +1903,13 @@ function chatOut(c) {
   }
   return { id: c.id, from: mine(c.from), name: c.from === "me" ? localStorage.getItem("juntos.name") || "" : c.name, text: c.text, at: c.at, q: c.q || null, re, pin: c.pin || 0 };
 }
+// The chat from before I came (safety round 2, J14): taken once per person, in my first 30 seconds, only from someone
+// who was in before me, and not while chat is off; nothing in it can be "mine", and only a host's copy carries pins.
 function chatHistoryIn(from, list) {
-  if (!Array.isArray(list)) return;
+  if (!Array.isArray(list) || !S.joinedAt || Date.now() - S.joinedAt > 30000 || S.later?.has(from) || S.histFrom?.has(from)) return;
+  if (!may(from, "chat")) return;
+  S.histFrom?.add(from);
+  const byHost = !!S.mesh?.hosts?.has(from);
   for (const raw of list.slice(-300)) {
     if (!raw || typeof raw !== "object") continue;
     const text = String(raw.text ?? "").slice(0, 2000);
@@ -1880,14 +1919,25 @@ function chatHistoryIn(from, list) {
     if (have) {
       // what someone reacted while I wasn't connected to them yet
       for (const [e, who] of Object.entries(re)) for (const [k, v] of Object.entries(who)) if (k !== "me") (have.re[e] ||= {})[k] = v;
+      // a host's copy says what is pinned, whoever's copy came first
+      if (byHost && chatIdOk(raw.id) && +raw.pin > 0 && !have.pin) have.pin = +raw.pin;
       continue;
     }
     const f = typeof raw.from === "string" ? raw.from.slice(0, 40) : "";
-    const pin = chatIdOk(raw.id) && +raw.pin > 0 ? +raw.pin : 0;
-    S.chat.push({ id: chatIdOk(raw.id) ? raw.id : "", from: f === S.mesh.id ? "me" : f, name: cleanName(raw.name, 60), text, at: +raw.at || Date.now(), q: chatQuoteIn(raw.q), re, room: 0, pin });
+    if (f === S.mesh.id) continue; // this visit's id is new: nothing from before is mine
+    const pin = byHost && chatIdOk(raw.id) && +raw.pin > 0 ? +raw.pin : 0;
+    S.chat.push({ id: chatIdOk(raw.id) ? raw.id : "", from: f, name: cleanName(raw.name, 60), text, at: +raw.at || Date.now(), q: chatQuoteIn(raw.q), re, room: 0, pin });
   }
   S.chat.sort((a, b) => a.at - b.at);
+  capChat();
   renderChat(true);
+}
+// the chat keeps its last CHAT_MAX messages (pinned ones stay)
+const CHAT_MAX = 1000;
+function capChat() {
+  if (S.chat.length <= CHAT_MAX) return;
+  let drop = S.chat.length - CHAT_MAX;
+  S.chat = S.chat.filter((c) => c.pin || drop-- <= 0);
 }
 function chatReactIn(from, who, m) {
   const e = String(m.e ?? "");
@@ -2024,6 +2074,7 @@ function addChat(c) {
   c.room = S.br?.here || 0;
   c.re ||= {};
   S.chat.push(c);
+  capChat();
   S.recorder?.event({ kind: "chat", name: c.from === "me" ? localStorage.getItem("juntos.name") || "" : c.name, text: c.text });
   renderChat();
   if (S.panel !== "chat") {

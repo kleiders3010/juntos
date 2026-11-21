@@ -24,7 +24,7 @@ if (typeof Response.json !== "function")
 const { Room, idleClose } = await import(process.env.JUNTOS_ROOM || "./room.mjs");
 
 const PORT = Number(process.env.PORT) || 8799;
-const BIND = process.env.BIND || "0.0.0.0";
+const BIND = process.env.BIND || "127.0.0.1"; // behind the game host's door only (safety round 2, J18)
 const DATA = process.env.DATA_DIR || join(process.cwd(), "data");
 const MAX_ROOMS = 5000; // rooms held in memory at once (a room with nobody in it is put away after IDLE_MS)
 const IDLE_MS = 10 * 60 * 1000;
@@ -179,10 +179,23 @@ function netOf(ip) {
   const all = ip.includes("::") ? [...head, ...Array(Math.max(0, 8 - head.length - tail.length)).fill("0"), ...tail] : head;
   return all.slice(0, 4).map((x) => (parseInt(x, 16) || 0).toString(16)).join(":") + "::/64";
 }
+// the key of the one-way code of addresses (safety round 2, J18): made once, kept in the data folder, never printed
+let ipSalt = process.env.IP_SALT || "";
+if (!ipSalt)
+  try {
+    ipSalt = readFileSync(join(DATA, "ip-salt"), "utf8").trim();
+  } catch (_) {
+    ipSalt = Array.from(webcrypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("");
+    try {
+      mkdirSync(DATA, { recursive: true });
+      writeFileSync(join(DATA, "ip-salt"), ipSalt);
+    } catch (_) {}
+  }
+const ipSaltKey = webcrypto.subtle.importKey("raw", new TextEncoder().encode(ipSalt), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 async function ipKey(req) {
   const ip = netOf(String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0]);
   const day = new Date().toISOString().slice(0, 10);
-  const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(day + "|juntos|" + ip));
+  const h = await webcrypto.subtle.sign("HMAC", await ipSaltKey, new TextEncoder().encode(day + "|juntos|" + ip));
   return "ip:" + day + ":" + [...new Uint8Array(h).slice(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 

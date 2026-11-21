@@ -21,6 +21,10 @@
 #      call, and a device that can't join a tree is the one told full. J9: 30 wrong passcodes from anywhere lock the
 #      call and tell the people in it (ready-made passcodes stay 6 digits: a decision). (A game-host copy with a tree
 #      from 4 people on; addresses given in x-forwarded-for, as the game host's proxy does.)
+# J12: the switch-device code is never sent, only a proof made with the new device's id.
+# J14: the chat from before is taken once per person, only from someone in before me; per-person message allowances.
+# J18: breakout rooms only as the host set them; the app refuses to run in someone else's frame; addresses hashed
+#      with a secret key; game-host copies listen on this machine by default; /turn answers the GitHub copy.
 # Run against the TEST server: npx wrangler dev -c wrangler.test.toml --port 8798, then python safety2_test.py [base-url]
 
 import os
@@ -78,6 +82,20 @@ for f in ("wrangler.toml", "wrangler.test.toml"):
     t = open(os.path.join(WEB, "..", "worker", f), encoding="utf-8").read()
     check('name = "JOINS"' in t and "[[ratelimits]]" in t, f"J7 {f} has the JOINS limit")  # pinned: safety round 2 J7
 check("env.JOINS.limit" in srv, "J7 the Worker checks it on /ws and /info")  # pinned: safety round 2 J7
+
+# J12: the code itself never goes out
+app = open(os.path.join(WEB, "app.js"), encoding="utf-8").read()
+check("tok: S.switchTo" not in app and "switchProof(S.switchTo, mesh.id)" in app, "J12 the switch code is sent only as a proof bound to the sender's id")  # pinned: safety round 2 J12
+
+# J18 (c), (d)
+check("env.IP_SALT" in srv and '"HMAC"' in srv, "J18 the Worker keys its address hash with a secret")  # pinned: safety round 2 J18
+for app in ("Juntos", "Ronda", "Sumate"):
+    k = open(os.path.join(WEB, "..", "..", app, "kinetic", "server.mjs"), encoding="utf-8").read()
+    check('process.env.BIND || "127.0.0.1"' in k, f"J18 {app}'s game-host copy listens on this machine unless told")  # pinned: safety round 2 J18
+# J18 (e): the relay credentials answer the GitHub Pages copy
+import urllib.request as _u
+r = _u.urlopen(_u.Request(BASE + "/turn", headers={"Origin": "https://kleiders3010.github.io"}), timeout=10)
+check(r.headers.get("Access-Control-Allow-Origin") == "https://kleiders3010.github.io", "J18 /turn answers the GitHub Pages copy (CORS)")  # pinned: safety round 2 J18
 
 with sync_playwright() as p:
     b = p.chromium.launch(headless=True, channel="msedge", args=ARGS)
@@ -317,6 +335,73 @@ with sync_playwright() as p:
     check(all(r.values()), f"J5 a helper is taken only when owed, never over a working link ({r})")  # pinned: safety round 2 J5
     ctx.close()
 
+    # J14: Ana (host) and Bo chat; Cy joins and gets the chat once; Bo then plants "earlier" lines and floods: no effect
+    def person(name, url, start=False):
+        c = b.new_context(locale="en-US", permissions=["camera", "microphone"])
+        pg = c.new_page()
+        pg.on("pageerror", lambda e: errors.append(f"pageerror (J14 {name}): {e}"))
+        pg.goto(url)
+        if start:
+            pg.click("#start")
+        pg.fill("#name", name)
+        pg.click("#enter")
+        pg.wait_for_function("() => window.__S && __S.joined", timeout=20000)
+        return c, pg
+    ca, ana = person("Ana", f"{BASE}/?signal={WS}", start=True)
+    room = ana.evaluate("() => __S.code")
+    cb, bo = person("Bo", f"{BASE}/r/{room}?signal={WS}")
+    bo.wait_for_function("() => __S.mesh.peers.size === 1 && [...__S.mesh.peers.values()][0].dc?.readyState === 'open'", timeout=20000)
+    ana.evaluate("() => { const i = document.querySelector('#chatInput, #chatForm textarea, #chatForm input'); }")
+    ana.evaluate("() => { for (const p of __S.mesh.peers.values()) __S.mesh.sendTo(p.id, { k: 'chat', id: 'aaaaaaaaaaaa', text: 'hello from before', at: Date.now() }) }")
+    bo.wait_for_function("() => __S.chat.some((c) => c.text === 'hello from before')", timeout=10000)
+    cc, cy = person("Cy", f"{BASE}/r/{room}?signal={WS}")
+    cy.wait_for_function("() => __S.mesh.peers.size === 2 && [...__S.mesh.peers.values()].every((p) => p.dc?.readyState === 'open')", timeout=20000)
+    cy.wait_for_function("() => __S.chat.some((c) => c.text === 'hello from before')", timeout=10000)
+    cy.wait_for_timeout(1500)
+    aid, cid = ana.evaluate("() => __S.mesh.id"), cy.evaluate("() => __S.mesh.id")
+    bo.evaluate("""([aid, cid]) => {
+      __S.mesh.sendTo(cid, { k: "history", chat: [{ id: "bbbbbbbbbbbb", from: aid, name: "Ana", text: "PLANTED in Ana's name", at: 1, pin: 1 },
+                                                  { id: "cccccccccccc", from: cid, name: "Cy", text: "PLANTED as you", at: 2 }] });
+      for (let i = 0; i < 80; i++) __S.mesh.sendTo(cid, { k: "chat", id: "f" + String(i).padStart(11, "0"), text: "flood " + i, at: Date.now() });
+    }""", [aid, cid])
+    cy.wait_for_timeout(2500)
+    got = cy.evaluate("() => ({ planted: __S.chat.filter((c) => c.text.startsWith('PLANTED')).length, flood: __S.chat.filter((c) => c.text.startsWith('flood')).length, hello: __S.chat.filter((c) => c.text === 'hello from before').length })")
+    check(got["planted"] == 0, f"J14 a second batch of \"earlier\" chat from someone is ignored ({got})")  # pinned: safety round 2 J14
+    check(got["hello"] == 1 and 0 < got["flood"] <= 40, f"J14 one person's chat flood is cut at the allowance ({got})")  # pinned: safety round 2 J14
+    for c in (ca, cb, cc):
+        c.close()
+
+    # J18 (a): someone who isn't a host can't say they're in a breakout room the host didn't give them
+    ctx = b.new_context(locale="en-US", permissions=["camera", "microphone"])
+    h = ctx.new_page()
+    h.on("pageerror", lambda e: errors.append(f"pageerror (J18): {e}"))
+    h.goto(f"{BASE}/?signal={WS}")
+    h.click("#start")
+    h.fill("#name", "Me")
+    h.click("#enter")
+    h.wait_for_function("() => window.__S && __S.joined", timeout=15000)
+    where = h.evaluate("() => { __S.br.receive('guest00000000000', { k: 'brwhere', room: 2 }); __S.br.receive('guest00000000001', { k: 'brwhere', room: 0 }); return [__S.br.roomOf('guest00000000000'), __S.br.where.has('guest00000000001')] }")
+    check(where == [0, True], f"J18 a guest can say they're in the main call, not in a room nobody gave them ({where})")  # pinned: safety round 2 J18
+    ctx.close()
+    # J18 (b): the app inside someone else's page (served like the GitHub copy: no frame-ancestors header) stops
+    ctx = b.new_context()
+
+    def framed(r):
+        if r.request.url.startswith("http://framer.test/"):
+            return r.fulfill(status=200, content_type="text/html", body='<iframe id="f" src="http://juntos.test/" width="400" height="300"></iframe>')
+        resp = r.fetch(url=BASE + r.request.url[len("http://juntos.test"):])
+        hdr = {k: v for k, v in resp.headers.items() if k.lower() not in ("content-security-policy", "x-frame-options")}
+        return r.fulfill(response=resp, headers=hdr)
+    ctx.route("http://framer.test/**", framed)
+    ctx.route("http://juntos.test/**", framed)
+    pg = ctx.new_page()
+    pg.goto("http://framer.test/")
+    pg.wait_for_timeout(2500)
+    inner = pg.frame_locator("#f")
+    ran = pg.frames[1].evaluate("() => !!window.__S") if len(pg.frames) > 1 else None
+    check(ran is False, f"J18 the app refuses to run inside someone else's page (ran: {ran})")  # pinned: safety round 2 J18
+    ctx.close()
+
     # J3
     pg = b.new_context().new_page()
     pg.on("pageerror", lambda e: errors.append(f"pageerror (J3): {e}"))
@@ -431,7 +516,7 @@ with sync_playwright() as p:
         got = raw.evaluate(OPENS, ["ws://127.0.0.1:8817", ["jfo-tqbx-wa1", "jfo-tqbx-wa2", "jfo-tqbx-wa3", "jfo-tqbx-wa4"]])
         check(got == [True, True, True, False], f"J7 the game host opens at most 3 new rooms a minute per address ({got})")  # pinned: safety round 2 J7
         time.sleep(0.6)
-        files = [f for f in os.listdir(data) if not f.startswith(".")]
+        files = [f for f in os.listdir(data) if not f.startswith(".") and f != "ip-salt"]  # (the address key is not a room)
         check(not files, f"J7 a made-up room with one visitor stores nothing ({files})")  # pinned: safety round 2 J7
         got = raw.evaluate(OPENS, ["ws://127.0.0.1:8817", ["jfo-tqbx-wa1", "jfo-tqbx-wa1"]])
         check(got == [True, False], f"J7 and takes at most 5 links a minute per address ({got})")  # pinned: safety round 2 J7

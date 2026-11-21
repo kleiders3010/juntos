@@ -209,7 +209,7 @@ export class Mesh extends EventTarget {
       }
       this.ns.send({ t: "here", from: this.id, to: m.from, name: this.name, ck: this.signer.pub, ...(this.hd.wire ? { hs: this.hd.wire } : {}), ...this.proof() });
       this.viaN.add(m.from);
-      this.emit("someone-joining", { id: m.from, name });
+      this.emit("someone-joining", { id: m.from, name, at: +m.at || Date.now() }); // (relays replay old hellos: when it was said)
     } else if (m.t === "here") {
       if (this.srv || this.peers.has(m.from)) return;
       if (typeof m.ck === "string" && /^[0-9a-f]{64}$/.test(m.ck)) this.cks.set(m.from, m.ck);
@@ -413,7 +413,7 @@ export class Mesh extends EventTarget {
       this.known.set(m.id, m.name);
       if (m.pub) this.pubs.set(m.id, m.pub);
       if (this.big && !this.peers.has(m.id)) this.farStub(m.id, m.name);
-      this.emit("someone-joining", { id: m.id, name: m.name });
+      this.emit("someone-joining", { id: m.id, name: m.name, at: Date.now() });
     } else if (["room", "lock", "knock", "knock-gone", "waiting", "denied", "removed", "ended", "passcode", "pass", "perms", "role"].includes(m.t)) {
       // host controls: who may come in, mute, remove, the passcode (the server checks who is the host)
       if (m.t === "denied" || m.t === "removed" || m.t === "ended" || m.t === "passcode") this.closed = true;

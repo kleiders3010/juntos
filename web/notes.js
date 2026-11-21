@@ -184,15 +184,17 @@ export class Notes {
     if (!KINDS.includes(m?.k) || !this.code) return false;
     if (m.k === "nset") {
       if (this.o.hosts().has(from) && +m.ver > this.edit.ver && ["all", "host"].includes(m.who)) {
-        this.edit = { who: m.who, ver: +m.ver };
+        this.edit = { who: m.who, ver: +m.ver, since: Date.now() };
         this.o.notify(m.who === "host" ? this.t("Only the host can edit the notes now") : this.t("Everyone can edit the notes now"));
         this.paint(true);
       }
       return true;
     }
     if (m.k === "nop") {
-      // "only the host can edit" is kept by each person's own box (read only); every edit that was made is still
-      // taken, so a letter typed just before the switch doesn't leave one copy different from the others
+      // "only the host can edit" is kept by each person's own box (read only); an edit made just before the switch is
+      // still taken (3 s), so a letter typed then doesn't leave one copy different from the others. After that a
+      // non-host's edits are dropped by everyone alike (safety round 2, J18: a changed app can't write anyway)
+      if (this.edit.who === "host" && !this.o.hosts().has(from) && Date.now() - (this.edit.since || 0) > 3000) return true;
       this.applyOps((Array.isArray(m.ops) ? m.ops : []).slice(0, BATCH));
       const name = String(m.name || "").slice(0, 60) || this.t("Someone");
       this.writers.set(name, Date.now() + 3000);

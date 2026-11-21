@@ -80,7 +80,11 @@ export class Breakout {
         this.apply(m);
       }
     } else if (m.k === "brwhere") {
-      this.where.set(from, clampRoom(m.room));
+      // only the main call, the room the host gave them, or (a host) any room: nobody sits in on another room by
+      // saying so (safety round 2, J18)
+      const r = clampRoom(m.room);
+      if (r && !mesh?.hosts.has(from) && !(this.plan && this.plan.assign[from] === r)) return true;
+      this.where.set(from, r);
       if (!m.room) this.help.delete(from);
       this.o.onMove();
     } else if (m.k === "brhelp" && this.o.amHost()) {
