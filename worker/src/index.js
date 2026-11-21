@@ -7,6 +7,22 @@
 // Up to MESH_MAX people everyone links to everyone (big_test.py: 16 people, everyone hears everyone). Past that a
 // direct link to everyone asks too much of phones, so the call becomes a tree (tree_test.py): each person links to
 // one parent and a few children, and sound, pictures and messages are passed along it, device to device.
+import { schnorr } from "../../web/vendor/noble-secp256k1/index.js";
+
+// The call's code is made from the host's public key (web/hostauth.js codeOf): whoever holds a key that makes
+// this code started the call (APP-RULES safety 2). Old calls (a random code) can't prove it and keep the old rule.
+const CABC = "abcdefghijkmnpqrstuvwxyz";
+export function keyMakesCode(key, code) {
+  if (!/^[0-9a-f]{64}$/.test(key || "")) return false;
+  try {
+    const pub = schnorr.getPublicKey(Uint8Array.from(key.match(/../g), (h) => parseInt(h, 16)));
+    const s = Array.from(pub.subarray(0, 10), (b) => CABC[b % CABC.length]).join("");
+    return `${s.slice(0, 3)}-${s.slice(3, 7)}-${s.slice(7)}` === code;
+  } catch (_) {
+    return false;
+  }
+}
+
 const MESH_MAX = 16;
 const MAX_PEOPLE = 200;
 const MAX_KIDS = 6; // the most children a device may say it can feed
@@ -273,18 +289,29 @@ export class Room {
         return ws.close(1008, "full");
       }
       // The person who started the call holds a secret key (kept on their device); the room keeps
-      // only its hash. The first hello that carries a key and asks to claim an unclaimed room claims it.
+      // only its hash. A key that makes this room's code always wins: it replaces anyone who claimed the room
+      // before (on this server, or on the other one before a move), and what they set. Old random codes: the
+      // first hello that carries a key and asks to claim an unclaimed room claims it.
       const st = this.state.storage;
+      const [room, net] = this.state.getTags(ws);
       let hostHash = await st.get("host");
       let host = false;
       const key = typeof msg.key === "string" ? msg.key.slice(0, 80) : "";
       if (key.length >= 16) {
         const h = await sha(key);
-        if (!hostHash && msg.claim) await st.put("host", (hostHash = h));
+        if (hostHash !== h && keyMakesCode(key, room) && !(await st.get("hostProven"))) {
+          if (hostHash) {
+            for (const k of ["locked", "pass", "opened"]) await st.delete(k);
+            this.locked = false;
+            // whoever claimed it before is in the call no longer as its host: they come back as a guest
+            for (const p of this.peers()) if (p.ws !== ws && p.a.host) p.ws.close(4001, "host changed");
+          }
+          await st.put("host", (hostHash = h));
+          await st.put("hostProven", true);
+        } else if (!hostHash && msg.claim) await st.put("host", (hostHash = h));
         host = h === hostHash;
       }
       if (this.locked === undefined) this.locked = !!(await st.get("locked"));
-      const [room, net] = this.state.getTags(ws);
       // the host's choices when starting the call (people ask to join, a passcode), only the first time
       if (host && msg.claim && msg.opts && !(await st.get("opened"))) {
         if (msg.opts.lock) await st.put("locked", (this.locked = true));

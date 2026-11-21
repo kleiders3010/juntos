@@ -22,18 +22,29 @@ const t2 = t; // the translator, where "t" is a tile
 // the bar's buttons, also those under More (not in the page while the sheet is closed)
 const BARBTNS = {};
 const $ = (id) => document.getElementById(id) || BARBTNS[id] || null;
+// Test switches (?server= etc.) take only our own hosts, this computer, or addresses that can never connect (.invalid,
+// for failover tests): a crafted link can never point the app at somebody else's server (APP-RULES safety 1).
+const testHost = (u) => {
+  try {
+    const x = new URL(u);
+    if (!/^(wss?|https?):$/.test(x.protocol)) return null;
+    const h = x.hostname;
+    return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(h) || /(^|\.)jurisgames\.com$/.test(h) || /\.invalid$/.test(h) ? u : null;
+  } catch { return null; }
+};
 const params = new URLSearchParams(location.search);
 // The page and its signaling share one host (meet.jurisgames.com); ?signal= points elsewhere for testing.
 // where the page itself is served from: "/" on meet.jurisgames.com, "/juntos/" on the copy on GitHub Pages
 const BASE = new URL("./", import.meta.url).pathname;
 // the copy on GitHub Pages (used when Cloudflare is down) has no room server of its own
 const MIRROR = location.hostname.endsWith(".github.io");
-const SIGNAL = params.get("signal") || (location.protocol === "https:" && !MIRROR ? `wss://${location.host}` : "wss://meet.jurisgames.com");
+const SIG_T = params.get("signal") ? testHost(params.get("signal")) : null;
+const SIGNAL = SIG_T || (location.protocol === "https:" && !MIRROR ? `wss://${location.host}` : "wss://meet.jurisgames.com");
 // the second room server (the game host, same room code): used when the first can't be reached; tests: ?signal2=
-const SIGNAL2 = params.get("signal2") || (params.get("signal") ? null : "wss://games.jurisgames.com/juntos");
+const SIGNAL2 = (params.get("signal2") && testHost(params.get("signal2"))) || (SIG_T ? null : "wss://games.jurisgames.com/juntos");
 // Finding each other through public Nostr relays (rtc.js, nsig.js): on by default; a page pointed at a test server
 // (?signal=) uses only that server, unless test relays are given (?relays=ws://...,ws://...)
-const RELAYS = params.get("relays") ? params.get("relays").split(",").filter((u) => /^wss?:\/\//.test(u)) : params.get("signal") ? null : [];
+const RELAYS = params.get("relays") ? params.get("relays").split(",").filter((u) => /^wss?:\/\//.test(u) && testHost(u)) : SIG_T ? null : [];
 const isPhone = matchMedia("(max-width: 640px)").matches;
 
 const ICON = {
