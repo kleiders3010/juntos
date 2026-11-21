@@ -97,6 +97,8 @@ export function callUrl(code) {
   const p = passOf(code);
   return new URL(`r/${code}`, import.meta.url).href + (p ? `#p=${encodeURIComponent(p)}` : "");
 }
+// A ready-made passcode: 6 digits, like Zoom's (a decision). Guessing it is held back by the server: 5 wrong tries
+// per network, and 30 for the whole call in 10 minutes lock it (safety round 2, J9).
 export function newPass() {
   const a = new Uint32Array(1);
   crypto.getRandomValues(a);

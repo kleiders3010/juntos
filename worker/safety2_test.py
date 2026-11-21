@@ -17,6 +17,10 @@
 #      that person gave up); a working link is never replaced.
 # J7:  per-address limits on both servers (the Worker's JOINS, the game host's links and new rooms per minute, a cap
 #      on stored rooms), and a made-up room with one visitor stores nothing.
+# J8:  one network can't fill a call (40 links each), only hosts and co-hosts may say they feed more than 2 in a big
+#      call, and a device that can't join a tree is the one told full. J9: 30 wrong passcodes from anywhere lock the
+#      call and tell the people in it (ready-made passcodes stay 6 digits: a decision). (A game-host copy with a tree
+#      from 4 people on; addresses given in x-forwarded-for, as the game host's proxy does.)
 # Run against the TEST server: npx wrangler dev -c wrangler.test.toml --port 8798, then python safety2_test.py [base-url]
 
 import os
@@ -436,6 +440,97 @@ with sync_playwright() as p:
             k.kill()
             k.wait()
     b.close()
+
+# ---- J8 + J9 on a game-host copy (no browser) ----
+import asyncio
+import json as _json
+import websockets
+
+HELLO_JS = """
+const ha = await import("file:///" + process.argv[1].replace(/\\\\/g, "/") + "/hostauth.js");
+const h = ha.newHost();
+const code = h.code;
+console.log(JSON.stringify({ code, hello: await ha.hostHello(h.key, code, { ctl: [{ t: "pass", pass: "k3m9x2ab" }] }) }));
+"""
+
+
+async def j8_j9():
+    data = tempfile.mkdtemp(prefix="juntos-s2-tree-")
+    env = {**os.environ, "PORT": "8818", "BIND": "127.0.0.1", "DATA_DIR": data, "MESH_MAX": "3"}
+    proc = subprocess.Popen(["node", "server.mjs"], cwd=KIN, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=0x08000000)
+    try:
+        for _ in range(100):
+            try:
+                urllib.request.urlopen("http://127.0.0.1:8818/health", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.1)
+        U = "ws://127.0.0.1:8818/ws/"
+        pub = lambda i: ("p%02d" % i) + "A" * 41
+
+        async def join(room, ip, hello, keep=1.0):
+            ws = await websockets.connect(U + room, additional_headers={"x-forwarded-for": ip})
+            await ws.send(_json.dumps({"t": "hello", "name": "T", **hello}))
+            return ws
+
+        async def drain(ws, secs=0.8):
+            out = []
+            try:
+                while True:
+                    out.append(_json.loads(await asyncio.wait_for(ws.recv(), secs)))
+            except Exception:
+                pass
+            return out
+
+        # J8 a: 40 links from one network, the 41st is told the call is full for its network
+        socks = [await join("jfo-tqbx-wb1", "10.1.1.1", {"id": "netnet%03d" % i, "pub": pub(i)}) for i in range(41)]
+        last = await drain(socks[-1])
+        check(any(m.get("t") == "full" and m.get("net") for m in last), f"J8 the 41st link from one network is turned away ({[m.get('t') for m in last]})")  # pinned: safety round 2 J8
+        for w in socks:
+            await w.close()
+        # J8 b: four people (a tree from 4 on) each claiming to feed 6: nobody but a host gets more than 2 children
+        socks = [await join("jfo-tqbx-wb2", f"10.2.0.{i}", {"id": "tree%04d" % i, "cap": 6, "pub": pub(i)}) for i in range(1, 5)]
+        await asyncio.sleep(0.5)
+        trees = [[m for m in await drain(w) if m.get("t") == "tree"] for w in socks]
+        most = max((len(t[-1]["kids"]) for t in trees if t), default=-1)
+        check(0 <= most <= 2, f"J8 a guest saying it can feed 6 gets at most 2 ({most})")  # pinned: safety round 2 J8
+        for w in socks:
+            await w.close()
+        # J8 c: a device without a key is the one told full when the call grows past a mesh, not the newcomer
+        socks = [await join("jfo-tqbx-wb3", "10.3.0.1", {"id": "keyless01"})]
+        socks += [await join("jfo-tqbx-wb3", f"10.3.0.{i}", {"id": "keyed%04d" % i, "pub": pub(i)}) for i in range(2, 4)]
+        await asyncio.sleep(0.3)
+        await drain(socks[0], 0.3)
+        socks.append(await join("jfo-tqbx-wb3", "10.3.0.9", {"id": "newcomer9", "pub": pub(9)}))
+        old, new = await drain(socks[0]), await drain(socks[-1])
+        check(any(m.get("t") == "full" and m.get("device") for m in old) and any(m.get("t") == "peers" for m in new),
+              f"J8 the keyless device is told full and the newcomer gets in ({[m.get('t') for m in old]}, {[m.get('t') for m in new]})")  # pinned: safety round 2 J8
+        for w in socks:
+            await w.close()
+        # J9: a passcode call; 30 wrong tries from 30 networks lock it and the person inside is told
+        made = subprocess.run(["node", "--input-type=module", "-e", HELLO_JS, os.path.join(WEB)], capture_output=True, text=True, check=True)
+        h = _json.loads(made.stdout)
+        ctl = await websockets.connect(U + h["code"], additional_headers={"x-forwarded-for": "10.9.9.9"})
+        await ctl.send(_json.dumps(h["hello"]))
+        await drain(ctl, 0.5)
+        inside = await join(h["code"], "10.9.9.8", {"id": "inside001", "pass": "k3m9x2ab"})
+        await drain(inside, 0.5)
+        for i in range(30):
+            w = await join(h["code"], f"10.4.{i}.1", {"id": "guess%04d" % i, "pass": "wrong%03d" % i})
+            await drain(w, 0.2)
+        told = await drain(inside, 1.0)
+        check(any(m.get("t") == "lock" and m.get("guesses") for m in told), f"J9 30 wrong passcodes lock the call and tell those in it ({[m.get('t') for m in told]})")  # pinned: safety round 2 J9
+        await inside.close()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+asyncio.run(j8_j9())
+pw = subprocess.run(["node", "--input-type=module", "-e",
+                     "const s = await import('file:///' + process.argv[1].replace(/\\\\/g, '/') + '/schedule.js').catch(() => null);"
+                     " console.log(s ? s.newPass() : '')", WEB], capture_output=True, text=True)
+check(bool(re.fullmatch(r"\d{6}", pw.stdout.strip())), f"J9 a ready-made passcode stays 6 digits, the call lock covers guessing ({pw.stdout.strip() or pw.stderr.strip()[-120:]})")  # pinned: Zoom-like 6 digits by default
 
 print("\n" + ("ALL OK" if not errors else f"{len(errors)} FAILED:\n" + "\n".join(errors)))
 sys.exit(1 if errors else 0)

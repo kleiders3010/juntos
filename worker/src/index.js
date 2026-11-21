@@ -85,6 +85,9 @@ const MAX_TALK = 200; // people with their own speaking permission kept per room
 const MAX_IN = 300; // people already let in, kept per room (their link coming back doesn't ask again)
 // A passcode, like Zoom's: 4 to 10 letters or numbers (case matters). Wrong tries are limited per network.
 const PASS_RE = /^[A-Za-z0-9]{4,10}$/;
+const PER_NET = 40; // links from one network in one call (a class behind one school address fits; safety round 2, J8)
+const ROOM_TRIES = 30; // wrong passcodes for one call from anywhere in ROOM_TRIES_MS: then the call locks (J9)
+const ROOM_TRIES_MS = 10 * 60 * 1000;
 const PASS_TRIES = 5; // wrong passcodes in a row from one network ...
 const PASS_WAIT = 60 * 1000; // ... then it waits this long
 
@@ -252,7 +255,7 @@ export class Room {
       if (ids.length > MAX_IN) delete this.in[ids[0]];
       this.state.storage.put("in", this.in);
     }
-    ws.serializeAttachment({ id: a.id, name: a.name, host: !!a.host, co: !!a.co, cap: a.cap || 2, pub: a.pub || "" });
+    ws.serializeAttachment({ id: a.id, name: a.name, host: !!a.host, co: !!a.co, cap: a.cap || 2, pub: a.pub || "", at: a.at || Date.now() });
     const me = { ws, a: ws.deserializeAttachment() };
     const big = others.some((p) => p.a.tree) || others.length + 1 > this.meshMax;
     this.send(ws, { t: "peers", big, peers: others.map((p) => ({ id: p.a.id, name: p.a.name, host: !!(p.a.host || p.a.co), role: this.role(p.a), pub: p.a.pub || "" })) });
@@ -264,7 +267,9 @@ export class Room {
       const changed = new Set([me]);
       if (!others.some((p) => p.a.tree)) {
         // the call just grew past a mesh: everyone goes into the tree, the devices that can feed most nearest the top
-        all.sort((x, y) => (y.a.cap || 2) - (x.a.cap || 2));
+        // (hosts and co-hosts first, then who came first: a crowd of made-up people arriving later can't take the top)
+        const rank = (p) => (p.a.host ? 2 : p.a.co ? 1 : 0);
+        all.sort((x, y) => rank(y) - rank(x) || (y.a.cap || 2) - (x.a.cap || 2) || (x.a.at || 0) - (y.a.at || 0));
         for (const p of all) this.setA(p, { tree: true, parent: null });
         for (const p of all.slice(1)) this.attach(all, p);
         all.forEach((p) => changed.add(p));
@@ -372,6 +377,10 @@ export class Room {
       const proven = await idProven(msg, room, id);
       // the same id already here: only its own key may take that link over (after the passcode, below)
       if (!proven && this.peers(true).some((p) => p.a.id === id && p.ws !== ws)) return ws.close(4004, "id in use");
+      if (this.peers(true).filter((p) => p.ws !== ws && this.state.getTags(p.ws)[1] === net).length >= PER_NET) {
+        this.send(ws, { t: "full", max: PER_NET, net: true });
+        return ws.close(1008, "full");
+      }
       if (this.peers().filter((p) => p.a.id !== id).length >= MAX_PEOPLE) {
         this.send(ws, { t: "full", max: MAX_PEOPLE });
         return ws.close(1008, "full");
@@ -379,10 +388,13 @@ export class Room {
       // a tree needs every device in it to pass sound and pictures on (WebCodecs; a device that can't sends no
       // key): if one can't, the newcomer is told the call is full, and nobody already in is pushed out
       const now = this.peers().filter((p) => p.ws !== ws && p.a.id !== id);
-      if ((now.some((p) => p.a.tree) || now.length + 1 > this.meshMax) && (!pub || now.some((p) => !p.a.pub))) {
+      if ((now.some((p) => p.a.tree) || now.length + 1 > this.meshMax) && !pub) {
         this.send(ws, { t: "full", max: this.meshMax });
         return ws.close(1008, "full");
       }
+      // past a mesh everyone must pass sound and pictures on: a device that can't (no key) is the one told the call
+      // is full now, so one such device can't stop a call growing (safety round 2, J8)
+      const keyless = now.length + 1 > this.meshMax ? now.filter((p) => !p.a.pub) : [];
       // The person who started the call holds a secret key (kept on their device): the call's code is made from
       // it, and the host proves it by signing this visit's id. Nobody ever becomes host by asking first (safety
       // round 2, J4): an empty room has no host until its code's maker comes. A room an older version let
@@ -437,6 +449,15 @@ export class Room {
             tr.n++;
             if (tr.n >= PASS_TRIES) Object.assign(tr, { n: 0, until: Date.now() + PASS_WAIT });
             this.tries.set(net, tr);
+            // from all networks together: past ROOM_TRIES in 10 minutes the call locks (newcomers ask to join) and
+            // the people in it are told, until a host unlocks it (safety round 2, J9)
+            const rt = (this.roomTries = this.roomTries && Date.now() - this.roomTries.since < ROOM_TRIES_MS ? this.roomTries : { n: 0, since: Date.now() });
+            if (++rt.n >= ROOM_TRIES && !this.locked) {
+              this.locked = true;
+              await st.put("locked", true);
+              await this.touch();
+              for (const p of this.peers()) this.send(p.ws, { t: "lock", on: true, by: "", guesses: true });
+            }
           }
           this.send(ws, { t: "passcode", wrong: !!given, wait: tr.until > Date.now() ? Math.ceil(PASS_WAIT / 1000) : 0 });
           return ws.close(4003, "passcode");
@@ -465,7 +486,11 @@ export class Room {
         for (const p of hosts) this.send(p.ws, { t: "knock", id, name });
         return;
       }
-      return this.admit(ws, { id, name, host, co, cap, pub });
+      for (const p of keyless) {
+        this.send(p.ws, { t: "full", max: this.meshMax, device: true });
+        p.ws.close(1008, "full");
+      }
+      return this.admit(ws, { id, name, host, co, cap: host || co ? cap : Math.min(cap, 2), pub });
     }
     if (!me.id) return;
     // someone still waiting to be let in sends nothing to the people inside, handshakes included (safety round 2, J10)

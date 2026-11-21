@@ -900,7 +900,15 @@ function enterCall(name) {
     renderPeople();
   });
   mesh.addEventListener("someone-joining", (e) => toast(t("{name} joined", { name: e.detail.name || t("Someone") })));
-  mesh.addEventListener("full", (e) => toast(t("This call is full ({max} people)", { max: e.detail.max })));
+  mesh.addEventListener("full", (e) =>
+    toast(
+      e.detail.device
+        ? t("The call grew past {max} people, and this device can't take part in calls that big. Try a newer browser.", { max: e.detail.max })
+        : e.detail.net
+          ? t("Too many people from your network are in this call ({max}).", { max: e.detail.max })
+          : t("This call is full ({max} people)", { max: e.detail.max }),
+    ),
+  );
   S.net = "connecting";
   S.joined = false;
   mesh.addEventListener("joined", () => {
@@ -2382,7 +2390,8 @@ function onHost(m) {
     paintKnocks();
   } else if (m.t === "lock") {
     S.locked = m.on;
-    toast(m.on ? t("{name} locked the call. New people ask to join.", { name: m.by }) : t("{name} unlocked the call", { name: m.by }));
+    if (m.guesses) toast(t("Many wrong passcodes were tried, so new people now ask to join. A host can unlock the call."));
+    else toast(m.on ? t("{name} locked the call. New people ask to join.", { name: m.by }) : t("{name} unlocked the call", { name: m.by }));
   } else if (m.t === "perms") {
     return applyPerms(m);
   } else if (m.t === "role") {

@@ -448,7 +448,7 @@ export class Mesh extends EventTarget {
         this.emit("peer", { id: m.id });
       }
     } else if (m.t === "full") {
-      this.emit("full", { max: m.max });
+      this.emit("full", { max: m.max, net: !!m.net, device: !!m.device });
     } else if (m.t === "tree") {
       this.onTree(m);
     } else if (m.t === "signal") {

@@ -523,6 +523,11 @@ const DICT = {
     "{name} ended the call for everyone": "{name} terminó la llamada para todos",
     "The call has ended": "La llamada terminó",
     "{name} locked the call. New people ask to join.": "{name} cerró la llamada. Quien llegue pide entrar.",
+    "Many wrong passcodes were tried, so new people now ask to join. A host can unlock the call.":
+      "Se probaron muchos códigos de acceso equivocados, así que ahora quien llegue pide entrar. Un anfitrión puede abrir la llamada.",
+    "The call grew past {max} people, and this device can't take part in calls that big. Try a newer browser.":
+      "La llamada pasó de {max} personas y este dispositivo no puede estar en llamadas tan grandes. Probá con un navegador más nuevo.",
+    "Too many people from your network are in this call ({max}).": "Hay demasiadas personas de tu red en esta llamada ({max}).",
     "{name} unlocked the call": "{name} abrió la llamada",
     "{name} muted you": "{name} te silenció",
     "{name} wants to join": "{name} quiere entrar",
