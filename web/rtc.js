@@ -305,7 +305,12 @@ export class Mesh extends EventTarget {
       this.emit("signal-open");
       this.sendSignal({ t: "hello", id: this.id, name: this.name, cap: this.kidCap, ...(this.keys ? { pub: this.keys.pub } : {}), ...(this.key ? { key: this.key, claim: true, ...(this.opts ? { opts: this.opts } : {}) } : {}), ...(this.knock ? { knock: true } : {}), ...(this.pass ? { pass: this.pass } : {}) });
     };
-    ws.onmessage = (e) => this.onSignal(JSON.parse(e.data));
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      // on the server path a handshake comes only from someone the server said is in the call (safety round 2, J10)
+      if (m && m.t === "signal" && !this.known.has(m.from) && !this.peers.has(m.from)) return console.warn("juntos: handshake from someone not in the call");
+      this.onSignal(m);
+    };
     ws.onclose = () => {
       clearTimeout(slow);
       if (this.closed || this.ws !== ws) return; // an old link closing after a new one opened

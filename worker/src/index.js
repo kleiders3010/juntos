@@ -405,12 +405,13 @@ export class Room {
       return this.admit(ws, { id, name, host, co, cap, pub });
     }
     if (!me.id) return;
+    // someone still waiting to be let in sends nothing to the people inside, handshakes included (safety round 2, J10)
+    if (me.wait) return;
     if (msg.t === "signal" && typeof msg.to === "string") {
       const target = this.peers().find((p) => p.a.id === msg.to);
       if (target) this.send(target.ws, { t: "signal", from: me.id, data: msg.data });
       return;
     }
-    if (me.wait) return;
     if ((me.host || me.co) && HOST_CMDS.has(msg.t)) return this.hostCmd(me, msg, ws);
     if (msg.t === "name") {
       const name = cleanName(msg.name, 60);

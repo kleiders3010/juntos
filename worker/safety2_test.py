@@ -2,6 +2,8 @@
 # J15: the test switches in the link (?signal=, ?signal2=, ?relays=) reach this computer only when the page itself is
 #      served from this computer; the shipped pages' CSP has no localhost (the test server adds it).
 # J16: names are cleaned on the server (hello) and where they enter the app (server messages, relays, helpers).
+# J10: someone waiting to be let in can't send handshakes to the people inside; the app takes server handshakes
+#      only from people the server listed.
 # Run against the TEST server: npx wrangler dev -c wrangler.test.toml --port 8798, then python safety2_test.py [base-url]
 
 import os
@@ -105,6 +107,40 @@ with sync_playwright() as p:
     got = pg.evaluate("""(dirty) => { __S.mesh.onSignal({ t: "join", id: "cccccccc3", name: dirty });
       __S.mesh.onSignal({ t: "lock", on: true, by: dirty }); return __S.mesh.known.get("cccccccc3") }""", DIRTY)
     check(got == CLEAN, f"J16 the app cleans a name from the server ({got!r})")  # pinned: safety round 2 J16
+    ctx.close()
+
+    # J10: a locked call; an outsider waits to be let in and tries a handshake with the host anyway
+    ctx = b.new_context(locale="en-US", permissions=["camera", "microphone"])
+    h = ctx.new_page()
+    h.on("pageerror", lambda e: errors.append(f"pageerror (J10): {e}"))
+    h.goto(f"{BASE}/?signal={WS}")
+    h.click("#start")
+    h.fill("#name", "Host")
+    h.click("#enter")
+    h.wait_for_function("() => window.__S && __S.joined && __S.isHost", timeout=15000)
+    h.evaluate("() => __S.mesh.host({ t: 'lock', on: true })")
+    h.wait_for_function("() => __S.locked", timeout=5000)
+    room, host_id = h.evaluate("() => [__S.code, __S.mesh.id]")
+    out = b.new_context().new_page()
+    out.goto(BASE + "/privacy.html")
+    said = out.evaluate("""async ([ws, room, to]) => {
+      const s = new WebSocket(`${ws}/ws/${room}`);
+      const got = [];
+      s.onmessage = (e) => got.push(JSON.parse(e.data).t);
+      await new Promise((ok) => (s.onopen = ok));
+      s.send(JSON.stringify({ t: "hello", id: "dddddddd4", name: "Outsider" }));
+      await new Promise((r) => setTimeout(r, 800));
+      s.send(JSON.stringify({ t: "signal", to, data: { sdp: { type: "offer", sdp: "v=0" } } }));
+      await new Promise((r) => setTimeout(r, 1500));
+      return got;
+    }""", [WS, room, host_id])
+    reached = h.evaluate("() => !!(__S.mesh.sigIn || {})['dddddddd4'] || __S.mesh.peers.has('dddddddd4')")
+    check("waiting" in said and not reached, f"J10 a handshake from someone waiting never reaches the host (outsider heard {said})")  # pinned: safety round 2 J10
+    # the app itself: a handshake on the server socket from an id the server never listed is dropped
+    h.evaluate("""() => __S.mesh.ws.onmessage({ data: JSON.stringify({ t: "signal", from: "eeeeeeee5", data: { sdp: { type: "offer", sdp: "v=0" } } }) })""")
+    h.wait_for_timeout(500)
+    dropped = h.evaluate("() => !(__S.mesh.sigIn || {})['eeeeeeee5'] && !__S.mesh.peers.has('eeeeeeee5')")
+    check(dropped, "J10 the app drops a server handshake from someone the server never listed")  # pinned: safety round 2 J10
     ctx.close()
     b.close()
 
