@@ -3,7 +3,7 @@ import { VIDEO_CAP } from "./net.js";
 import { NostrSignal, NOSTR_OK } from "./nsig.js";
 import { Big, BIG_OK, makeKeys } from "./big.js";
 import { Fwd } from "./fwd.js";
-import { HostDocs, pubOf, ownsCode, newSigner, helloProof, helloOk, LIST_MAX } from "./hostauth.js";
+import { HostDocs, pubOf, ownsCode, newSigner, helloProof, helloOk, LIST_MAX, idOf, idProof } from "./hostauth.js";
 // Direct (mesh) WebRTC between everyone in a room. The signaling server only passes handshakes;
 // audio, video, chat and the board go device to device.
 //
@@ -56,7 +56,10 @@ export class Mesh extends EventTarget {
     this.servers = [signalUrl, backupUrl].filter(Boolean);
     this.si = serverIndex(room, this.servers.length);
     this.fails = 0; // servers that failed to open in a row
-    this.id = randomId();
+    // this visit's key and id: the id is the start of the key, so nobody else can speak as me (safety round 2, J1/J2)
+    this.signer = newSigner();
+    this.id = idOf(this.signer.pub);
+    this.idpP = idProof(this.signer.sk, room, this.id).then((p) => (this.idp = p)).catch(() => "");
     this.peers = new Map(); // id -> { pc, dc, name, stream, audio, video }
     this.audioTrack = null;
     this.videoTrack = null;
@@ -75,7 +78,6 @@ export class Mesh extends EventTarget {
     this.hd = new HostDocs(room);
     this.since = Date.now(); // when I came (an end made before it is an old one)
     this.hpub = pubOf(this.key);
-    this.signer = newSigner();
     this.cks = new Map(); // id -> their key for this visit (a co-host signs with it)
     this.knocking = new Map(); // id -> name: asking to join while the call is locked
     // the host's proof for its hellos and answers: made now, so nothing goes out without it (the relays replay old
@@ -301,9 +303,10 @@ export class Mesh extends EventTarget {
       }
       this.srvUrl = url;
       await this.keysP;
+      await this.idpP;
       if (this.ws !== ws || ws.readyState !== 1) return;
       this.emit("signal-open");
-      this.sendSignal({ t: "hello", id: this.id, name: this.name, cap: this.kidCap, ...(this.keys ? { pub: this.keys.pub } : {}), ...(this.key ? { key: this.key, claim: true, ...(this.opts ? { opts: this.opts } : {}) } : {}), ...(this.knock ? { knock: true } : {}), ...(this.pass ? { pass: this.pass } : {}) });
+      this.sendSignal({ t: "hello", id: this.id, ck: this.signer.pub, idp: this.idp, name: this.name, cap: this.kidCap, ...(this.keys ? { pub: this.keys.pub } : {}), ...(this.key ? { key: this.key, claim: true, ...(this.opts ? { opts: this.opts } : {}) } : {}), ...(this.knock ? { knock: true } : {}), ...(this.pass ? { pass: this.pass } : {}) });
     };
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);

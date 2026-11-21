@@ -74,6 +74,21 @@ async function passHash(room, pass) {
   return sha("pass|" + room + "|" + pass);
 }
 
+// A hello that proves its id (safety round 2, J2): the id is the start of the visit's key (web/hostauth.js idOf) and
+// the hello is signed with it. Only a proven id can take over its own earlier link, come back into a locked call,
+// or be a co-host; an unproven one (an old page) is a plain guest and can't push anyone out.
+const unhex = (s) => Uint8Array.from(s.match(/../g) || [], (h) => parseInt(h, 16));
+async function idProven(msg, room, id) {
+  if (typeof msg.ck !== "string" || !/^[0-9a-f]{64}$/.test(msg.ck) || msg.ck.slice(0, 16) !== id) return false;
+  if (typeof msg.idp !== "string" || !/^[0-9a-f]{128}$/.test(msg.idp)) return false;
+  try {
+    const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`juntos-id|${room}|${id}`)));
+    return await schnorr.verifyAsync(unhex(msg.idp), d, unhex(msg.ck));
+  } catch (_) {
+    return false;
+  }
+}
+
 async function sha(text) {
   const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("juntos-host|" + text));
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -315,20 +330,17 @@ export class Room {
       const cap = Math.max(1, Math.min(MAX_KIDS, Math.floor(Number(msg.cap)) || 2));
       const pub = typeof msg.pub === "string" && /^[A-Za-z0-9_-]{40,120}(\.[A-Za-z0-9_-]{40,120})?$/.test(msg.pub) ? msg.pub : "";
       if (!/^[A-Za-z0-9_-]{6,40}$/.test(id)) return ws.close(1008, "bad id");
-      for (const p of this.peers(true))
-        if (p.a.id === id && p.ws !== ws) {
-          p.ws.serializeAttachment({});
-          try {
-            p.ws.close(4004, "replaced");
-          } catch (_) {}
-        }
-      if (this.peers().length >= MAX_PEOPLE) {
+      const [room, net] = this.state.getTags(ws);
+      const proven = await idProven(msg, room, id);
+      // the same id already here: only its own key may take that link over (after the passcode, below)
+      if (!proven && this.peers(true).some((p) => p.a.id === id && p.ws !== ws)) return ws.close(4004, "id in use");
+      if (this.peers().filter((p) => p.a.id !== id).length >= MAX_PEOPLE) {
         this.send(ws, { t: "full", max: MAX_PEOPLE });
         return ws.close(1008, "full");
       }
       // a tree needs every device in it to pass sound and pictures on (WebCodecs; a device that can't sends no
       // key): if one can't, the newcomer is told the call is full, and nobody already in is pushed out
-      const now = this.peers().filter((p) => p.ws !== ws);
+      const now = this.peers().filter((p) => p.ws !== ws && p.a.id !== id);
       if ((now.some((p) => p.a.tree) || now.length + 1 > this.meshMax) && (!pub || now.some((p) => !p.a.pub))) {
         this.send(ws, { t: "full", max: this.meshMax });
         return ws.close(1008, "full");
@@ -338,7 +350,6 @@ export class Room {
       // before (on this server, or on the other one before a move), and what they set. Old random codes: the
       // first hello that carries a key and asks to claim an unclaimed room claims it.
       const st = this.state.storage;
-      const [room, net] = this.state.getTags(ws);
       let hostHash = await st.get("host");
       let host = false;
       const key = typeof msg.key === "string" ? msg.key.slice(0, 80) : "";
@@ -385,17 +396,25 @@ export class Room {
         this.tries.delete(net);
       }
       this.hasPass = !!passH;
+      // past the passcode: a proven id now replaces its own earlier link (a reload, a dropped connection)
+      for (const p of this.peers(true))
+        if (p.a.id === id && p.ws !== ws) {
+          p.ws.serializeAttachment({});
+          try {
+            p.ws.close(4004, "replaced");
+          } catch (_) {}
+        }
       // "last used" moves at most once a day (the room is forgotten a month after it)
       if (Date.now() - ((await st.get("seen")) || 0) > 24 * 3600 * 1000) {
         await st.put("seen", Date.now());
         await st.setAlarm(Date.now() + ROOM_KEEP);
       }
       await this.loadPerms();
-      const co = !host && !!this.cos[id];
+      const co = !host && proven && !!this.cos[id];
       const hosts = this.hosts();
       // locked (or sent out earlier): ask to join, a host decides. With no host here nobody could answer, so come in.
       // someone already let in whose link to the server dropped comes straight back (ids are random per visit)
-      const back = !!this.in[id] && !msg.knock;
+      const back = proven && !!this.in[id] && !msg.knock;
       if (!host && !co && !back && (this.locked || msg.knock) && hosts.length) {
         ws.serializeAttachment({ id, name, wait: true, cap, pub });
         this.send(ws, { t: "waiting" });

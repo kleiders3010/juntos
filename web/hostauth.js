@@ -161,6 +161,14 @@ export class HostDocs {
   }
 }
 
+// A visit's id is the start of its signing key (safety round 2, J1/J2): only whoever holds that key can be that
+// person, on the relays (their events are signed with it) and on the room server (the hello carries this proof).
+export const idOf = (pub) => String(pub || "").slice(0, 16);
+const idBody = (room, id) => `juntos-id|${room}|${id}`;
+export async function idProof(sk, room, id) {
+  return hex(await schnorr.signAsync(await digest(idBody(room, id)), typeof sk === "string" ? unhex(sk) : sk));
+}
+
 // the host saying hello (coming back to a locked call): proof that this visit's id is the host's
 const helloBody = (room, id) => `juntos-hello|${room}|${id}`;
 export async function helloProof(key, room, id) {

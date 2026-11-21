@@ -4,6 +4,8 @@
 # J16: names are cleaned on the server (hello) and where they enter the app (server messages, relays, helpers).
 # J10: someone waiting to be let in can't send handshakes to the people inside; the app takes server handshakes
 #      only from people the server listed.
+# J2:  on the room server an id is no password: taking over a link, being a co-host or coming back into a locked
+#      call needs the visit's own key (its id is the start of that key); its own key still reconnects.
 # Run against the TEST server: npx wrangler dev -c wrangler.test.toml --port 8798, then python safety2_test.py [base-url]
 
 import os
@@ -142,6 +144,63 @@ with sync_playwright() as p:
     dropped = h.evaluate("() => !(__S.mesh.sigIn || {})['eeeeeeee5'] && !__S.mesh.peers.has('eeeeeeee5')")
     check(dropped, "J10 the app drops a server handshake from someone the server never listed")  # pinned: safety round 2 J10
     ctx.close()
+
+    # J2: Host starts a locked call, Bea is let in and made co-host; then someone who knows Bea's id tries to be her
+    def joined(ctx, url, name, start=False):
+        pg = ctx.new_page()
+        pg.on("pageerror", lambda e: errors.append(f"pageerror (J2 {name}): {e}"))
+        pg.goto(url)
+        if start:
+            pg.click("#start")
+        pg.fill("#name", name)
+        pg.click("#enter")
+        return pg
+    hc = b.new_context(locale="en-US", permissions=["camera", "microphone"])
+    h = joined(hc, f"{BASE}/?signal={WS}", "Host", start=True)
+    h.wait_for_function("() => window.__S && __S.joined && __S.isHost", timeout=15000)
+    room = h.evaluate("() => __S.code")
+    bc = b.new_context(locale="en-US", permissions=["camera", "microphone"])
+    bea = joined(bc, f"{BASE}/r/{room}?signal={WS}", "Bea")
+    bea.wait_for_function("() => window.__S && __S.joined", timeout=15000)
+    bid = bea.evaluate("() => __S.mesh.id")
+    check(bid == bea.evaluate("() => __S.mesh.signer.pub.slice(0, 16)"), "J2 a visit's id is the start of its own key")  # pinned: safety round 2 J1/J2
+    h.evaluate("(id) => { __S.mesh.host({ t: 'cohost', id, on: true }); __S.mesh.host({ t: 'lock', on: true }) }", bid)
+    h.wait_for_function("(id) => __S.mesh.hosts.has(id) && __S.locked", arg=bid, timeout=5000)
+    raw = b.new_context().new_page()
+    raw.goto(BASE + "/privacy.html")
+    TRY = """async ([ws, room, id, extra]) => {
+      const s = new WebSocket(`${ws}/ws/${room}`);
+      const got = [];
+      let code = 0;
+      s.onmessage = (e) => got.push(JSON.parse(e.data).t);
+      s.onclose = (e) => (code = e.code);
+      await new Promise((ok) => (s.onopen = ok));
+      s.send(JSON.stringify({ t: "hello", id, name: "Not Bea", ...extra }));
+      await new Promise((r) => setTimeout(r, 1500));
+      return [code, got];
+    }"""
+    fake_ck = bea.evaluate("() => __S.mesh.signer.pub")  # her real key, but no signature from it
+    for what, extra in [("no proof", {}), ("her key without her signature", {"ck": fake_ck, "idp": "ab" * 64})]:
+        code, got = raw.evaluate(TRY, [WS, room, bid, extra])
+        alive = bea.evaluate("() => !!__S.mesh.ws && __S.mesh.ws.readyState === 1")
+        check(code == 4004 and "peers" not in got and alive, f"J2 someone with Bea's id ({what}) is refused and Bea stays ({code}, {got}, Bea connected: {alive})")  # pinned: safety round 2 J2
+    # Bea's own reload of the link (the same key) still comes straight back as co-host
+    bea.evaluate("() => __S.mesh.ws.close()")
+    t0 = __import__("time").time()
+    try:
+        bea.wait_for_function("() => !!__S.mesh.ws && __S.mesh.ws.readyState === 1 && __S.mesh.lost >= 1", timeout=20000)
+    except Exception:
+        pass
+    print(f"  (reconnect took {__import__('time').time() - t0:.1f} s)")
+    back = bea.evaluate("() => !!__S.mesh.ws && __S.mesh.ws.readyState === 1")
+    still = h.evaluate("(id) => __S.mesh.hosts.has(id)", bid)
+    check(back and still, f"J2 Bea's own reconnect comes back as co-host (connected: {back}, co-host: {still})")  # pinned: safety round 2 J2
+    # Bea leaves; her old id, unproven, is not let straight back into the locked call nor made co-host
+    bc.close()
+    h.wait_for_timeout(1500)
+    code, got = raw.evaluate(TRY, [WS, room, bid, {}])
+    check("waiting" in got and "peers" not in got, f"J2 Bea's old id without her key waits to be let in ({code}, {got})")  # pinned: safety round 2 J2
+    hc.close()
     b.close()
 
 print("\n" + ("ALL OK" if not errors else f"{len(errors)} FAILED:\n" + "\n".join(errors)))
