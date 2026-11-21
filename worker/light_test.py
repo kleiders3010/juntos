@@ -1,7 +1,7 @@
 # Adjust video lighting, like Meet's (Settings > Video > "Adjust video lighting"; Meet suggests it when you look
 # underexposed): a camera in a dark room gets the suggestion after a few seconds, turning it on makes the picture the
 # OTHER person receives brighter, it keeps working under a background effect, it is remembered, and it turns off.
-#   python worker/light_test.py [base-url]   (local: npx wrangler dev --port 8798)
+#   python worker/light_test.py [base-url]   (local: npx wrangler dev -c wrangler.test.toml --port 8798)
 import os
 import sys
 

@@ -4,7 +4,7 @@
 # device "too". Checked: the link carries a one-time code and her name, kept off the address bar; the lobby offers
 # "Switch here" and "Join here too" with her name filled in; after switching the old device leaves and says why,
 # the new one is a host and Beto sees one Ana; "Join here too" leaves nobody; a normal link shows "Join now" alone.
-#   python worker/switch_test.py [base-url]   (local: npx wrangler dev --port 8798)
+#   python worker/switch_test.py [base-url]   (local: npx wrangler dev -c wrangler.test.toml --port 8798)
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright

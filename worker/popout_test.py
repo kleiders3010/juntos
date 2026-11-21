@@ -1,7 +1,7 @@
 # A shared screen in its own window, like Meet's "Open in new window" (Workspace update 2026-02): Beto opens Ana's
 # shared screen in a window of its own, which shows her moving screen while his call shows the people; closing it
 # (or "Back to the call") brings it back, and it closes by itself when she stops sharing.
-#   python worker/popout_test.py [base-url]   (local: npx wrangler dev --port 8798)
+#   python worker/popout_test.py [base-url]   (local: npx wrangler dev -c wrangler.test.toml --port 8798)
 import os
 import sys
 

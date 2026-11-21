@@ -1,6 +1,6 @@
 # Backgrounds in a two-person call (headless Edge, fake camera, software GPU): the other person must keep
 # receiving a moving picture through every background change, after "None", and after the browser pauses the
-# hidden camera video (phones do). Run: python bg_test.py [base-url]  (local: npx wrangler dev --port 8798)
+# hidden camera video (phones do). Run: python bg_test.py [base-url]  (local: npx wrangler dev -c wrangler.test.toml --port 8798)
 import sys
 from playwright.sync_api import sync_playwright
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"

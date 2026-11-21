@@ -9,7 +9,7 @@
 # leaves, Carla's captions say they stopped (nobody else can); a browser that can't listen to a given voice doesn't
 # offer.
 # pinned: the names and words compared are the ones this test types.
-#   python worker/caphelp_test.py [base-url]   (local: npx wrangler dev --port 8798)
+#   python worker/caphelp_test.py [base-url]   (local: npx wrangler dev -c wrangler.test.toml --port 8798)
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright

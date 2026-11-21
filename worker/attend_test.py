@@ -4,7 +4,7 @@
 # Checked: Ana saves a .csv from People with everyone, their first join, last exit, time in the call and how many
 # times they joined; someone still there says so; Beto (not a host) has no such button; after Ana leaves she can
 # still save it, with her own time ended.
-#   python worker/attend_test.py [base-url]   (local: npx wrangler dev --port 8798)
+#   python worker/attend_test.py [base-url]   (local: npx wrangler dev -c wrangler.test.toml --port 8798)
 import csv
 import io
 import sys

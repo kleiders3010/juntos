@@ -6,7 +6,7 @@
 # Checked: Beto sees Ana's words in Spanish, while she talks and when she ends; his own words aren't translated;
 # someone who already speaks his language isn't translated; German needs a click, then works; the .txt keeps what was
 # said and the translation; "Don't translate" goes back; the choice is remembered; Carla gets it from another browser.
-#   python worker/captr_test.py [base-url]   (local: npx wrangler dev --port 8798)
+#   python worker/captr_test.py [base-url]   (local: npx wrangler dev -c wrangler.test.toml --port 8798)
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright

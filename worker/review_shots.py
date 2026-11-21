@@ -1,6 +1,6 @@
 # Screens for a cold review (C:/AI/Hub/docs/HARNESS.md "three Haiku reviews"), in the order someone meets them:
 # a computer at 1280x720 (the host, Ana), then a phone at 360x640 (Beto). Fake cameras; captions are a stub.
-#   python worker/review_shots.py <out folder> [base-url]   (local: npx wrangler dev --port 8798)
+#   python worker/review_shots.py <out folder> [base-url]   (local: npx wrangler dev -c wrangler.test.toml --port 8798)
 import os
 import sys
 sys.stdout.reconfigure(encoding='utf-8')

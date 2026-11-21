@@ -1,7 +1,7 @@
 # Recording layout with two people, one holding a phone upright (a portrait camera): the file must be landscape,
 # the portrait person must be shown whole (not cut), and whoever talks takes the big spot.
 # Saves frames as PNG next to the file for a look. Run: python rec_layout_test.py [base-url]
-# (start the local server first: npx wrangler dev --port 8798). Needs ffmpeg/ffprobe on PATH.
+# (start the local server first: npx wrangler dev -c wrangler.test.toml --port 8798). Needs ffmpeg/ffprobe on PATH.
 import sys, os, json, subprocess, tempfile
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
