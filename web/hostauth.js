@@ -21,7 +21,14 @@ const te = new TextEncoder();
 const digest = async (s) => new Uint8Array(await crypto.subtle.digest("SHA-256", te.encode(s)));
 
 // codes look like "kfa-rmzq-tde": easy to read out loud, nothing to mix up (no l/1/o/0)
+// A new call's code: 15 letters (abcde-fghij-kmnpq) from the host's public key (safety round 2, J3: with 10 letters
+// a graphics card could find a key that makes a chosen code, or the code behind a relay tag, in hours). Calls made
+// before keep their 10-letter code (abc-defg-hij) and still prove their host the old way.
 export function codeOf(pub) {
+  const s = Array.from(pub.subarray(0, 15), (b) => ABC[b % ABC.length]).join("");
+  return `${s.slice(0, 5)}-${s.slice(5, 10)}-${s.slice(10)}`;
+}
+export function oldCodeOf(pub) {
   const s = Array.from(pub.subarray(0, 10), (b) => ABC[b % ABC.length]).join("");
   return `${s.slice(0, 3)}-${s.slice(3, 7)}-${s.slice(7)}`;
 }
@@ -42,7 +49,7 @@ export function pubOf(key) {
   }
 }
 
-export const ownsCode = (pub, code) => HEX64.test(pub || "") && codeOf(unhex(pub)) === code;
+export const ownsCode = (pub, code) => HEX64.test(pub || "") && (codeOf(unhex(pub)) === code || oldCodeOf(unhex(pub)) === code);
 
 /** A key for this visit (signs my documents if I'm made a co-host). */
 export function newSigner() {

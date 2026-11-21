@@ -11,6 +11,8 @@
 # J4:  nobody becomes host by asking first; the host's lock and passcode reach both room servers (two game-host
 #      copies here, kinetic/server.mjs); moving server on a relay word needs a connected person or the host.
 # J13: the host's secret key is never sent: the host proves it with a signature.
+# J3:  new calls get 15-letter codes; old 10-letter codes still prove their host; the relay tag and key come from the
+#      code through a slow hash.
 # Run against the TEST server: npx wrangler dev -c wrangler.test.toml --port 8798, then python safety2_test.py [base-url]
 
 import os
@@ -256,6 +258,40 @@ with sync_playwright() as p:
     }""")
     check(seen == [False, True], f"J1 a relay message counts only as the one who signed it (claimed id taken: {seen[0]}, own id taken: {seen[1]})")  # pinned: safety round 2 J1
     ctx.close()
+
+    # J3
+    pg = b.new_context().new_page()
+    pg.on("pageerror", lambda e: errors.append(f"pageerror (J3): {e}"))
+    pg.goto(BASE + "/privacy.html")
+    r = pg.evaluate("""async ([base, ws]) => {
+      const ha = await import(base + "/hostauth.js");
+      const nsig = await import(base + "/nsig.js");
+      const fresh = ha.newHost();
+      // an old call: a key whose old 10-letter code is the room
+      const old = ha.newHost();
+      const oldCode = ha.oldCodeOf(Uint8Array.from(ha.pubOf(old.key).match(/../g), (h) => parseInt(h, 16)));
+      const hello = await ha.hostHello(old.key, oldCode, {});
+      const s = new WebSocket(`${ws}/ws/${oldCode}`);
+      const got = [];
+      s.onmessage = (e) => got.push(JSON.parse(e.data));
+      await new Promise((ok) => (s.onopen = ok));
+      s.send(JSON.stringify(hello));
+      await new Promise((r) => setTimeout(r, 1200));
+      s.close();
+      const room = got.find((m) => m.t === "room") || {};
+      // the relay tag of a call: not the plain hash of its code any more
+      const n = new nsig.NostrSignal({ room: fresh.code, relays: ["wss://down.invalid"], onMsg() {} });
+      const t0 = performance.now();
+      await n.ready;
+      n.closed = true;
+      const plain = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode("juntos-topic|" + fresh.code))), (b) => b.toString(16).padStart(2, "0")).join("");
+      return { code: fresh.code, owns: ha.ownsCode(ha.pubOf(fresh.key), fresh.code), oldOwns: ha.ownsCode(ha.pubOf(old.key), oldCode),
+               oldHost: !!room.owner, sentKey: JSON.stringify(hello).includes(old.key), slowTag: n.topic !== plain && /^[0-9a-f]{64}$/.test(n.topic),
+               rounds: nsig.SLOW_ROUNDS, ms: Math.round(performance.now() - t0) };
+    }""", [BASE, WS])
+    check(re.fullmatch(r"[a-z]{5}-[a-z]{5}-[a-z]{5}", r["code"]) and r["owns"], f"J3 a new call's code has 15 letters and its key owns it ({r['code']})")  # pinned: safety round 2 J3
+    check(r["oldOwns"] and r["oldHost"] and not r["sentKey"], f"J3 an old 10-letter code still proves its host, on the server too, without the key ({r})")  # pinned: safety round 2 J3
+    check(r["slowTag"] and r["rounds"] >= 100000, f"J3 the relay tag comes through a slow hash ({r['rounds']} rounds, {r['ms']} ms here)")  # pinned: safety round 2 J3
 
     # J4 + J13 on two room servers
     subprocess.run(["node", "pack.mjs"], cwd=KIN, check=True, capture_output=True)

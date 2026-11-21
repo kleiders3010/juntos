@@ -18,9 +18,10 @@ const cleanName = (v, n) => String(v ?? "").replace(/\s+/g, " ").replace(INVISIB
 // The call's code is made from the host's public key (web/hostauth.js codeOf): whoever holds a key that makes
 // this code started the call (APP-RULES safety 2). Old calls (a random code) can't prove it and keep the old rule.
 const CABC = "abcdefghijkmnpqrstuvwxyz";
-const codeOfPub = (pub) => {
-  const s = Array.from(pub.subarray(0, 10), (b) => CABC[b % CABC.length]).join("");
-  return `${s.slice(0, 3)}-${s.slice(3, 7)}-${s.slice(7)}`;
+// 15 letters for new calls (5-5-5), 10 for calls made before 2026-11-21 (3-4-3): web/hostauth.js codeOf / oldCodeOf
+const codesOfPub = (pub) => {
+  const s = Array.from(pub.subarray(0, 15), (b) => CABC[b % CABC.length]).join("");
+  return [`${s.slice(0, 5)}-${s.slice(5, 10)}-${s.slice(10)}`, `${s.slice(0, 3)}-${s.slice(3, 7)}-${s.slice(7, 10)}`];
 };
 // The host proves it holds the key that makes this code by signing this visit's id (web/hostauth.js helloProof);
 // the key itself never comes here (safety round 2, J13). The id is proven too (idProven), so a proof seen once
@@ -29,7 +30,7 @@ async function hostOk(msg, room, id) {
   if (typeof msg.hp !== "string" || !/^[0-9a-f]{64}$/.test(msg.hp) || typeof msg.hsig !== "string" || !/^[0-9a-f]{128}$/.test(msg.hsig)) return false;
   try {
     const pub = Uint8Array.from(msg.hp.match(/../g), (h) => parseInt(h, 16));
-    if (codeOfPub(pub) !== room) return false;
+    if (!codesOfPub(pub).includes(room)) return false;
     const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`juntos-hello|${room}|${id}`)));
     return await schnorr.verifyAsync(Uint8Array.from(msg.hsig.match(/../g), (h) => parseInt(h, 16)), d, pub);
   } catch (_) {
@@ -40,7 +41,7 @@ async function hostOk(msg, room, id) {
 export function keyMakesCode(key, code) {
   if (!/^[0-9a-f]{64}$/.test(key || "")) return false;
   try {
-    return codeOfPub(schnorr.getPublicKey(Uint8Array.from(key.match(/../g), (h) => parseInt(h, 16)))) === code;
+    return codesOfPub(schnorr.getPublicKey(Uint8Array.from(key.match(/../g), (h) => parseInt(h, 16)))).includes(code);
   } catch (_) {
     return false;
   }

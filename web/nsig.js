@@ -43,6 +43,10 @@ const td = new TextDecoder();
 const hex = (u) => Array.from(u, (b) => b.toString(16).padStart(2, "0")).join("");
 const sha = async (s) => new Uint8Array(await crypto.subtle.digest("SHA-256", typeof s === "string" ? te.encode(s) : s));
 const b64 = (u) => btoa(String.fromCharCode(...u));
+export const SLOW_ROUNDS = 210000; // PBKDF2-SHA256 rounds for the relay tag and key
+const slow = async (code) =>
+  new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: te.encode("juntos-relay|2"), iterations: SLOW_ROUNDS },
+    await crypto.subtle.importKey("raw", te.encode(code), "PBKDF2", false, ["deriveBits"]), 256));
 const unb64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const unhexb = (s) => Uint8Array.from(s.match(/../g) || [], (h) => parseInt(h, 16));
 
@@ -66,10 +70,13 @@ export class NostrSignal {
   }
 
   async start() {
-    const topic = hex(await sha("juntos-topic|" + this.room));
+    // the tag and the key come from the code through a slow hash (safety round 2, J3): whoever reads the public tag
+    // can't try codes against it fast enough to find the call (about 0.1 s here, once per call)
+    const base = hex(await slow(this.room));
+    const topic = hex(await sha("juntos-topic|" + base));
     this.topic = topic;
     this.kind = 20000 + (parseInt(topic.slice(0, 6), 16) % 10000);
-    this.key = await crypto.subtle.importKey("raw", await sha("juntos-key|" + this.room), "AES-GCM", false, ["encrypt", "decrypt"]);
+    this.key = await crypto.subtle.importKey("raw", await sha("juntos-key|" + base), "AES-GCM", false, ["encrypt", "decrypt"]);
     // the same relays on every device in this call: ordered by a hash of (call, relay)
     const ranked = await Promise.all(this.list.map(async (u) => [hex(await sha(topic + u)), u]));
     this.order = ranked.sort((a, b) => (a[0] < b[0] ? -1 : 1)).map((x) => x[1]);

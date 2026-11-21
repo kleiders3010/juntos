@@ -105,6 +105,14 @@ class Pages(http.server.SimpleHTTPRequestHandler):
 if not LIVE:
     site = os.path.join(os.environ.get("TEMP", "/tmp"), "juntos_mirror_test")
     subprocess.run(["node", os.path.join(ROOT, "tools", "mirror.mjs"), os.path.join(site, "juntos"), "/juntos/"], check=True)
+    # the shipped pages' CSP has no localhost (safety round 2, J15): this local copy gets it, like wrangler.test.toml does
+    for dirpath, _, names in os.walk(os.path.join(site, "juntos")):
+        for n in names:
+            if n.endswith(".html"):
+                f = os.path.join(dirpath, n)
+                h = open(f, encoding="utf-8").read()
+                h = __import__("re").sub(r"(connect-src [^;\"]*)", lambda m: m.group(1) + " http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*", h, count=1)
+                open(f, "w", encoding="utf-8", newline="").write(h)
     srv = Server(("127.0.0.1", 8821), functools.partial(Pages, directory=site))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     threading.Thread(target=run_relay, daemon=True).start()
