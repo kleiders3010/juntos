@@ -89,9 +89,22 @@ export default {
     }
     if (url.pathname === "/health") return new Response("ok");
     if (url.pathname === "/turn") return turn(req, env);
+    // tests only (wrangler.test.toml: every request comes here first): the pages as shipped, plus this computer in
+    // their CSP so test relays and test servers on other local ports can be reached. Never set when deployed.
+    if (env.TEST_LOCAL_CSP === "1" && env.ASSETS) return testPage(req, env);
     return new Response("not found", { status: 404 });
   },
 };
+
+const LOCAL_CSP = " http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*";
+async function testPage(req, env) {
+  const r = await env.ASSETS.fetch(req);
+  if (!(r.headers.get("content-type") || "").includes("text/html")) return r;
+  const html = (await r.text()).replace(/(connect-src [^;"]*)/, (m) => m + LOCAL_CSP);
+  const h = new Headers(r.headers);
+  h.delete("content-length");
+  return new Response(html, { status: r.status, headers: h });
+}
 
 // Relay (TURN) credentials, only for people whose direct connection failed. Cloudflare's free
 // allowance is 1,000 GB a month (shared with its SFU); past it, it bills. So the number of

@@ -1,0 +1,26 @@
+# TESTS ONLY, never deployed: npx wrangler dev -c wrangler.test.toml --port 8798
+# Same as wrangler.toml, but every request passes the Worker, which adds this computer to the pages' CSP
+# (the shipped pages have no localhost in it: safety round 2, J15).
+# Juntos: the web app (static files) and its signaling (one Durable Object per room), one Worker.
+# Free plan: SQLite-backed Durable Objects, static assets.
+name = "juntos-signal-test"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = false
+
+[assets]
+directory = "../web"
+not_found_handling = "single-page-application"
+run_worker_first = true
+binding = "ASSETS"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
+[vars]
+TEST_LOCAL_CSP = "1"
