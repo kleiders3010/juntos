@@ -13,6 +13,10 @@
 # J13: the host's secret key is never sent: the host proves it with a signature.
 # J3:  new calls get 15-letter codes; old 10-letter codes still prove their host; the relay tag and key come from the
 #      code through a slow hash.
+# J5:  a helper that passes someone's sound and picture on is taken only when I asked that one (or my own link to
+#      that person gave up); a working link is never replaced.
+# J7:  per-address limits on both servers (the Worker's JOINS, the game host's links and new rooms per minute, a cap
+#      on stored rooms), and a made-up room with one visitor stores nothing.
 # Run against the TEST server: npx wrangler dev -c wrangler.test.toml --port 8798, then python safety2_test.py [base-url]
 
 import os
@@ -64,6 +68,12 @@ for k in ("const INVISIBLE", "const LONE_JOINER"):
 
 DIRTY = "A\u202eB\u200bC\u0007  D\u2066"  # direction flip, invisible space, a control character, a lone isolate
 CLEAN = "ABC D"
+
+# J7: the Worker counts new links and lobby questions per address before waking a room
+for f in ("wrangler.toml", "wrangler.test.toml"):
+    t = open(os.path.join(WEB, "..", "worker", f), encoding="utf-8").read()
+    check('name = "JOINS"' in t and "[[ratelimits]]" in t, f"J7 {f} has the JOINS limit")  # pinned: safety round 2 J7
+check("env.JOINS.limit" in srv, "J7 the Worker checks it on /ws and /info")  # pinned: safety round 2 J7
 
 with sync_playwright() as p:
     b = p.chromium.launch(headless=True, channel="msedge", args=ARGS)
@@ -259,6 +269,50 @@ with sync_playwright() as p:
     check(seen == [False, True], f"J1 a relay message counts only as the one who signed it (claimed id taken: {seen[0]}, own id taken: {seen[1]})")  # pinned: safety round 2 J1
     ctx.close()
 
+    # J5, on one device with stand-in people: Zoe (connected to me) offers to pass on Lo (lower id) and Hi (higher id)
+    ctx = b.new_context(locale="en-US", permissions=["camera", "microphone"])
+    h = ctx.new_page()
+    h.on("pageerror", lambda e: errors.append(f"pageerror (J5): {e}"))
+    h.goto(f"{BASE}/?signal={WS}")
+    h.click("#start")
+    h.fill("#name", "Me")
+    h.click("#enter")
+    h.wait_for_function("() => window.__S && __S.joined", timeout=15000)
+    r = h.evaluate("""() => {
+      const m = __S.mesh, f = m.fwd;
+      const stub = (id, more) => ({ id, pc: null, dc: { readyState: "open", send() {} }, name: id, stream: new MediaStream(), audio: null, video: null, state: "connecting", cid: "", ...more });
+      const LO = "0000000000000000", HI = "ffffffffffffffff";
+      m.peers.set("zoe0000000000000", stub("zoe0000000000000", { state: "connected" }));
+      const res = {};
+      // a working link is never replaced
+      const live = stub(HI, { state: "connected", helper: "zoe0000000000000" });
+      m.peers.set(HI, live);
+      f.on("zoe0000000000000", HI, "s1", "x");
+      res.keptWorking = m.peers.get(HI) === live;
+      // I asked for help with HI (higher id: I'm the one who asks) but picked someone else
+      m.peers.set(HI, stub(HI, { gaveUp: true, helper: "someoneelse00000" }));
+      f.on("zoe0000000000000", HI, "s2", "x");
+      res.unasked = !m.peers.get(HI).via;
+      m.peers.get(HI).helper = "zoe0000000000000";
+      f.on("zoe0000000000000", HI, "s3", "x");
+      res.asked = m.peers.get(HI).via === "zoe0000000000000";
+      // LO asks, I wait: an offer before my own link gave up waits; when it gives up, it is taken
+      const lo = stub(LO, {});
+      m.peers.set(LO, lo);
+      f.on("zoe0000000000000", LO, "s4", "x");
+      res.early = m.peers.get(LO) === lo;
+      lo.gaveUp = true;
+      f.gaveUp(lo);
+      res.afterGiveUp = m.peers.get(LO).via === "zoe0000000000000";
+      // someone not in the call at all
+      f.on("zoe0000000000000", "nobody0000000000", "s5", "x");
+      res.stranger = !m.peers.has("nobody0000000000");
+      for (const id of [LO, HI, "zoe0000000000000"]) m.peers.delete(id);
+      return res;
+    }""")
+    check(all(r.values()), f"J5 a helper is taken only when owed, never over a working link ({r})")  # pinned: safety round 2 J5
+    ctx.close()
+
     # J3
     pg = b.new_context().new_page()
     pg.on("pageerror", lambda e: errors.append(f"pageerror (J3): {e}"))
@@ -350,6 +404,33 @@ with sync_playwright() as p:
         key = h.evaluate("(c) => localStorage.getItem(`juntos.host.${c}`)", code)
         check(bool(key) and not any(key in f for f in sent), f"J13 the host's secret key is never sent ({len(sent)} messages checked)")  # pinned: safety round 2 J13
         hc.close()
+
+        # J7 on a copy with low limits: 5 links a minute per address, 3 new rooms a minute
+        data = tempfile.mkdtemp(prefix="juntos-s2-limits-")
+        env = {**os.environ, "PORT": "8817", "BIND": "127.0.0.1", "DATA_DIR": data, "JOIN_LIMIT": "5", "NEW_PER_MINUTE": "3"}
+        kin.append(subprocess.Popen(["node", "server.mjs"], cwd=KIN, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=0x08000000))
+        for _ in range(100):
+            try:
+                urllib.request.urlopen("http://127.0.0.1:8817/health", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.1)
+        OPENS = """async ([url, rooms]) => {
+          const out = [];
+          for (const room of rooms) out.push(await new Promise((ok) => {
+            const s = new WebSocket(`${url}/ws/${room}`);
+            s.onopen = () => { s.send(JSON.stringify({ t: "hello", id: "kkkkkkkk" + out.length, name: "K" })); setTimeout(() => (s.close(), ok(true)), 300) };
+            s.onerror = () => ok(false);
+          }));
+          return out;
+        }"""
+        got = raw.evaluate(OPENS, ["ws://127.0.0.1:8817", ["jfo-tqbx-wa1", "jfo-tqbx-wa2", "jfo-tqbx-wa3", "jfo-tqbx-wa4"]])
+        check(got == [True, True, True, False], f"J7 the game host opens at most 3 new rooms a minute per address ({got})")  # pinned: safety round 2 J7
+        time.sleep(0.6)
+        files = [f for f in os.listdir(data) if not f.startswith(".")]
+        check(not files, f"J7 a made-up room with one visitor stores nothing ({files})")  # pinned: safety round 2 J7
+        got = raw.evaluate(OPENS, ["ws://127.0.0.1:8817", ["jfo-tqbx-wa1", "jfo-tqbx-wa1"]])
+        check(got == [True, False], f"J7 and takes at most 5 links a minute per address ({got})")  # pinned: safety round 2 J7
     finally:
         for k in kin:
             k.kill()

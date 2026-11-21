@@ -23,6 +23,7 @@ export class Fwd {
     this.asked = new Map(); // id -> time I asked my connections for a helper to them
     this.via = new Map(); // stream id (from a helper) -> whose sound and video it carries
     this.early = new Map(); // stream id -> tracks that came before the helper's _fwdon
+    this.earlyOn = new Map(); // id -> a helper's _fwdon that came before my own link to them gave up (J5)
     this.helping = new Map(); // "a|b" -> { a, b, senders: { [id]: RTCRtpSender[] } }
     this.chains = new Map(); // id -> promise: sealed messages to them leave in order
     this.stats = { asked: 0, helped: 0, sealedOut: 0, sealedIn: 0, unreadable: 0 };
@@ -59,6 +60,15 @@ export class Fwd {
     const m = this.m;
     if (of === m.id || typeof sid !== "string" || !m.peers.has(from)) return;
     const old = m.peers.get(of);
+    // Only a helper I'm owed (safety round 2, J5): `of` is someone already in the call; the side that asked takes only
+    // the helper it picked; the other side only once its own direct link to them has given up (an offer that comes
+    // a little early waits for that, 30 s at most). A working link is never replaced.
+    if (!old) return;
+    if (old.via !== from) {
+      if (old.state === "connected" || (old.pc && old.pc.connectionState === "connected")) return;
+      if (m.id < of && old.helper !== from) return;
+      if (m.id > of && !old.gaveUp) return void this.earlyOn.set(of, { from, sid, name, at: Date.now() });
+    }
     if (old && old.via === from) {
       this.via.set(sid, of);
     } else {
@@ -99,6 +109,13 @@ export class Fwd {
     for (const t of p.stream.getTracks()) if (t.kind === track.kind && t !== track) p.stream.removeTrack(t);
     if (!p.stream.getTracks().includes(track)) p.stream.addTrack(track);
     this.m.emit("peer", { id: of });
+  }
+
+  // my direct link to p gave up (rtc.js giveUp): a helper's offer that came before it is taken now
+  gaveUp(p) {
+    const w = this.earlyOn.get(p.id);
+    this.earlyOn.delete(p.id);
+    if (w && Date.now() - w.at < 30000) this.on(w.from, p.id, w.sid, w.name);
   }
 
   // the helper stopped (it left, or lost one of us): try the direct way again

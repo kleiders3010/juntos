@@ -794,6 +794,7 @@ export class Mesh extends EventTarget {
     this.emit("peer", { id: p.id });
     // no direct way and no relay: someone connected to both of us can pass things on
     this.fwd.need(p);
+    this.fwd.gaveUp(p);
   }
 
   /** "Try again" on someone we couldn't reach: a brand-new connection (with the relay), offered by us. */
