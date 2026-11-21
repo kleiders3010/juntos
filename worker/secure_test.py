@@ -23,10 +23,17 @@ def check(ok, what):
         errors.append(what)
 
 
+# the live site spreads calls over two room servers (web/rtc.js serverIndex): ask each, keep the one the call is on
+SERVERS = [WS] + (["wss://games.jurisgames.com/juntos"] if BASE.startswith("https://meet.") else [])
+
+
 def info(code):
-    req = urllib.request.Request(f"{WS.replace('ws', 'http', 1)}/info/{code}", headers={"User-Agent": "Mozilla/5.0 (juntos-test)"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.loads(r.read())
+    got = []
+    for url in SERVERS:
+        req = urllib.request.Request(f"{url.replace('ws', 'http', 1)}/info/{code}", headers={"User-Agent": "Mozilla/5.0 (juntos-test)"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            got.append(json.loads(r.read()))
+    return next((g for g in got if g.get("server")), got[0])
 
 
 def people(pg):
@@ -51,7 +58,12 @@ with sync_playwright() as p:
         pg.goto(url)
         pg.wait_for_selector("#lobby:not([hidden])")
         pg.fill("#name", name)
-        pg.wait_for_timeout(800)  # the lobby has asked whether a passcode is needed
+        # the lobby has asked whether a passcode is needed: that request done (a fixed wait was too short live)
+        try:
+            pg.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+        pg.wait_for_timeout(300)
         return pg
 
     def try_pass(pg, code):
@@ -81,6 +93,10 @@ with sync_playwright() as p:
     a.click("#enter")
     a.wait_for_function("() => __S.joined", timeout=15000)
     code = a.evaluate("__S.code")
+    try:
+        a.wait_for_function("() => __S.isHost && __S.locked && __S.hasPass", timeout=10000)
+    except Exception:
+        pass
     check(a.evaluate("__S.isHost && __S.locked && __S.hasPass"), "the call starts locked and with a passcode")
     check(info(code) == {"pass": True, "server": True}, "the server only says that a passcode is needed (and that the call uses the server)")
     plain = f"{BASE}/r/{code}{SIG}"

@@ -25,6 +25,13 @@ export function randomId() {
   return Array.from(a, (b) => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
 }
 
+// Which of the room servers a call starts on: spread by its code, so both carry calls. The lobby asks the same one.
+export function serverIndex(room, n) {
+  let h = 0;
+  for (const c of room) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return n > 1 ? h % n : 0;
+}
+
 export class Mesh extends EventTarget {
   constructor({ room, name, signalUrl, backupUrl, key, knock, pass, opts, relays }) {
     super();
@@ -46,9 +53,7 @@ export class Mesh extends EventTarget {
     // can't be reached, the other. Kleider, 2026-11-18: "all parts of the app should work even if one the pieces
     // break down".
     this.servers = [signalUrl, backupUrl].filter(Boolean);
-    let h = 0;
-    for (const c of room) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-    this.si = this.servers.length > 1 ? h % this.servers.length : 0;
+    this.si = serverIndex(room, this.servers.length);
     this.fails = 0; // servers that failed to open in a row
     this.id = randomId();
     this.peers = new Map(); // id -> { pc, dc, name, stream, audio, video }

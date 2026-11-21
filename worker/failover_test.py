@@ -176,6 +176,11 @@ try:
             used = a.evaluate("__S.mesh.srvUrl")
             port = int(used.rsplit(":", 1)[1])
             other = [pt for pt in PORTS if pt != port][0]
+            # the host's passcode reaches the server a moment after Beto has moved there
+            for _ in range(20):
+                if info(port, code)["pass"]:
+                    break
+                time.sleep(0.25)
             check(o.evaluate("__S.mesh.srvUrl") == used and info(port, code)["pass"], f"both on the server the call's code picked ({port}), the passcode there")
             cid = a.evaluate("[...__S.mesh.peers.values()][0].cid")
             stop(port)

@@ -1,6 +1,6 @@
 import "./keys.js";
 import { cleanName } from "./names.js";
-import { Mesh, randomId } from "./rtc.js";
+import { Mesh, randomId, serverIndex } from "./rtc.js";
 import { newHost } from "./hostauth.js";
 import { Background, BACKGROUNDS } from "./bg.js";
 import { Light, watchDark } from "./light.js";
@@ -577,12 +577,18 @@ async function askPass(msg) {
   // the link already carries the passcode: no need to ask the server (each ask counts against its free daily requests)
   if (box.value) return (box.hidden = false);
   // through the relays the lobby doesn't ask the server either: a call that needs a passcode says so on joining
-  if (RELAYS) return;
-  try {
-    const r = await (await fetch(`${SIGNAL.replace(/^ws/, "http")}/info/${S.code}`, { cache: "no-store" })).json();
-    box.hidden = !r.pass;
-    if (r.pass && !box.value) $("lobbyMsg").textContent = t("This call has a passcode. Type it to join.");
-  } catch {}
+  if (RELAYS?.length) return;
+  // the call's own room server first (calls are spread over both), then the other one (a call moved after a failure)
+  const servers = [SIGNAL, SIGNAL2].filter(Boolean);
+  const first = serverIndex(S.code, servers.length);
+  for (const url of [servers[first], ...servers.filter((_, k) => k !== first)])
+    try {
+      const r = await (await fetch(`${url.replace(/^ws/, "http")}/info/${S.code}`, { cache: "no-store" })).json();
+      if (!r.pass && !r.server) continue;
+      box.hidden = !r.pass;
+      if (r.pass && !box.value) $("lobbyMsg").textContent = t("This call has a passcode. Type it to join.");
+      return;
+    } catch {}
 }
 // the passcode wasn't right (or is missing): back to the lobby to type it
 function passRefused(m) {
@@ -2649,7 +2655,8 @@ function renderPeople() {
     ul.append(permRow());
     if (focus && focus.isConnected) {
       focus.focus();
-      focus.setSelectionRange(...sel);
+      // a button in the row (Save, Cancel) can hold focus: only a text field gets its cursor back
+      if (typeof focus.setSelectionRange === "function" && sel[0] != null) focus.setSelectionRange(...sel);
     }
   }
   if (S.locked) {
