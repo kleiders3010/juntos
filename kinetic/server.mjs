@@ -32,6 +32,15 @@ const MAX_SOCKETS = 3000;
 const MAX_MSG = 64 * 1024;
 mkdirSync(DATA, { recursive: true });
 
+// What the sweep needs to know of each room file on disk: read once at start, then kept up to date on every write,
+// so the sweep never re-reads the folder (APP-RULES safety 14: work proportional to what changed).
+const disk = new Map(); // file -> { name, alarm, ... }
+const summary = (m) => ({ name: m.__name || "", alarm: Number(m.__alarm) || 0, seen: Number(m.seen) || 0 });
+for (const f of readdirSync(DATA)) {
+  if (!f.endsWith(".json")) continue;
+  try { disk.set(join(DATA, f), summary(JSON.parse(readFileSync(join(DATA, f), "utf8")))); } catch (_) {}
+}
+
 // ---- the Durable Object stand-in ----
 
 const fileOf = (name) => join(DATA, createHash("sha256").update(name).digest("hex").slice(0, 32) + ".json");
@@ -51,9 +60,14 @@ class Storage {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       try {
-        if (!this.map.size) return void unlinkSync(this.file);
-        writeFileSync(this.file + ".tmp", JSON.stringify(Object.fromEntries(this.map)));
+        if (!this.map.size) {
+          disk.delete(this.file);
+          return void unlinkSync(this.file);
+        }
+        const all = Object.fromEntries(this.map);
+        writeFileSync(this.file + ".tmp", JSON.stringify(all));
         renameSync(this.file + ".tmp", this.file);
+        disk.set(this.file, summary(all));
       } catch (_) {}
     }, 200);
   }
@@ -134,12 +148,11 @@ async function sweep(force) {
   }
   // rooms on disk only: their alarms (a room forgotten a month after it was last used)
   if (!force)
-    for (const f of readdirSync(DATA)) {
-      if (!f.endsWith(".json")) continue;
-      try {
-        const m = JSON.parse(readFileSync(join(DATA, f), "utf8"));
-        if (m.__alarm && m.__alarm <= now && m.seen && now - m.seen > 31 * 24 * 3600 * 1000) unlinkSync(join(DATA, f));
-      } catch (_) {}
+    for (const [file, s] of [...disk]) {
+      if (s.alarm && s.alarm <= now && s.seen && now - s.seen > 31 * 24 * 3600 * 1000) {
+        disk.delete(file);
+        try { unlinkSync(file); } catch (_) {}
+      }
     }
 }
 setInterval(sweep, 60 * 1000).unref();
