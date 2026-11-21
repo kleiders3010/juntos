@@ -80,7 +80,7 @@ class Storage {
         writeFileSync(this.file + ".tmp", JSON.stringify(all));
         renameSync(this.file + ".tmp", this.file);
         disk.set(this.file, summary(all));
-      } catch (_) {}
+      } catch (e) { console.error("juntos: writing a room failed:", e && e.message); } // said, never silent (APP-RULES safety 45)
     }, 200);
   }
   async get(k) {
