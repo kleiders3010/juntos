@@ -8,6 +8,9 @@
 #      call needs the visit's own key (its id is the start of that key); its own key still reconnects.
 # J1:  on the relays the sender is the key that signed the event (checked in the browser), and an id is the start
 #      of that key: nobody can speak as someone else.
+# J4:  nobody becomes host by asking first; the host's lock and passcode reach both room servers (two game-host
+#      copies here, kinetic/server.mjs); moving server on a relay word needs a connected person or the host.
+# J13: the host's secret key is never sent: the host proves it with a signature.
 # Run against the TEST server: npx wrangler dev -c wrangler.test.toml --port 8798, then python safety2_test.py [base-url]
 
 import os
@@ -15,6 +18,13 @@ import re
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
+import subprocess
+import tempfile
+import time
+import urllib.request
+
+KIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "kinetic")
+KPORTS = [8815, 8816]  # two copies of the room server (the game host's), for the two-server checks
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
@@ -246,6 +256,68 @@ with sync_playwright() as p:
     }""")
     check(seen == [False, True], f"J1 a relay message counts only as the one who signed it (claimed id taken: {seen[0]}, own id taken: {seen[1]})")  # pinned: safety round 2 J1
     ctx.close()
+
+    # J4 + J13 on two room servers
+    subprocess.run(["node", "pack.mjs"], cwd=KIN, check=True, capture_output=True)
+    kin = []
+    for port in KPORTS:
+        env = {**os.environ, "PORT": str(port), "BIND": "127.0.0.1", "DATA_DIR": tempfile.mkdtemp(prefix=f"juntos-s2-{port}-")}
+        kin.append(subprocess.Popen(["node", "server.mjs"], cwd=KIN, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=0x08000000))
+    try:
+        for port in KPORTS:
+            for _ in range(100):
+                try:
+                    urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=1)
+                    break
+                except Exception:
+                    time.sleep(0.1)
+            else:
+                raise RuntimeError(f"room server copy on {port} did not start (port in use?)")
+        S1, S2 = (f"ws://127.0.0.1:{pt}" for pt in KPORTS)
+        raw = b.new_context().new_page()
+        raw.goto(BASE + "/privacy.html")
+        HELLO = """async ([url, room, hello]) => {
+          const s = new WebSocket(`${url}/ws/${room}`);
+          const got = [];
+          s.onmessage = (e) => got.push(JSON.parse(e.data));
+          await new Promise((ok, no) => { s.onopen = ok; s.onerror = no });
+          s.send(JSON.stringify({ t: "hello", name: "X", ...hello }));
+          await new Promise((r) => setTimeout(r, 1200));
+          s.close();
+          return got;
+        }"""
+        # an empty room with a code-like name: asking first with some key makes nobody host
+        got = raw.evaluate(HELLO, [S1, "jfo-tqbx-wmk", {"id": "ffffffff6", "key": "ab" * 32, "claim": True, "opts": {"pass": "1234"}}])
+        room = next((m for m in got if m.get("t") == "room"), {})
+        check(room and not room.get("host") and not room.get("pass"), f"J4 asking first with a key that doesn't make the code gives no host role and sets nothing ({room})")  # pinned: safety round 2 J4
+
+        hc = b.new_context(locale="en-US", permissions=["camera", "microphone"])
+        h = hc.new_page()
+        h.on("pageerror", lambda e: errors.append(f"pageerror (J4): {e}"))
+        sent = []
+        h.on("websocket", lambda w: w.on("framesent", lambda f: sent.append(f if isinstance(f, str) else str(f))))
+        h.goto(f"{BASE}/?signal={S1}&signal2={S2}")
+        h.click("#start")
+        h.fill("#name", "Host")
+        h.click("#enter")
+        h.wait_for_function("() => window.__S && __S.joined && __S.isHost", timeout=20000)
+        code, here = h.evaluate("() => [__S.code, __S.mesh.servers[__S.mesh.si]]")
+        other = S2 if here == S1 else S1
+        h.evaluate("() => { __S.mesh.host({ t: 'pass', pass: '7391' }); __S.mesh.host({ t: 'lock', on: true }) }")
+        h.wait_for_timeout(2500)
+        got = raw.evaluate(HELLO, [other, code, {"id": "gggggggg7"}])
+        check(any(m.get("t") == "passcode" for m in got), f"J4 the passcode set during the call holds on the other server too ({[m.get('t') for m in got]})")  # pinned: safety round 2 J4
+        got = raw.evaluate(HELLO, [other, code, {"id": "hhhhhhhh8", "pass": "7391"}])
+        # (with no host on that server a locked call still lets people in: nobody there could answer them)
+        locked = any(m.get("t") == "room" and m.get("locked") for m in got) or any(m.get("t") == "waiting" for m in got)
+        check(locked, f"J4 so does the lock ({[m.get('t') for m in got]})")  # pinned: safety round 2 J4
+        key = h.evaluate("(c) => localStorage.getItem(`juntos.host.${c}`)", code)
+        check(bool(key) and not any(key in f for f in sent), f"J13 the host's secret key is never sent ({len(sent)} messages checked)")  # pinned: safety round 2 J13
+        hc.close()
+    finally:
+        for k in kin:
+            k.kill()
+            k.wait()
     b.close()
 
 print("\n" + ("ALL OK" if not errors else f"{len(errors)} FAILED:\n" + "\n".join(errors)))

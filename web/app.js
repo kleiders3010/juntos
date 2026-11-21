@@ -1,7 +1,7 @@
 import "./keys.js";
 import { cleanName } from "./names.js";
 import { Mesh, randomId, serverIndex } from "./rtc.js";
-import { newHost } from "./hostauth.js";
+import { newHost, hostHello } from "./hostauth.js";
 import { Background, BACKGROUNDS } from "./bg.js";
 import { Light, watchDark } from "./light.js";
 import { Board, COLORS, SIZES, TOOLS } from "./board.js";
@@ -267,14 +267,21 @@ const schedOpts = () => ({ t, toast, isPhone, newHost, claim: claimRoom, changed
 // A planned call with a passcode or "ask to join": its host claims the room right away (so the passcode holds before
 // the host arrives), then hangs up. Nobody else is in a room made a second ago.
 function claimRoom(code, key, opts) {
-  // on both room servers: the passcode holds whichever one the call ends up using
+  // on both room servers: the passcode holds whichever one the call ends up using. A control link: the host's
+  // proof, never its key, and nobody joins (safety round 2, J4/J13)
+  const ctl = [];
+  if (opts && opts.lock) ctl.push({ t: "lock", on: true });
+  if (opts && opts.pass) ctl.push({ t: "pass", pass: opts.pass });
+  if (!ctl.length) return;
   for (const url of [SIGNAL, SIGNAL2].filter(Boolean))
-    try {
-      const ws = new WebSocket(`${url}/ws/${code}`);
-      ws.onopen = () => ws.send(JSON.stringify({ t: "hello", id: randomId(), name: "", key, claim: true, opts }));
-      ws.onmessage = (e) => JSON.parse(e.data).t === "room" && ws.close();
-      setTimeout(() => ws.close(), 15000);
-    } catch {}
+    hostHello(key, code, { ctl })
+      .then((hello) => {
+        const ws = new WebSocket(`${url}/ws/${code}`);
+        ws.onopen = () => ws.send(JSON.stringify(hello));
+        ws.onmessage = () => ws.close();
+        setTimeout(() => ws.close(), 15000);
+      })
+      .catch(() => {});
 }
 $("schedule").onclick = () => scheduleSheet(schedOpts());
 $("joinForm").onsubmit = (e) => {

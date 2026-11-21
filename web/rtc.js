@@ -3,7 +3,7 @@ import { VIDEO_CAP } from "./net.js";
 import { NostrSignal, NOSTR_OK } from "./nsig.js";
 import { Big, BIG_OK, makeKeys } from "./big.js";
 import { Fwd } from "./fwd.js";
-import { HostDocs, pubOf, ownsCode, newSigner, helloProof, helloOk, LIST_MAX, idOf, idProof } from "./hostauth.js";
+import { HostDocs, pubOf, ownsCode, newSigner, helloProof, helloOk, LIST_MAX, idOf, idProof, hostHello } from "./hostauth.js";
 // Direct (mesh) WebRTC between everyone in a room. The signaling server only passes handshakes;
 // audio, video, chat and the board go device to device.
 //
@@ -243,8 +243,11 @@ export class Mesh extends EventTarget {
         if (i >= 0) this.si = i;
         return this.goServer();
       }
-      // they moved to the other server (theirs failed): follow if mine isn't working either
-      if (i >= 0 && i !== this.si && !(this.ws && this.ws.readyState === 1)) {
+      // they moved to the other server (theirs failed): follow if mine isn't working either, and only when it's
+      // someone I'm connected to or the host who says so (safety round 2, J4)
+      const said = this.peers.get(m.from);
+      const trusted = (said && said.pc && said.pc.connectionState === "connected") || !!(m.hp && (await helloOk(m.hp, m.hsig, this.room, m.from)));
+      if (i >= 0 && i !== this.si && trusted && !(this.ws && this.ws.readyState === 1)) {
         this.si = i;
         this.fails = 0;
         this.reconnect();
@@ -301,15 +304,16 @@ export class Mesh extends EventTarget {
       this.fails = 0;
       // the others in the call (and newcomers looking on the relays) hear which server this call uses now
       if (this.srvUrl && this.srvUrl !== url) {
-        if (this.ns) this.ns.send({ t: "srv", from: this.id, url });
+        if (this.ns) this.ns.send({ t: "srv", from: this.id, url, ...this.proof() });
         this.replayHost(true);
       }
       this.srvUrl = url;
       await this.keysP;
       await this.idpP;
+      await this.hproofP;
       if (this.ws !== ws || ws.readyState !== 1) return;
       this.emit("signal-open");
-      this.sendSignal({ t: "hello", id: this.id, ck: this.signer.pub, idp: this.idp, name: this.name, cap: this.kidCap, ...(this.keys ? { pub: this.keys.pub } : {}), ...(this.key ? { key: this.key, claim: true, ...(this.opts ? { opts: this.opts } : {}) } : {}), ...(this.knock ? { knock: true } : {}), ...(this.pass ? { pass: this.pass } : {}) });
+      this.sendSignal({ t: "hello", id: this.id, ck: this.signer.pub, idp: this.idp, name: this.name, cap: this.kidCap, ...(this.keys ? { pub: this.keys.pub } : {}), ...(this.key ? { ...(this.selfHost ? { hp: this.hpub, hsig: this.hproof } : { key: this.key }), claim: true, ...(this.opts ? { opts: this.opts } : {}) } : {}), ...(this.knock ? { knock: true } : {}), ...(this.pass ? { pass: this.pass } : {}) });
     };
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
@@ -374,6 +378,14 @@ export class Mesh extends EventTarget {
     if (Array.isArray(m.peers)) for (const p of m.peers) if (p && typeof p === "object") p.name = cleanName(p.name, 60);
     if (m.t === "peers") {
       this.admitted = true;
+      // the host's lock and passcode from the start go to the other room server too (safety round 2, J4)
+      if (this.selfHost && !this.mirrored) {
+        this.mirrored = true;
+        const q = [];
+        if (this.opts && this.opts.lock) q.push({ t: "lock", on: true });
+        if (this.pass || (this.opts && this.opts.pass)) q.push({ t: "pass", pass: this.pass || this.opts.pass });
+        this.mirror(q);
+      }
       for (const c of (this.hostQueue || []).splice(0)) this.sendSignal(c);
       for (const p of m.peers) if (p.host) this.hosts.add(p.id);
       for (const p of m.peers) if (p.role === "host") this.owners.add(p.id);
@@ -993,7 +1005,27 @@ export class Mesh extends EventTarget {
 
   // host commands: { t: "lock", on } / { t: "admit" | "deny" | "remove", id } / { t: "admit-all" } / { t: "mute", id | "*" } /
   // { t: "pass", pass } (empty: no passcode)
+  // The lock and the passcode, sent also to the room server(s) this call isn't on (all of them when a passcode moves a
+  // call from the relays), on a short link of their own, so a call that moves there finds them (safety round 2, J4). Host only: the
+  // server checks the host's proof; a co-host's change stays on the server in use.
+  async mirror(cmds) {
+    if (!this.selfHost || !cmds.length) return;
+    const here = this.srv ? this.servers[this.si] : null;
+    for (const url of this.servers)
+      if (url !== here)
+        try {
+          const hello = await hostHello(this.key, this.room, { ctl: cmds });
+          const ws = new WebSocket(`${url}/ws/${this.room}`);
+          ws.onopen = () => ws.send(JSON.stringify(hello));
+          ws.onmessage = () => ws.close();
+          setTimeout(() => ws.close(), 15000);
+        } catch (_) {}
+  }
+
   host(cmd) {
+    // (a call on the relays only keeps its lock in the signed document and never touches a server for it)
+    if (cmd.t === "lock" && this.srv) this.mirror([{ t: "lock", on: !!cmd.on }]);
+    if (cmd.t === "pass") this.mirror([{ t: "pass", pass: cmd.pass || "" }]);
     // a call without the server whose code proves its host: the devices keep the signed choices
     if (!this.srv && this.canSign && this.hd.doc && cmd.t !== "pass") return void this.signedHost(cmd);
     // a passcode moves the call to a room server: the people already in it get it first (the server would refuse

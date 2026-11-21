@@ -18,12 +18,29 @@ const cleanName = (v, n) => String(v ?? "").replace(/\s+/g, " ").replace(INVISIB
 // The call's code is made from the host's public key (web/hostauth.js codeOf): whoever holds a key that makes
 // this code started the call (APP-RULES safety 2). Old calls (a random code) can't prove it and keep the old rule.
 const CABC = "abcdefghijkmnpqrstuvwxyz";
+const codeOfPub = (pub) => {
+  const s = Array.from(pub.subarray(0, 10), (b) => CABC[b % CABC.length]).join("");
+  return `${s.slice(0, 3)}-${s.slice(3, 7)}-${s.slice(7)}`;
+};
+// The host proves it holds the key that makes this code by signing this visit's id (web/hostauth.js helloProof);
+// the key itself never comes here (safety round 2, J13). The id is proven too (idProven), so a proof seen once
+// can't be used by anyone else.
+async function hostOk(msg, room, id) {
+  if (typeof msg.hp !== "string" || !/^[0-9a-f]{64}$/.test(msg.hp) || typeof msg.hsig !== "string" || !/^[0-9a-f]{128}$/.test(msg.hsig)) return false;
+  try {
+    const pub = Uint8Array.from(msg.hp.match(/../g), (h) => parseInt(h, 16));
+    if (codeOfPub(pub) !== room) return false;
+    const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`juntos-hello|${room}|${id}`)));
+    return await schnorr.verifyAsync(Uint8Array.from(msg.hsig.match(/../g), (h) => parseInt(h, 16)), d, pub);
+  } catch (_) {
+    return false;
+  }
+}
+// an older page still sends the key itself
 export function keyMakesCode(key, code) {
   if (!/^[0-9a-f]{64}$/.test(key || "")) return false;
   try {
-    const pub = schnorr.getPublicKey(Uint8Array.from(key.match(/../g), (h) => parseInt(h, 16)));
-    const s = Array.from(pub.subarray(0, 10), (b) => CABC[b % CABC.length]).join("");
-    return `${s.slice(0, 3)}-${s.slice(3, 7)}-${s.slice(7)}` === code;
+    return codeOfPub(schnorr.getPublicKey(Uint8Array.from(key.match(/../g), (h) => parseInt(h, 16)))) === code;
   } catch (_) {
     return false;
   }
@@ -345,27 +362,35 @@ export class Room {
         this.send(ws, { t: "full", max: this.meshMax });
         return ws.close(1008, "full");
       }
-      // The person who started the call holds a secret key (kept on their device); the room keeps
-      // only its hash. A key that makes this room's code always wins: it replaces anyone who claimed the room
-      // before (on this server, or on the other one before a move), and what they set. Old random codes: the
-      // first hello that carries a key and asks to claim an unclaimed room claims it.
+      // The person who started the call holds a secret key (kept on their device): the call's code is made from
+      // it, and the host proves it by signing this visit's id. Nobody ever becomes host by asking first (safety
+      // round 2, J4): an empty room has no host until its code's maker comes. A room an older version let
+      // somebody claim (a stored hash) loses that claim, and what was set with it, when the maker comes. Calls with
+      // an old random code keep the host hash they already have; nobody can claim a new one.
       const st = this.state.storage;
-      let hostHash = await st.get("host");
+      const hostHash = await st.get("host");
       let host = false;
       const key = typeof msg.key === "string" ? msg.key.slice(0, 80) : "";
-      if (key.length >= 16) {
-        const h = await sha(key);
-        if (hostHash !== h && keyMakesCode(key, room) && !(await st.get("hostProven"))) {
+      if ((proven && (await hostOk(msg, room, id))) || keyMakesCode(key, room)) {
+        host = true;
+        if (!(await st.get("hostProven"))) {
           if (hostHash) {
-            for (const k of ["locked", "pass", "opened"]) await st.delete(k);
+            for (const k of ["locked", "pass", "opened", "host"]) await st.delete(k);
             this.locked = false;
             // whoever claimed it before is in the call no longer as its host: they come back as a guest
             for (const p of this.peers()) if (p.ws !== ws && p.a.host) p.ws.close(4001, "host changed");
           }
-          await st.put("host", (hostHash = h));
           await st.put("hostProven", true);
-        } else if (!hostHash && msg.claim) await st.put("host", (hostHash = h));
-        host = h === hostHash;
+        }
+      } else if (key.length >= 16 && hostHash && !(await st.get("hostProven"))) host = (await sha(key)) === hostHash;
+      // the host's own short link carrying the lock and the passcode (a planned call, the other server): applied,
+      // and nobody joins
+      if (Array.isArray(msg.ctl)) {
+        if (!host) return ws.close(4005, "not host");
+        for (const c of msg.ctl.slice(0, 4)) if (c && (c.t === "lock" || c.t === "pass")) await this.hostCmd({ id, name }, c, ws);
+        if (!(await st.get("opened"))) await st.put("opened", true);
+        this.send(ws, { t: "ctl-ok" });
+        return ws.close(1000, "ok");
       }
       if (this.locked === undefined) this.locked = !!(await st.get("locked"));
       // the host's choices when starting the call (people ask to join, a passcode), only the first time

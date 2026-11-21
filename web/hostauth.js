@@ -174,6 +174,15 @@ const helloBody = (room, id) => `juntos-hello|${room}|${id}`;
 export async function helloProof(key, room, id) {
   return hex(await schnorr.signAsync(await digest(helloBody(room, id)), unhex(key)));
 }
+// A hello from the host on a link of its own (a planned call's claim, the lock and passcode sent to the other room
+// server): a fresh visit key, its id proof and the host's proof. The host's secret key is never sent (J13).
+export async function hostHello(key, room, extra = {}) {
+  const s = newSigner();
+  const id = idOf(s.pub);
+  const hp = pubOf(key);
+  const host = ownsCode(hp, room) ? { hp, hsig: await helloProof(key, room, id) } : { key };
+  return { t: "hello", id, ck: s.pub, idp: await idProof(s.sk, room, id), name: "", ...host, ...extra };
+}
 export async function helloOk(pub, sig, room, id) {
   return typeof sig === "string" && ownsCode(pub, room) && sigOk({ body: helloBody(room, id), sig }, pub);
 }
