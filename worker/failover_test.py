@@ -118,6 +118,7 @@ if not LIVE:
 S1, S2 = (f"ws://127.0.0.1:{pt}" for pt in PORTS)
 if LIVE:
     S1, S2 = "wss://meet.jurisgames.com", "wss://games.jurisgames.com/juntos"
+    DEAD = "wss://server-down.invalid"  # the live site takes no local test switches: an address that can never connect
 time.sleep(0.5)
 
 try:
@@ -153,7 +154,8 @@ try:
         cases = ((DEAD, S2, "Cloudflare's room server down"), (S1, DEAD, "the game host's room server down")) if LIVE else (
             (DEAD, S1, "the first room server down"), (S1, DEAD, "the second room server down"))
         for first, second, what in cases:
-            q = f"signal={first}&signal2={second}&relays=ws://127.0.0.1:8810"
+            # (the live site takes no local test switches: a relay that can never connect stands for "relays down")
+            q = f"signal={first}&signal2={second}&relays=" + ("wss://relays-down.invalid" if LIVE else "ws://127.0.0.1:8810")
             a = person("Ana", f"{BASE}/?{q}")
             link = a.url.split("?")[0] + "?" + q
             o = person("Beto", link)
