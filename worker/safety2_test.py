@@ -29,6 +29,12 @@ for f in sorted(os.listdir(WEB)):
         if csp:
             check(not re.search(r"localhost|127\.0\.0\.1|\[::1\]", csp.group(1)), f"J15 {f}: shipped CSP has no localhost")  # pinned: safety round 2 J15
 
+# J17: the only address server (STUN) is Cloudflare's, the one the privacy page names
+rtc = open(os.path.join(WEB, "rtc.js"), encoding="utf-8").read()
+stuns = re.findall(r"stun:[^\"']+", rtc)
+check(stuns == ["stun:stun.cloudflare.com:3478"], f"J17 STUN is Cloudflare's only ({stuns})")  # pinned: safety round 2 J17
+check("stun.cloudflare.com" in open(os.path.join(WEB, "privacy.html"), encoding="utf-8").read(), "J17 the privacy page names it")  # pinned: safety round 2 J17
+
 with sync_playwright() as p:
     b = p.chromium.launch(headless=True, channel="msedge", args=ARGS)
 

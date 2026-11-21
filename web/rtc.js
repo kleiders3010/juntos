@@ -17,7 +17,8 @@ import { HostDocs, pubOf, ownsCode, newSigner, helloProof, helloOk, LIST_MAX } f
 // server link and newcomers are told to use it too), or no relay can be reached.
 const MESH_MAX = 16; // same as the server's: big_test.py
 
-const ICE = [{ urls: ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }];
+// Cloudflare's only (safety round 2, J17): the privacy page names it; no other company learns who is in a call.
+const ICE = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 
 export function randomId() {
   const a = new Uint8Array(12);

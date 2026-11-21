@@ -24,7 +24,8 @@ at meet.jurisgames.com (juntos.jurisgames.com is another address for it: it forw
 <h2>Your call</h2>
 <ul>
   <li><b>Camera, microphone, chat and the board</b> go directly between the devices in the call, encrypted
-    (WebRTC). When a network blocks direct connections they pass, still encrypted, through a Cloudflare relay
+    (WebRTC). To find that direct path, your device asks Cloudflare's address server (stun.cloudflare.com) which
+    public network address it has; nothing else is sent to it. When a network blocks direct connections they pass, still encrypted, through a Cloudflare relay
     that cannot read them; if two people still can't reach each other, the device of someone in the call who
     reaches both passes their sound and video on (sound and video that person gets anyway in the call) and their
     messages, sealed with a key only those two have, so that device can't read or change them. Nothing of the call is stored on any server. In a call of more than 16 people each
@@ -125,7 +126,7 @@ day.</p>
 <div lang="es">
 <p>Juntos es una app de videollamadas gratis y de código abierto (en meet.jurisgames.com; juntos.jurisgames.com es otra dirección que lleva ahí). No guarda nada que te identifique: sin cuentas,
 sin anuncios, sin analíticas. Lo que escribís en un campo (un nombre, una respuesta, una nota) se envía tal cual, así que si escribís ahí un email o un teléfono también se envía; nunca te lo pedimos, salvo el email opcional para responderte en "Enviar comentarios". La cámara, el micrófono, el chat y la pizarra van directo entre los dispositivos,
-cifrados; si la red no lo permite pasan cifrados por un relé de Cloudflare que no puede leerlos. Si aun así dos personas no pueden conectarse, el dispositivo de alguien de la llamada que llega a las dos les pasa el sonido y la imagen (que esa persona ya recibe en la llamada) y los mensajes, sellados con una clave que solo tienen esas dos, así que ese dispositivo no puede leerlos ni cambiarlos. En una llamada de más de
+cifrados (para encontrar ese camino directo, tu dispositivo le pregunta al servidor de direcciones de Cloudflare, stun.cloudflare.com, cuál es su dirección pública de red; no se le manda nada más); si la red no lo permite pasan cifrados por un relé de Cloudflare que no puede leerlos. Si aun así dos personas no pueden conectarse, el dispositivo de alguien de la llamada que llega a las dos les pasa el sonido y la imagen (que esa persona ya recibe en la llamada) y los mensajes, sellados con una clave que solo tienen esas dos, así que ese dispositivo no puede leerlos ni cambiarlos. En una llamada de más de
 16 personas cada dispositivo se conecta solo con unos pocos, y el sonido, la imagen y los mensajes los van pasando
 los dispositivos de otras personas de la llamada, que ya tienen su enlace. Los mensajes van firmados, así que nadie
 puede cambiarlos ni escribir en nombre de otro. Los mensajes privados van cifrados para que solo los lea su
