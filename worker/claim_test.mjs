@@ -40,7 +40,8 @@ const hello = (key, opts) => new Promise((res) => {
   setTimeout(() => res({ ws, m: null }), 4000);
 });
 const a = await hello(fake.key, { lock: true, pass: "123456" });
-check(a.m?.owner === true, "someone with the link claims the empty room first (old rule for random codes)");
+// pinned: safety round 2 J4, nobody becomes host by asking first (an empty room has no host until its code's maker)
+check(a.m && a.m.owner === false, "someone with the link who asks first is not the host of the empty room");
 const b = await hello(real.key);
 // pinned: audit R2
 check(b.m?.owner === true, "the real host arrives and is the host");
