@@ -122,14 +122,15 @@ export default {
     if (m) {
       // new links and lobby questions: a few hundred a minute per address (wrangler.toml JOINS; safety round 2, J7), so
       // nobody can wake rooms by the thousand; a school's whole class behind one address still gets in
+      // Fails closed (safety round 5, S10): a deploy that lost the binding, or a limiter that errors, refuses instead
+      // of running unlimited. Only Cloudflare runs this handler; the game host counts its own (kinetic/server.mjs).
       const ipk = await ipKey(req, env);
-      if (env.JOINS) {
-        let ok = true;
-        try {
-          ok = (await env.JOINS.limit({ key: ipk })).success;
-        } catch (_) {}
-        if (!ok) return new Response("slow down", { status: 429 });
-      }
+      if (!env.JOINS) return new Response("limits missing", { status: 503, headers: { "Retry-After": "300" } });
+      let ok = false;
+      try {
+        ok = (await env.JOINS.limit({ key: ipk })).success;
+      } catch (_) {}
+      if (!ok) return new Response("slow down", { status: 429 });
       const room = env.ROOMS.get(env.ROOMS.idFromName(m[2]));
       // the lobby asks whether a passcode is needed before joining (yes / no, nothing else)
       if (m[1] === "info") return room.fetch("https://room/info");
