@@ -71,9 +71,11 @@ export class Attendance {
       return `${Math.floor(s / 3600)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
     };
     // keep spreadsheets from running a name like "=HYPERLINK(...)" as a formula
+    // (APP-RULES 15 and 70: also after leading spaces or control characters; hidden control characters go)
     const cell = (x) => {
-      const v = String(x ?? "");
-      return /[",\r\n;]/.test(v) || /^[=+\-@\t\r]/.test(v) ? `"${(/^[=+\-@\t\r]/.test(v) ? "'" : "") + v.replace(/"/g, '""')}"` : v;
+      const v = String(x ?? "").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+      const risky = /^[=+\-@]/.test(v.replace(/^[\s\x00-\x1f]+/, ""));
+      return /[",\r\n;]/.test(v) || risky ? `"${(risky ? "'" : "") + v.replace(/"/g, '""')}"` : v;
     };
     const head = [t("Name"), t("First joined"), t("Last left"), t("Time in the call"), t("Times joined")];
     const lines = [head.map(cell).join(",")];
