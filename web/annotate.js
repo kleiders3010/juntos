@@ -8,6 +8,8 @@
 const KINDS = ["ana", "and", "anc", "ano", "anp", "ans"];
 const FADE = 3000; // ms a vanishing pen mark stays
 const COLORS = ["#ef4444", "#facc15", "#22c55e", "#3b82f6", "#ffffff", "#111827"];
+// each colour by name, for screen readers and the tooltip (UX review U-J18: all were "Colour")
+const COLOR_NAMES = { "#ef4444": "Red", "#facc15": "Yellow", "#22c55e": "Green", "#3b82f6": "Blue", "#ffffff": "White", "#111827": "Black" };
 const WIDTHS = { pen: 4, hl: 22, fade: 6, arrow: 5, rect: 4 }; // thousandths of the picture's height
 const MAXPTS = 3000;
 const rid = () => [...crypto.getRandomValues(new Uint32Array(2))].map((x) => x.toString(36)).join("");
@@ -370,7 +372,7 @@ export class Annotate {
       bar.append(h("button", { "data-tool": k, title: label, "aria-label": label, html: svg(k), onclick: () => ((this.tool = k), paint()) }));
     bar.append(h("span", { class: "anSep" }));
     for (const c of COLORS)
-      bar.append(h("button", { class: "anColor", "data-color": c, title: t("Colour"), "aria-label": t("Colour"), style: `--c:${c}`, onclick: () => ((this.color = c), paint()) }));
+      bar.append(h("button", { class: "anColor", "data-color": c, title: t(COLOR_NAMES[c]), "aria-label": t(COLOR_NAMES[c]), style: `--c:${c}`, onclick: () => ((this.color = c), paint()) }));
     bar.append(h("span", { class: "anSep" }));
     bar.append(h("button", { name: "undo", title: t("Undo (Ctrl+Z)"), "aria-label": t("Undo"), html: svg("undo"), onclick: () => this.undo(sid) }));
     bar.append(h("button", { name: "redo", title: t("Redo (Ctrl+Y)"), "aria-label": t("Redo"), html: svg("redo"), onclick: () => this.redoOne(sid) }));

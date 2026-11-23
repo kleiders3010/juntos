@@ -27,7 +27,7 @@ PORTS = [8801, 8802]
 DEAD = "ws://127.0.0.1:8809"  # nothing listens here
 RELAY_PORT = 8814
 RELAY = f"ws://127.0.0.1:{RELAY_PORT}"
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 errors = []
 
 

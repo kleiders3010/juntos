@@ -16,17 +16,32 @@ CAMS = int(sys.argv[2]) if len(sys.argv) > 2 else N
 BASE = sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 PER_BROWSER = 4  # people per browser process, spreads the work over processes like separate devices
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required", "--disable-gpu"]  # headless: no GPU memory held (2026-11-23)
 CAP = int(re.search(r"export const VIDEO_CAP = (\d+)", (Path(__file__).parent.parent / "web" / "net.js").read_text(encoding="utf-8")).group(1))
-STATS = """() => Promise.all([...__S.mesh.peers.values()].map(p => p.pc.getStats().then(r => {
-  const o = { id: p.id, name: p.name, conn: p.pc.connectionState, dc: !!p.dc && p.dc.readyState === 'open', aIn: 0, vFrames: 0, out: 0, inB: 0 };
-  r.forEach(x => {
-    if (x.type === 'inbound-rtp' && x.kind === 'audio') o.aIn = x.packetsReceived || 0;
-    if (x.type === 'inbound-rtp' && x.kind === 'video') o.vFrames = x.framesDecoded || 0;
-    if (x.type === 'inbound-rtp') o.inB += x.bytesReceived || 0;
-    if (x.type === 'outbound-rtp') o.out += x.bytesSent || 0;
-  });
-  return o })))"""
+# per person, by the tracks they reach me with (a direct link or a helper passing them on, fwd.js): inbound stats are
+# matched on trackIdentifier, so a helper's link carrying several people's pictures counts each one (2026-11-23)
+STATS = """async () => {
+  const peers = [...__S.mesh.peers.values()];
+  const byTrack = {};
+  const link = {};
+  for (const p of peers.filter(p => p.pc)) {
+    const r = await p.pc.getStats();
+    const l = { out: 0, inB: 0 };
+    r.forEach(x => {
+      if (x.type === 'inbound-rtp') { l.inB += x.bytesReceived || 0; if (x.trackIdentifier) byTrack[x.trackIdentifier] = x; }
+      if (x.type === 'outbound-rtp') l.out += x.bytesSent || 0;
+    });
+    link[p.id] = l;
+  }
+  return peers.map(p => {
+    const o = { id: p.id, name: p.name, via: p.via || '', aIn: 0, vFrames: 0, out: (link[p.id] || {}).out || 0, inB: (link[p.id] || {}).inB || 0 };
+    for (const t of p.stream ? p.stream.getTracks() : []) {
+      const x = byTrack[t.id];
+      if (x && t.kind === 'audio') o.aIn = x.packetsReceived || 0;
+      if (x && t.kind === 'video') o.vFrames = x.framesDecoded || 0;
+    }
+    return o });
+}"""
 errors = []
 
 
@@ -70,7 +85,16 @@ with sync_playwright() as p:
             pg.click("#pCam")
         pg.fill("#name", f"P{i}")
         pg.click("#enter")
-        pg.wait_for_selector("#call:not([hidden])")
+        try:
+            pg.wait_for_selector("#call:not([hidden])", timeout=60000)  # 16 browsers on one PC: a busy machine needs more than 30 s
+        except Exception:
+            # what the joiner saw when it never got in (2026-11-23: P? stuck in the lobby on the working copy only)
+            print(f"  P{i} STUCK: " + pg.evaluate("""() => JSON.stringify({
+                msg: document.getElementById('lobbyMsg')?.textContent,
+                passErr: document.getElementById('passcodeErr')?.textContent,
+                shown: [...document.querySelectorAll('section,[id]')].filter(e => e.offsetParent && e.id).map(e => e.id).slice(0, 40),
+                enter: document.getElementById('enter')?.disabled})"""), flush=True)
+            raise
         pages.append(pg)
         print(f"  P{i} in ({time.time() - t0:.0f} s)", flush=True)
     # everyone connected to everyone
@@ -78,7 +102,7 @@ with sync_playwright() as p:
     t1 = time.time()
     done = False
     while time.time() - t1 < 60 + 4 * N:
-        ok = all(pg.evaluate(f"__S.mesh.peers.size === {want} && [...__S.mesh.peers.values()].every(p => p.pc.connectionState === 'connected' && p.dc && p.dc.readyState === 'open')") for pg in pages)  # pinned: WebRTC state names
+        ok = all(pg.evaluate(f"__S.mesh.peers.size === {want} && [...__S.mesh.peers.values()].every(p => (p.pc ? p.pc.connectionState === 'connected' : !!p.via && p.state === 'connected') && p.dc && p.dc.readyState === 'open')") for pg in pages)  # pinned: WebRTC state names
         if ok:
             done = True
             break
@@ -86,13 +110,18 @@ with sync_playwright() as p:
     took = time.time() - t1
     if not done:
         for i, pg in enumerate(pages):
-            bad = pg.evaluate("""[...__S.mesh.peers.values()].filter(p => p.pc.connectionState !== 'connected' || !p.dc || p.dc.readyState !== 'open')
-              .map(p => p.name + ':' + p.pc.connectionState + '/' + p.pc.iceConnectionState + '/' + p.pc.signalingState + '/' + (p.dc ? p.dc.readyState : '-'))""")
+            # a peer with no pc is a place held while a helper passes them on or a direct link is retried (fwd.js)
+            bad = pg.evaluate("""[...__S.mesh.peers.values()].filter(p => !(p.pc ? p.pc.connectionState === 'connected' : !!p.via && p.state === 'connected') || !p.dc || p.dc.readyState !== 'open')
+              .map(p => p.name + ':' + (p.pc ? p.pc.connectionState + '/' + p.pc.iceConnectionState + '/' + p.pc.signalingState : 'no-link' + (p.via ? ' via ' + p.via : '')) + '/' + (p.dc ? p.dc.readyState : '-'))""")
             print(f"  P{i} peers {pg.evaluate('__S.mesh.peers.size')}, not connected: {bad}", flush=True)
             if bad:
-                print(f"     signal lost {pg.evaluate('__S.mesh.lost || 0')}x; from them:", pg.evaluate("""[...__S.mesh.peers.values()].filter(p => p.pc.connectionState !== 'connected')
+                print(f"     signal lost {pg.evaluate('__S.mesh.lost || 0')}x; from them:", pg.evaluate("""[...__S.mesh.peers.values()].filter(p => p.pc?.connectionState !== 'connected')
                   .map(p => p.name + ' ' + JSON.stringify(__S.mesh.sigIn[p.id] || null) + (p.offerer ? ' (I called)' : '') + (p.autoRetries ? ' retries ' + p.autoRetries : '') + (p.gaveUp ? ' gave up' : ''))"""), flush=True)
     check(done, f"{N} people: everyone connected to everyone ({took:.0f} s after the last joined)")
+    # a pair that can't connect directly is passed on by a third person (fwd.js): fine, but counted, since on one
+    # computer it means the direct links struggled under load
+    relayed = sum(pg.evaluate("[...__S.mesh.peers.values()].filter(p => p.via).length") for pg in pages) // 2
+    print(f"  pairs passed on by a helper: {relayed}", flush=True)
     time.sleep(8)  # the video cap settles (wants every 0.7 s)
     s1 = [{x["id"]: x for x in pg.evaluate(STATS)} for pg in pages]
     t2 = time.time()
@@ -121,6 +150,34 @@ with sync_playwright() as p:
         for i, pg in enumerate(pages):
             print(f"  P{i} mic:", pg.evaluate("""({ mic: __S.mic, track: __S.micTrack ? __S.micTrack.readyState + '/' + __S.micTrack.enabled + '/' + __S.micTrack.muted : null,
               senders: [...__S.mesh.peers.values()].map(p => p.audio && p.audio.sender.track ? p.audio.sender.track.readyState[0] : '-').join('') })"""), flush=True)
+    # the cap end to end: what each viewer's tile asked for, what the sender got, and whether its encoder is on
+    # (2026-11-23: pictures wanted off kept arriving; this tells a lost message from a sender that didn't apply it)
+    WANTS = """async () => {
+      const asked = {}; for (const t of document.querySelectorAll('#grid .tile:not([data-id=me])')) asked[t.dataset.id] = t.wantSent || null;
+      const sending = {};
+      for (const p of __S.mesh.peers.values()) {
+        const s = p.video && p.video.sender; let active = null;
+        try { const e = s && s.getParameters().encodings; active = e && e.length ? e[0].active !== false : null; } catch (_) {}
+        sending[p.id] = { want: p.want || null, active, hasTrack: !!(s && s.track) };
+      }
+      return { me: __S.mesh.id, asked, sending };
+    }"""
+    w = [pg.evaluate(WANTS) for pg in pages]
+    by = {x["me"]: x for x in w}
+    lost, unapplied, offs = [], [], 0
+    for viewer in w:
+        for sid, q in viewer["asked"].items():
+            snd = by.get(sid, {}).get("sending", {}).get(viewer["me"])
+            if q is None or snd is None:
+                continue
+            offs += q == "off"
+            if snd["want"] != q:
+                lost.append(f"{sid[:4]}->{viewer['me'][:4]} asked {q}, sender has {snd['want']}")
+            elif q == "off" and snd["active"] and snd["hasTrack"]:
+                unapplied.append(f"{sid[:4]}->{viewer['me'][:4]}")
+    print(f"  wanted off: {offs}; not received by the sender: {len(lost)} {lost[:6]}; received but still sending: {len(unapplied)} {unapplied[:6]}", flush=True)
+    check(not lost, "every viewer's want reached its sender")
+    check(not unapplied, "every picture wanted off is off at its sender")
     check(deaf == 0, f"everyone hears all {want} others")
     check(max(vids) <= CAP, f"nobody gets more than {CAP} videos (got {min(vids)}-{max(vids)})")
     expect = min(CAP, CAMS - 1)

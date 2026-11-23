@@ -35,7 +35,10 @@ const testHost = (u) => {
     const x = new URL(u);
     if (!/^(wss?|https?):$/.test(x.protocol)) return null;
     const h = x.hostname;
-    return (LOCAL.test(h) && LOCAL.test(location.hostname)) || /(^|\.)jurisgames\.com$/.test(h) || /\.invalid$/.test(h) ? u : null;
+    // only on a page served from this computer (safety round 3, N12: on the live page a link could send someone to
+    // an empty room or to one server with the relays off)
+    if (!LOCAL.test(location.hostname)) return null;
+    return LOCAL.test(h) || /(^|\.)jurisgames\.com$/.test(h) || /\.invalid$/.test(h) ? u : null;
   } catch { return null; }
 };
 const params = new URLSearchParams(location.search);
@@ -56,7 +59,15 @@ const SIGNAL2 = (params.get("signal2") && testHost(params.get("signal2"))) || (S
 // Finding each other through public Nostr relays (rtc.js, nsig.js): on by default; a page pointed at a test server
 // (?signal=) uses only that server, unless test relays are given (?relays=ws://...,ws://...)
 const RELAYS = params.get("relays") ? params.get("relays").split(",").filter((u) => /^wss?:\/\//.test(u) && testHost(u)) : SIG_T ? null : [];
-const isPhone = matchMedia("(max-width: 640px)").matches;
+// a phone-sized window; followed live (UX review U-J13: read once at load, a phone opened sideways kept a computer bar)
+const phoneMq = matchMedia("(max-width: 640px)");
+let isPhone = phoneMq.matches;
+phoneMq.addEventListener("change", () => {
+  isPhone = phoneMq.matches;
+  if (S.mesh) buildBar();
+});
+// what the device can do, not how wide its window is: a touch screen has a front and back camera, a mouse can share a screen
+const touchOnly = () => !matchMedia("(any-pointer: fine)").matches;
 
 const ICON = {
   mic: "M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z",
@@ -113,8 +124,29 @@ function toast(text, action) {
     t.append(b);
   }
   $("toasts").appendChild(t);
-  setTimeout(() => t.remove(), action ? 10000 : 4000);
+  // at least 6 s, more for long text; kept while pointed at or focused (UX review U-J7: 4 s was too short to read)
+  const ms = Math.max(action ? 10000 : 6000, text.length * 70);
+  let timer = setTimeout(() => t.remove(), ms);
+  const hold = () => clearTimeout(timer);
+  const go = () => (timer = setTimeout(() => t.remove(), 3000));
+  t.addEventListener("mouseenter", hold);
+  t.addEventListener("focusin", hold);
+  t.addEventListener("mouseleave", go);
+  t.addEventListener("focusout", go);
 }
+
+// an error right under its field, read out and tied to it (UX review U-J8: it showed under the device list)
+function fieldErr(id, msg) {
+  const box = $(id);
+  const err = $(`${id}Err`);
+  if (!box || !err) return;
+  err.textContent = msg || "";
+  err.hidden = !msg;
+  box.setAttribute("aria-invalid", String(!!msg));
+  if (msg) box.setAttribute("aria-describedby", err.id);
+  else box.removeAttribute("aria-describedby");
+}
+for (const id of ["joinCode", "name", "passcode"]) $(id).addEventListener("input", () => fieldErr(id, ""));
 
 function show(page) {
   for (const p of document.querySelectorAll(".page")) p.hidden = p.id !== page;
@@ -218,6 +250,9 @@ function feedback() {
   });
 }
 
+// the board's colours by name, for screen readers and the tooltip (UX review U-J18)
+const COLOR_NAMES = { "#1b1b1f": "Black", "#d93025": "Red", "#1a73e8": "Blue", "#188038": "Green", "#f9ab00": "Yellow" };
+
 // ---------- routing ----------
 function route() {
   const m = location.pathname.slice(BASE.length - 1).match(/^\/r\/([a-z0-9-]{4,64})$/);
@@ -227,11 +262,8 @@ function route() {
     // "Switch to another device" also carries a one-time code (sw) and the name (n).
     const h = new URLSearchParams(location.hash.slice(1));
     const hp = /^[A-Za-z0-9]{4,10}$/.test(h.get("p") || "") && h.get("p");
-    if (hp) {
-      try {
-        localStorage.setItem(`juntos.pass.${S.code}`, hp);
-      } catch {}
-    }
+    // (kept apart until a server takes it: a link never replaces a saved passcode that works, safety round 3, N10)
+    S.linkPass = hp || "";
     S.switchTo = /^[0-9a-f]{32}$/.test(h.get("sw") || "") ? h.get("sw") : "";
     S.switchName = S.switchTo ? (h.get("n") || "").slice(0, 60) : "";
     if (location.hash) history.replaceState(history.state, "", `${BASE}r/${S.code}${location.search}`);
@@ -241,7 +273,7 @@ function route() {
     paintUpcoming($("upcoming"), schedOpts());
   }
 }
-window.addEventListener("popstate", route);
+// (Back: see "sheets, the side panel and Back")
 
 // who can join a new call: everyone with the link (default), people ask to join, a passcode
 const startSec = securityFields(t);
@@ -262,7 +294,10 @@ $("start").onclick = () => {
   const { code, key } = newHost();
   try {
     localStorage.setItem(`juntos.host.${code}`, key);
-  } catch {}
+  } catch {
+    // (a save that holds a key says when it fails, APP-RULES safety 113)
+    toast(t("This device couldn't keep the host key for this call: if you reload or leave, you won't be its host."));
+  }
   keepSecurity(code, sec);
   history.pushState({}, "", `${BASE}r/${code}`);
   route();
@@ -292,7 +327,10 @@ $("schedule").onclick = () => scheduleSheet(schedOpts());
 $("joinForm").onsubmit = (e) => {
   e.preventDefault();
   const code = codeFrom($("joinCode").value);
-  if (!code) return toast(t("That code doesn't look right"));
+  if (!code) {
+    $("joinCode").focus();
+    return fieldErr("joinCode", t("That code doesn't look right. Paste the link you got, or type the call's code (like abc-defg-hij)."));
+  }
   history.pushState({}, "", `${BASE}r/${code}`);
   route();
 };
@@ -306,29 +344,83 @@ async function getMedia() {
     $("lobbyMsg").textContent = t("This browser can't use your camera or microphone. Open the link in Safari or Chrome.");
     return false;
   }
-  try {
-    const s = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(localStorage.getItem("juntos.micId")), video: camConstraints(localStorage.getItem("juntos.camId")) });
-    S.camStream = s;
-    S.micTrack = s.getAudioTracks()[0] || null;
-    S.camTrack = s.getVideoTracks()[0] || null;
-    return true;
-  } catch (e) {
-    // Try mic only, then nothing: a call without a camera still works.
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ audio: true });
-      S.camStream = s;
-      S.micTrack = s.getAudioTracks()[0];
-      S.cam = false;
-      $("lobbyMsg").textContent = t("No camera found. You can still talk.");
-      return true;
-    } catch (_) {
-      S.mic = false;
-      S.cam = false;
-      $("lobbyMsg").textContent = t("Camera and microphone are blocked. Allow them in your browser to be seen and heard.");
-      return false;
+  const ask = (c) => navigator.mediaDevices.getUserMedia(c).then((s) => [s, null], (e) => [null, mediaWhy(e)]);
+  S.camWhy = S.micWhy = null;
+  const [s, why] = await ask({ audio: micConstraints(localStorage.getItem("juntos.micId")), video: camConstraints(localStorage.getItem("juntos.camId")) });
+  let mic = s?.getAudioTracks()[0] || null;
+  let cam = s?.getVideoTracks()[0] || null;
+  if (!s) {
+    // one at a time, to say which of the two is the problem (UX review U-J2): a call without a camera still works.
+    // A refusal covers both in most browsers, so after one only the microphone is asked again (no second prompt).
+    const [a, aw] = await ask({ audio: true });
+    mic = a?.getAudioTracks()[0] || null;
+    if (!mic) S.micWhy = aw;
+    if (why === "blocked" && !mic) S.camWhy = "blocked";
+    else {
+      const [v, vw] = mic && why === "blocked" ? [null, "blocked"] : await ask({ video: true });
+      cam = v?.getVideoTracks()[0] || null;
+      if (!cam) S.camWhy = vw;
     }
   }
+  S.camStream = mic || cam ? new MediaStream([mic, cam].filter(Boolean)) : null;
+  S.micTrack = mic;
+  S.camTrack = cam;
+  if (!mic) S.mic = false;
+  if (!cam) S.cam = false;
+  mediaMsg();
+  return !!(mic || cam);
 }
+// why a camera or microphone didn't open: the error's name, never one message for every case (UX review U-J2)
+function mediaWhy(e) {
+  const n = e?.name || "";
+  if (n === "NotAllowedError" || n === "SecurityError" || n === "PermissionDeniedError") return "blocked";
+  if (n === "NotReadableError" || n === "TrackStartError" || n === "AbortError") return "busy";
+  if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError") return "none";
+  return "other";
+}
+const MEDIA_MSG = {
+  cam: {
+    blocked: "Juntos isn't allowed to use your camera. Allow it for this site (the lock next to the address, or the app's settings on a phone), then tap Try again. You can still talk.",
+    busy: "Your camera is being used by another app. Close it and tap Try again. You can still talk.",
+    none: "No camera found. You can still talk.",
+    other: "Your camera didn't start. Tap Try again. You can still talk.",
+  },
+  mic: {
+    blocked: "Juntos isn't allowed to use your microphone. Allow it for this site (the lock next to the address, or the app's settings on a phone), then tap Try again.",
+    busy: "Your microphone is being used by another app. Close it and tap Try again.",
+    none: "No microphone found. The others can see you but not hear you.",
+    other: "Your microphone didn't start. Tap Try again.",
+  },
+  both: {
+    blocked: "Juntos isn't allowed to use your camera and microphone. Allow them for this site (the lock next to the address, or the app's settings on a phone), then tap Try again.",
+    busy: "Your camera and microphone are being used by another app. Close it and tap Try again.",
+    none: "No camera or microphone found. You can still watch and listen.",
+    other: "Your camera and microphone didn't start. Tap Try again.",
+  },
+};
+// the lobby line for what didn't open, and Try again while something did not (it asks again)
+function mediaMsg() {
+  const { micWhy: m, camWhy: c } = S;
+  const msg = m && c ? MEDIA_MSG.both[m === c ? m : "other"] : m ? MEDIA_MSG.mic[m] : c ? MEDIA_MSG.cam[c] : "";
+  // only its own words are cleared: the lobby line may say something else meanwhile (the call has a passcode)
+  const box = $("lobbyMsg");
+  if (msg) box.textContent = mediaMsg.said = t(msg);
+  else if (mediaMsg.said && box.textContent === mediaMsg.said) box.textContent = "";
+  if (!msg) mediaMsg.said = "";
+  $("mediaRetry").hidden = !msg || (m || "none") === "none" && (c || "none") === "none";
+}
+$("mediaRetry").onclick = async () => {
+  for (const tr of S.camStream?.getTracks() || []) tr.stop();
+  S.camStream = null;
+  S.mic = S.cam = true;
+  $("mediaRetry").disabled = true;
+  await (S.mediaReady = getMedia());
+  $("mediaRetry").disabled = false;
+  refreshLocalVideo();
+  paintToggles();
+  if (S.bgMode !== "none" && S.camTrack) applyBackground(S.bgMode);
+  lobbyMeter();
+};
 
 // the camera picture before any background: brightened when "Adjust video lighting" is on
 function camSrc() {
@@ -430,7 +522,7 @@ function may(id, key) {
 }
 // my voice goes out only while my own switch is on and I'm allowed to speak
 function micLive() {
-  return !!S.mic && !S.comp && may("me", "talk");
+  return !!S.mic && !!S.micTrack && !S.comp && may("me", "talk");
 }
 // not allowed to speak: say so and raise my hand to ask (my own switch stays as it is)
 function askToSpeak() {
@@ -443,13 +535,16 @@ function askToSpeak() {
 // how I am, for the others (and for their recordings: a shared screen leads the picture)
 function myState() {
   // ct / cx: my browser can make captions from someone else's voice / translate captions, for those who can't
-  return { k: "state", mic: micLive(), cam: S.cam, screen: !!S.screen, ct: canCapTrack(), cx: captr.CAN, comp: !!S.comp };
+  return { k: "state", mic: micLive(), cam: camLive(), screen: !!S.screen, ct: canCapTrack(), cx: captr.CAN, comp: !!S.comp };
 }
 
 function setMic(on) {
   if (on && S.comp && S.mesh) return toast(t("Companion mode has no sound. Tap Use my audio to talk."));
   // not allowed to speak: the mic button asks to speak; my own switch stays as I left it
   if (S.mesh && !may("me", "talk")) return askToSpeak();
+  // no microphone open (refused, busy, missing): turning it on asks for it again, and stays off if it still fails
+  // (it said "on" with nothing sent, UX review U-J2)
+  if (on && !S.micTrack) return openMissing("mic");
   S.mic = on;
   if (S.micTrack) S.micTrack.enabled = micLive();
   if (!on) document.querySelector('#grid .tile[data-id="me"]')?.classList.remove("speaking"); // dark at once when muted
@@ -459,6 +554,7 @@ function setMic(on) {
 }
 
 async function setCam(on) {
+  if (on && !S.camTrack) return openMissing("cam");
   // a camera that stopped (unplugged, taken by another app) is opened again when turned back on
   if (on && S.camTrack && S.camTrack.readyState === "ended" && !(await useCamera(camConstraints(localStorage.getItem("juntos.camId"))))) return;
   S.cam = on;
@@ -471,18 +567,43 @@ async function setCam(on) {
   }
 }
 
+// the camera is on for the others only with a picture to send
+function camLive() {
+  return !!S.cam && !!S.camTrack;
+}
+// a microphone or camera that didn't open: asked for again when its button is turned on (U-J2)
+async function openMissing(k) {
+  const ok = k === "mic" ? await useMic(localStorage.getItem("juntos.micId"), true) : await useCamera(camConstraints(localStorage.getItem("juntos.camId")), true);
+  if (!ok) return paintToggles();
+  if (k === "mic") S.micWhy = null;
+  else S.camWhy = null;
+  if (!S.mesh) mediaMsg();
+  if (k === "mic") {
+    lobbyMeter();
+    return setMic(true);
+  }
+  return setCam(true);
+}
+
 function paintToggles() {
-  for (const [id, on, a, b] of [
-    ["pMic", S.mic, "mic", "micOff"],
-    ["pCam", S.cam, "cam", "camOff"],
-    ["bMic", micLive(), "mic", "micOff"],
-    ["bCam", S.cam, "cam", "camOff"],
+  // each toggle has a fixed name and says whether it is on; the action goes in the title (UX review U-J3: both were
+  // read as "Turn off", with no name)
+  for (const [id, on, a, b, name, track] of [
+    ["pMic", S.mic && !!S.micTrack, "mic", "micOff", "Microphone", S.micTrack],
+    ["pCam", camLive(), "cam", "camOff", "Camera", S.camTrack],
+    ["bMic", micLive(), "mic", "micOff", "Microphone", S.micTrack],
+    ["bCam", camLive(), "cam", "camOff", "Camera", S.camTrack],
   ]) {
     const el = $(id);
     if (!el) continue;
     el.innerHTML = svg(on ? a : b) + (el.dataset.label ? `<span>${el.dataset.label}</span>` : "");
     el.classList.toggle("danger", !on);
-    el.title = on ? t("Turn off") : t("Turn on");
+    el.setAttribute("aria-label", t(name));
+    el.setAttribute("aria-pressed", String(!!on));
+    const mic = name === "Microphone";
+    el.title = !track
+      ? t(mic ? "The microphone didn't start: tap to try again" : "The camera didn't start: tap to try again")
+      : on ? t(mic ? "Turn off the microphone" : "Turn off the camera") : t(mic ? "Turn on the microphone" : "Turn on the camera");
   }
   const noTalk = !!S.mesh && !may("me", "talk");
   $("bMic")?.classList.toggle("blocked", noTalk);
@@ -589,10 +710,10 @@ async function openLobby() {
 // The lobby asks for the passcode only when the call has one (the host never types it). The answer is yes / no.
 async function askPass(msg) {
   const box = $("passcode");
-  box.value = passOf(S.code);
+  box.value = S.linkPass || passOf(S.code);
   if (msg) {
     box.hidden = false;
-    $("lobbyMsg").textContent = msg;
+    fieldErr("passcode", msg);
     return box.focus();
   }
   box.hidden = true;
@@ -623,7 +744,9 @@ function passRefused(m) {
   closePanel();
   callNotice(false);
   try {
-    if (m.wrong) localStorage.removeItem(`juntos.pass.${S.code}`);
+    // a wrong passcode from a link is dropped and the saved one tried next; a wrong saved one is forgotten
+    if (m.wrong && S.linkPass) S.linkPass = "";
+    else if (m.wrong) localStorage.removeItem(`juntos.pass.${S.code}`);
   } catch {}
   show("lobby");
   $("enter").disabled = false;
@@ -780,7 +903,7 @@ async function join(comp) {
   const name = $("name").value.trim();
   if (!name) {
     $("name").focus();
-    $("lobbyMsg").textContent = t("Type your name so people know who you are.");
+    fieldErr("name", t("Type your name so people know who you are."));
     return;
   }
   localStorage.setItem("juntos.name", name);
@@ -788,7 +911,7 @@ async function join(comp) {
     const pass = $("passcode").value.trim();
     if (!PASS_RE.test(pass)) {
       $("passcode").focus();
-      $("lobbyMsg").textContent = t("Type the passcode: 4 to 10 letters or numbers.");
+      fieldErr("passcode", t("Type the passcode: 4 to 10 letters or numbers."));
       return;
     }
     try {
@@ -801,11 +924,11 @@ async function join(comp) {
   }
   // Joining before the camera and mic are ready would send nothing to the others.
   $("enter").disabled = true;
-  askNotices();
   await (S.mediaReady ||= getMedia());
   $("enter").disabled = false;
   S.comp = comp;
   enterCall(name);
+  askNotices();
 }
 function companion(on) {
   S.comp = on;
@@ -839,6 +962,7 @@ $("compOff").onclick = () => {
 // ---------- the call ----------
 function enterCall(name) {
   show("call");
+  history.pushState({ juntos: "call" }, "");
   $("roomCode").textContent = S.code;
   if (S.comp) companion(true);
   else $("compBox").hidden = true;
@@ -860,7 +984,7 @@ function enterCall(name) {
     relays: RELAYS,
     key: localStorage.getItem(`juntos.host.${S.code}`),
     knock: !!localStorage.getItem(`juntos.out.${S.code}`),
-    pass: passOf(S.code),
+    pass: S.linkPass || passOf(S.code),
     opts: (() => {
       try {
         return JSON.parse(localStorage.getItem(`juntos.start.${S.code}`) || "null");
@@ -994,8 +1118,53 @@ function paintNet() {
   el.hidden = !text;
   el.textContent = text;
   el.className = `netState ${cls}`;
+  // only the "waiting" line opens Invite; a connection warning isn't a way to invite (UX review U-J22)
+  el.classList.toggle("asInvite", !S.waiting && !!S.joined && !S.mesh.peers.size);
+  paintAlone();
 }
-$("netState").onclick = () => $("invite").click();
+$("netState").onclick = () => {
+  if ($("netState").classList.contains("asInvite")) $("invite").click();
+};
+
+// Alone in a new call, the way to get people in is the big thing on screen (UX review U-J5: it was a small chip in a
+// corner); someone waiting to be let in sees that in the middle, not in a small top line (U-J6).
+function paintAlone() {
+  const alone = !!S.mesh && S.joined && !S.waiting && !S.mesh.peers.size && !S.comp && !S.aloneDone;
+  const waiting = !!S.mesh && !!S.waiting;
+  let card = $("aloneCard");
+  if (!alone && !waiting) return card?.remove();
+  const kind = waiting ? "waiting" : "alone";
+  if (card?.dataset.kind === kind) return;
+  card?.remove();
+  card = document.createElement("div");
+  card.id = "aloneCard";
+  card.className = "aloneCard";
+  card.dataset.kind = kind;
+  const h = document.createElement("h3");
+  const p = document.createElement("p");
+  p.className = "small";
+  if (waiting) {
+    h.textContent = t("Waiting to be let in");
+    p.textContent = t("Someone in the call will let you in. Keep this page open.");
+    card.append(h, p);
+  } else {
+    h.textContent = t("You're the first one here");
+    p.textContent = t("Invite people with the link.");
+    card.append(h, p);
+    const url = S.hasPass ? callUrl(S.code) : `${location.origin}${BASE}r/${S.code}`;
+    linkBlock(card, url, { t, toast, isPhone, share: { title: t("Join my call"), text: t("Join my call on Juntos"), url } });
+    const later = document.createElement("button");
+    later.className = "ghost";
+    later.name = "aloneLater";
+    later.textContent = t("Not now");
+    later.onclick = () => {
+      S.aloneDone = true;
+      card.remove();
+    };
+    card.append(later);
+  }
+  $("grid").parentElement.append(card);
+}
 
 // Messages per person (safety round 2, J14): a script sending thousands can't freeze everyone's browser. Generous
 // enough for drawing on the board; chat has its own, smaller allowance.
@@ -1096,7 +1265,7 @@ function onMessage(from, m) {
   } else if (S.act.receive(from, m)) {
     // polls and Q&A
   } else if (["bitem", "bdel", "bclear", "bstate"].includes(m.k)) {
-    ensureBoard().receive(m);
+    ensureBoard().receive(m, from);
     if (m.k === "bitem" && S.panel !== "board") {
       badge("bBoard");
       badge("bMore");
@@ -1122,11 +1291,12 @@ function makeTile(id, name) {
   const t = document.createElement("div");
   t.className = "tile";
   t.dataset.id = id;
-  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span><button class="bars" hidden><i></i><i></i><i></i><i></i></button></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Pin")}">${svg("pin")}</button>${id === "me" || isPhone ? "" : `<button class="popBtn" name="popOut" title="${t2("Open in new window")}">${svg("popOut")}</button><div class="poppedNote"></div>`}${id === "me" ? "" : `<button class="volBtn" title="${t2("Volume")}"></button><audio autoplay></audio>`}`;
+  t.innerHTML = `<video autoplay playsinline></video><div class="avatar"></div><div class="label"><span class="micmark">${svg("micOff")}</span><span class="nm"></span><span class="hand" hidden>✋</span><button class="bars" hidden><i></i><i></i><i></i><i></i></button></div><div class="status" hidden></div><button class="fsBtn" title="${t2("Pin")}">${svg("pin")}</button>${id === "me" || isPhone ? "" : `<button class="popBtn" name="popOut" title="${t2("Open in new window")}">${svg("popOut")}</button><button class="poppedNote" name="popBack"></button>`}${id === "me" ? "" : `<button class="volBtn" title="${t2("Volume")}"></button><audio autoplay></audio>`}`;
   // the voice plays from its own <audio>: a video element with no picture (camera off, or video not sent to
   // save data) never starts, and its sound would never start with it
   if (id !== "me") t.querySelector("video").muted = true;
   t.querySelector(".nm").textContent = name;
+  nameTile(t, name);
   t.querySelector(".avatar").textContent = (name || "?").trim().charAt(0).toUpperCase();
   t.querySelector(".fsBtn").onclick = (e) => {
     e.stopPropagation();
@@ -1188,7 +1358,7 @@ function netPop(tile) {
 // limiter (so it doesn't crackle) and the tile itself goes quiet. Remembered per name on this device.
 const VOL_MAX = 300;
 function volFor(name) {
-  const v = localStorage.getItem(`juntos.vol.${name || ""}`);
+  const v = localStorage.getItem(`juntos.vol.${S.code}.${name || ""}`);
   return v === null ? 100 : Math.max(0, Math.min(VOL_MAX, Number(v) || 0));
 }
 
@@ -1261,7 +1431,7 @@ function openVolume(tile) {
     reset.hidden = Number(range.value) === 100;
   };
   range.oninput = () => {
-    localStorage.setItem(`juntos.vol.${p.name || ""}`, range.value);
+    localStorage.setItem(`juntos.vol.${S.code}.${p.name || ""}`, range.value);
     applyVolume(tile, p);
     paint();
   };
@@ -1301,6 +1471,15 @@ function unpinAll() {
   for (const x of document.querySelectorAll(".tile.spot")) x.classList.remove("spot");
   paintPins();
 }
+// a tile's buttons say whose they are (UX review U-J17: every tile's read "Pin" and "Volume")
+function nameTile(tile, name) {
+  tile.dataset.who = name || "";
+  const pin = tile.querySelector(".fsBtn");
+  if (pin) pin.setAttribute("aria-label", `${pin.title} ${name}`.trim());
+  tile.querySelector(".volBtn")?.setAttribute("aria-label", t("Volume for {name}", { name }));
+  const mm = tile.querySelector(".micmark");
+  if (mm && !mm.querySelector(".sr")) mm.insertAdjacentHTML("beforeend", `<span class="sr">${t("microphone off")}</span>`);
+}
 function paintPins() {
   const any = !!document.querySelector(".tile.spot");
   $("grid").classList.toggle("hasSpot", any);
@@ -1311,6 +1490,7 @@ function paintPins() {
     b.innerHTML = svg("pin");
     b.classList.toggle("on", on);
     b.title = on ? t2("Unpin") : any ? t2("Pin too") : t2("Pin");
+    b.setAttribute("aria-label", `${b.title} ${x.dataset.who || ""}`.trim());
   }
   layout();
 }
@@ -1425,6 +1605,7 @@ function renderPeer(id) {
     layout();
   }
   tile.querySelector(".nm").textContent = (p.name || "Joining…") + (S.comps.has(id) ? ` ${t("(Companion)")}` : "");
+  nameTile(tile, p.name || t("Someone"));
   tile.querySelector(".avatar").textContent = (p.name || "?").trim().charAt(0).toUpperCase();
   const v = tile.querySelector("video");
   if (v.srcObject !== p.stream && p.stream.getTracks().length) {
@@ -1437,7 +1618,10 @@ function renderPeer(id) {
   if (voice && a.srcObject?.getAudioTracks()[0] !== voice) {
     a.srcObject = new MediaStream([voice]);
     if (S.sink) a.setSinkId?.(S.sink).catch(() => {});
-    a.play().catch(() => tile.classList.add("tapToPlay"));
+    a.play().catch(() => {
+      tile.classList.add("tapToPlay");
+      tapToHear();
+    });
   }
   applyVolume(tile, p);
   paintStatus(tile, p);
@@ -1733,6 +1917,25 @@ document.addEventListener("click", (e) => {
     t.classList.remove("tapToPlay");
   }
 });
+// the browser held the sound back until a tap: one translated button over the grid that the keyboard reaches too
+// (UX review U-J11: English text in the CSS, on tiles that can't be focused)
+function tapToHear() {
+  if ($("tapHear")) return;
+  const b = document.createElement("button");
+  b.id = "tapHear";
+  b.className = "primary big tapHear";
+  b.textContent = t("Tap to hear");
+  b.onclick = () => {
+    for (const tile of document.querySelectorAll(".tile.tapToPlay")) {
+      tile.querySelector("audio")?.play().catch(() => {});
+      tile.querySelector("video")?.play().catch(() => {});
+      tile.classList.remove("tapToPlay");
+    }
+    b.remove();
+  };
+  $("grid").parentElement.append(b);
+  b.focus({ preventScroll: true });
+}
 
 // ---------- the bar ----------
 function button(id, icon, label, onclick, cls = "") {
@@ -1743,6 +1946,7 @@ function button(id, icon, label, onclick, cls = "") {
   b.dataset.label = label;
   b.innerHTML = svg(icon) + `<span>${label}</span>`;
   b.title = label;
+  b.setAttribute("aria-label", label);
   b.onclick = onclick;
   return b;
 }
@@ -1750,10 +1954,11 @@ function button(id, icon, label, onclick, cls = "") {
 function buildBar() {
   const bar = $("bar");
   bar.innerHTML = "";
+  bar.classList.remove("pc"); // (rebuilt when the window turns phone-sized or back)
   bar.append(button("bMic", "mic", "Mic", () => setMic(!S.mic)));
   bar.append(button("bCam", "cam", "Camera", () => setCam(!S.cam)));
   const extra = [];
-  if (navigator.mediaDevices?.getDisplayMedia && !isPhone) extra.push(button("bScreen", "screen", "Share screen", toggleScreen));
+  if (navigator.mediaDevices?.getDisplayMedia && !touchOnly()) extra.push(button("bScreen", "screen", "Share screen", toggleScreen));
   extra.push(button("bChat", "chat", "Chat", () => openPanel("chat")));
   extra.push(button("bBoard", "board", "Board", () => openPanel("board")));
   extra.push(button("bBg", "bg", "Background", () => openPanel("bg")));
@@ -1777,7 +1982,8 @@ function buildBar() {
   S.barBtns = BARBTNS;
   if (isPhone) {
     bar.append(button("bChat2", "chat", "Chat", () => openPanel("chat")));
-    bar.append(button("bMore", "more", "More", () => openMore(extra)));
+    bar.append(react);
+    bar.append(button("bMore", "more", "More", () => openMore(extra.filter((b) => b !== react && b.id !== "bChat"))));
     bar.append(button("bLeave", "end", "Leave", leaveClick, "end"));
   } else {
     // like Meet's bar (its help page "Learn about the Meet layout for your computer"): the call's own controls in the
@@ -1799,11 +2005,30 @@ function buildBar() {
   paintToggles();
 }
 
+const MORE_FIRST = ["bPeople", "bCaps", "bLayout", "bDev", "bFlip"];
 function openMore(items) {
   const sheet = document.createElement("div");
   sheet.className = "sheet";
   const inner = document.createElement("div");
-  inner.className = "sheetInner";
+  inner.className = "sheetInner moreSheet";
+  // a title and Close that stay at the top: a long list filled the phone and left no way out (UX review U-J4)
+  const head = document.createElement("div");
+  head.className = "sheetHead";
+  const h = document.createElement("h3");
+  h.textContent = t("More");
+  const x = document.createElement("button");
+  x.className = "icon";
+  x.name = "close";
+  x.textContent = "✕";
+  x.title = t("Close");
+  x.setAttribute("aria-label", t("Close"));
+  x.onclick = () => sheet.remove();
+  head.append(h, x);
+  inner.append(head);
+  if (isPhone || touchOnly()) items = [...items, button("bFlip", "flip", "Switch camera", flipCamera)];
+  // the most used first
+  const rank = (b) => (MORE_FIRST.includes(b.id) ? MORE_FIRST.indexOf(b.id) : MORE_FIRST.length);
+  items = items.map((b, i) => [b, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map((x) => x[0]);
   for (const it of items) {
     const onclick = it.onclick;
     it.onclick = () => {
@@ -1812,15 +2037,6 @@ function openMore(items) {
     };
     inner.append(it);
   }
-  if (isPhone) {
-    const flip = button("bFlip", "flip", "Switch camera", flipCamera);
-    const fo = flip.onclick;
-    flip.onclick = () => {
-      sheet.remove();
-      fo();
-    };
-    inner.append(flip);
-  }
   sheet.append(inner);
   sheet.onclick = (e) => {
     if (e.target === sheet) sheet.remove(); // a block: an onclick that returns false cancels the click (checkboxes stopped working)
@@ -1828,19 +2044,102 @@ function openMore(items) {
   document.body.append(sheet);
 }
 
+// ---------- sheets, the side panel and Back (UX review U-J1, U-J9) ----------
+// Every .sheet, whichever code made it, is a dialog: focus moves into it, Esc closes the top one, focus goes back to
+// where it was. In a call each open sheet and the side panel hold one history entry, so Back (Android's, the
+// browser's) closes them; with nothing open, Back asks whether to leave. It used to show the start page while the call
+// went on, with the microphone and camera live and nothing on screen saying so.
+const layers = [];
+let popSkip = 0;
+function layerOpen(el) {
+  if (!S.mesh || layers.includes(el)) return;
+  layers.push(el);
+  history.pushState({ juntos: "layer" }, "");
+}
+function layerShut(el) {
+  const i = layers.indexOf(el);
+  if (i < 0) return;
+  layers.splice(i, 1);
+  popSkip++;
+  history.back();
+}
+window.addEventListener("popstate", () => {
+  if (popSkip) return void popSkip--;
+  if (S.mesh) {
+    const top = layers.pop();
+    if (top) return top === $("panel") ? closePanel() : top.remove();
+    // nothing open: the call stays, and Back asks
+    history.pushState({ juntos: "call" }, "", `${BASE}r/${S.code}${location.search}`);
+    return leaveClick(true);
+  }
+  route();
+});
+new MutationObserver((ms) => {
+  for (const m of ms) {
+    for (const n of m.addedNodes) if (n.classList?.contains("sheet")) sheetOpened(n);
+    for (const n of m.removedNodes) if (n.classList?.contains("sheet")) sheetClosed(n);
+  }
+}).observe(document.body, { childList: true });
+function sheetOpened(s) {
+  s.setAttribute("role", "dialog");
+  s.setAttribute("aria-modal", "true");
+  const head = s.querySelector("h2, h3, h4");
+  if (head) s.setAttribute("aria-label", head.textContent);
+  s.back = document.activeElement;
+  // focus on the sheet itself, not its first field: no phone keyboard pops up, and Tab goes on inside it
+  const inner = s.firstElementChild || s;
+  if (!inner.contains(document.activeElement)) {
+    inner.tabIndex = -1;
+    inner.focus({ preventScroll: true });
+  }
+  layerOpen(s);
+}
+function sheetClosed(s) {
+  layerShut(s);
+  s.onclose?.();
+  const a = document.activeElement;
+  if (s.back?.isConnected && (!a || a === document.body || !a.isConnected)) s.back.focus({ preventScroll: true });
+}
+// Esc: the top sheet first (before any other Esc use), then the side panel
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const top = [...document.querySelectorAll("body > .sheet")].pop();
+  if (!top) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  top.remove();
+}, true);
+addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.defaultPrevented || !S.panel || document.querySelector(".tile.spot")) return;
+  if (typing(e) && e.target.value) return; // a half-written message: Esc doesn't throw the pane away
+  closePanel();
+});
+// single-letter shortcuts (M, V, H, C, Space) can be turned off in Devices: speech input types letters (WCAG 2.1.4)
+const singleKeys = () => localStorage.getItem("juntos.singleKeys") !== "off";
+
 function badge(id) {
-  ($(id) || S.barBtns?.[id])?.classList.add("badge");
+  const b = $(id) || S.barBtns?.[id];
+  if (!b) return;
+  b.classList.add("badge");
+  if (b.dataset.label) b.setAttribute("aria-label", `${b.dataset.label} (${t("new")})`);
+}
+function unbadge(id) {
+  const b = $(id) || S.barBtns?.[id];
+  if (!b) return;
+  b.classList.remove("badge");
+  if (b.dataset.label) b.setAttribute("aria-label", b.dataset.label);
 }
 
 // ---------- side panel ----------
 function openPanel(which) {
   if (S.panel === which) return closePanel();
+  if (!S.panel) layerOpen($("panel"));
   S.panel = which;
   $("panel").hidden = false;
   $("panelTitle").textContent = t({ chat: "Chat", board: "Board", bg: "Background", people: "People", act: "Polls and Q&A", br: "Breakout rooms", notes: "Notes" }[which]);
   for (const p of ["chat", "board", "bg", "people", "act", "br", "notes"]) $(`${p}Pane`).hidden = p !== which;
-  $({ chat: "bChat", board: "bBoard", bg: "bBg", people: "bPeople", act: "bAct", br: "bBreak", notes: "bNotes" }[which])?.classList.remove("badge");
-  $("bChat2")?.classList.remove("badge");
+  unbadge({ chat: "bChat", board: "bBoard", bg: "bBg", people: "bPeople", act: "bAct", br: "bBreak", notes: "bNotes" }[which]);
+  if (which === "chat") unbadge("bChat2");
   if (which === "chat") {
     renderChat();
     if (!isPhone) $("chatText").focus();
@@ -1858,6 +2157,7 @@ function openPanel(which) {
 }
 
 function closePanel() {
+  layerShut($("panel"));
   if (S.boardBig) setBoardBig(false);
   S.panel = null;
   $("panel").hidden = true;
@@ -2231,6 +2531,8 @@ $("chatForm").onsubmit = (e) => {
 function ensureBoard() {
   if (!S.board) {
     const b = (S.board = new Board($("boardCanvas"), (m) => S.mesh && S.mesh.broadcast(m)));
+    b.isHost = (id) => !!S.mesh && S.mesh.hosts.has(id);
+    b.amHost = () => !!S.isHost;
     const tools = $("boardTools");
     const group = (cls) => {
       const g = document.createElement("div");
@@ -2239,7 +2541,10 @@ function ensureBoard() {
       return g;
     };
     const pick = (g, btn) => {
-      for (const x of g.children) x.classList.toggle("on", x === btn);
+      for (const x of g.children) {
+        x.classList.toggle("on", x === btn);
+        if (x.classList.contains("swatch")) x.setAttribute("aria-pressed", String(x === btn));
+      }
     };
     const names = { pen: "Pen", rect: "Rectangle", ellipse: "Circle", arrow: "Arrow", text: "Text", eraser: "Eraser", hand: "Move the board" };
     const tg = group("bTools");
@@ -2263,7 +2568,9 @@ function ensureBoard() {
       const x = document.createElement("button");
       x.className = "swatch";
       x.style.background = c;
-      x.title = t("Colour");
+      x.title = t(COLOR_NAMES[c] || "Colour");
+      x.setAttribute("aria-label", x.title);
+      x.setAttribute("aria-pressed", String(c === COLORS[0]));
       x.onclick = () => {
         b.color = c;
         pick(cg, x);
@@ -2402,6 +2709,13 @@ $("bgFile").onchange = async (e) => {
 // ---------- host controls: the person who started the call can lock it, let people in, mute, remove ----------
 function onHost(m) {
   if (m.t === "room") {
+    // in the call: a passcode from the link was taken (or not needed), so it is the one kept from now on
+    if (S.linkPass && !m.serverless) {
+      try {
+        localStorage.setItem(`juntos.pass.${S.code}`, S.linkPass);
+      } catch {}
+      S.linkPass = "";
+    }
     S.isHost = m.host;
     S.isOwner = !!m.owner;
     S.act.render();
@@ -2434,8 +2748,10 @@ function onHost(m) {
     localStorage.setItem(`juntos.out.${S.code}`, "1");
     leave(t("{name} removed you from the call", { name: m.by || t("Someone") }));
   } else if (m.t === "knock") {
+    const fresh = !S.knocks.has(m.id);
     S.knocks.set(m.id, m.name);
     paintKnocks();
+    if (fresh) knockAlert(m.name);
   } else if (m.t === "knock-gone") {
     S.knocks.delete(m.id);
     paintKnocks();
@@ -2547,12 +2863,26 @@ function paintChatLock() {
 }
 
 // someone asks to join a locked call: a card for the host to let them in
+// someone asking to join is heard and seen even from another window (UX review U-J6: it only redrew the cards)
+async function knockAlert(name) {
+  playOnSpeaker((chime.url ||= chime()));
+  if (!document.hidden || typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  const reg = await swReady;
+  reg?.showNotification(t("{name} wants to join", { name: name || t("Someone") }), {
+    tag: "juntos-knock",
+    body: t("Tap to go back and let them in."),
+    icon: `${BASE}img/icon-192.png`,
+    badge: `${BASE}img/icon-192.png`,
+    data: { url: location.href },
+  }).catch(() => {});
+}
 function paintKnocks() {
   let box = $("knocks");
   if (!box) {
     box = document.createElement("div");
     box.id = "knocks";
     box.className = "knocks";
+    box.setAttribute("role", "status");
     $("call").append(box);
   }
   box.innerHTML = "";
@@ -2580,7 +2910,7 @@ function paintKnocks() {
     yes.textContent = t("Let in");
     yes.onclick = () => S.mesh.host({ t: "admit", id });
     const no = document.createElement("button");
-    no.className = "chip";
+    no.className = "secondary knockNo"; // full size, set apart from Let in (it was a small chip next to it)
     no.textContent = t("Deny");
     no.onclick = () => S.mesh.host({ t: "deny", id });
     card.append(who, yes, no);
@@ -2695,6 +3025,9 @@ function renderPeople() {
   const focus = editing?.contains(document.activeElement) && document.activeElement;
   const sel = focus && [focus.selectionStart, focus.selectionEnd];
   S.passEditor = editing || null;
+  // a person's actions keep the keyboard where it was across a redraw
+  const act = document.activeElement?.closest?.(".person") && document.activeElement.dataset.k;
+  const actOf = act && document.activeElement.closest(".person").dataset.id;
   ul.innerHTML = "";
   // who hosts the call, for everyone to see
   const owner = S.isOwner ? `${localStorage.getItem("juntos.name")} ${t("(you)")}` : [...S.mesh.peers.values()].find((p) => S.mesh.owners.has(p.id))?.name;
@@ -2748,6 +3081,10 @@ function renderPeople() {
     const li = document.createElement("li");
     li.className = "person";
     li.dataset.role = role;
+    if (id) li.dataset.id = id;
+    // a host's actions for this person, in one place that opens from "⋯" (UX review U-J10: four chips side by
+    // side in a row were easy to mistake on a phone, Remove next to Allow to speak)
+    const acts = [];
     const nm = document.createElement("span");
     nm.className = "pName";
     nm.textContent = name + (extra ? ` ${extra}` : "");
@@ -2769,16 +3106,18 @@ function renderPeople() {
       const sp = document.createElement("button");
       sp.className = "chip talkBtn" + (talk ? "" : " on");
       sp.textContent = talk ? t("Don't allow to speak") : t("Allow to speak");
+      sp.dataset.k = "talk";
       sp.onclick = () => S.mesh.host({ t: "talk", id, on: !talk });
-      li.append(sp);
+      acts.push(sp);
     }
     if (id && S.isOwner && role !== "host") {
       const co = document.createElement("button");
       co.className = "chip coBtn";
       co.textContent = role === "co" ? t("Remove as co-host") : t("Make co-host");
       co.title = t("Co-hosts have the same controls as you, except making co-hosts.");
+      co.dataset.k = "co";
       co.onclick = () => S.mesh.host({ t: "cohost", id, on: role !== "co" });
-      li.append(co);
+      acts.push(co);
     }
     if (id && S.isHost) {
       const pin = document.createElement("button");
@@ -2786,10 +3125,46 @@ function renderPeople() {
       pin.className = "chip" + (on ? " on" : "");
       pin.name = "pinAll";
       pin.textContent = on ? t("Unpin for everyone") : t("Pin for everyone");
+      pin.dataset.k = "pin";
       pin.onclick = () => pinForAll(id, !on);
-      li.append(pin);
+      acts.push(pin);
     }
-    if (id && S.isHost && role !== "host" && (role !== "co" || S.isOwner)) li.append(sureButton(t("Remove"), t("Remove?"), () => S.mesh.host({ t: "remove", id })));
+    if (id && S.isHost && role !== "host" && (role !== "co" || S.isOwner)) {
+      const rm = sureButton(t("Remove"), t("Remove?"), () => {
+        S.peopleMenu = null;
+        S.mesh.host({ t: "remove", id });
+      });
+      rm.dataset.k = "remove";
+      acts.push(rm);
+    }
+    if (acts.length) {
+      const open = S.peopleMenu === id;
+      const more = document.createElement("button");
+      more.className = "icon moreBtn";
+      more.dataset.k = "more";
+      more.textContent = "⋯";
+      more.title = t("Actions for {name}", { name });
+      more.setAttribute("aria-label", more.title);
+      more.setAttribute("aria-expanded", String(open));
+      const box = document.createElement("div");
+      box.className = "pActs";
+      box.hidden = !open;
+      box.append(...acts);
+      box.onkeydown = (e) => {
+        if (e.key !== "Escape") return;
+        e.stopPropagation();
+        S.peopleMenu = null;
+        renderPeople();
+        $("peopleList").querySelector(`.person[data-id="${CSS.escape(id)}"] .moreBtn`)?.focus();
+      };
+      more.onclick = () => {
+        S.peopleMenu = open ? null : id;
+        renderPeople();
+        const row = $("peopleList").querySelector(`.person[data-id="${CSS.escape(id)}"]`);
+        (S.peopleMenu ? row?.querySelector(".pActs button") : row?.querySelector(".moreBtn"))?.focus();
+      };
+      li.append(more, box);
+    }
     ul.append(li);
   };
   handsRow(ul);
@@ -2802,6 +3177,7 @@ function renderPeople() {
       (S.hands.has(p.id) ? "✋ " : "") + (p.state === "connected" ? "" : t("· connecting")) + (S.br.roomOf(p.id) ? ` · ${S.br.room(S.br.roomOf(p.id))}` : ""),
       p.id,
     );
+  if (act && actOf && !document.activeElement?.closest?.(".person")) ul.querySelector(`.person[data-id="${CSS.escape(actOf)}"] [data-k="${act}"]`)?.focus();
   $("bPeople")?.querySelector("span") && ($("bPeople").querySelector("span").textContent = t("People ({n})", { n: S.mesh.peers.size + 1 }));
   S.br.refresh();
 }
@@ -3049,6 +3425,8 @@ addEventListener("keydown", (e) => {
     // a button that just hid itself (the "You're muted" note's Unmute) keeps the keys: count those as the page's
     const tgt = e.target.checkVisibility?.() === false ? document.body : e.target;
     if (S.panel === "board" || (tgt !== document.body && !tgt.closest("#bar, #grid"))) return;
+    // a focused button takes its own Space (it started push-to-talk instead, U-J9)
+    if (tgt.closest?.("button, a, select, [role=button]") || !singleKeys()) return;
     e.preventDefault();
     if (e.repeat || S.mic || S.comp || S.ptt || !S.micTrack) return;
     if (!may("me", "talk")) return askToSpeak();
@@ -3058,7 +3436,7 @@ addEventListener("keydown", (e) => {
     $("pttNote").hidden = false;
     return setMic(true);
   }
-  if (document.querySelector(".sheet")) return;
+  if (document.querySelector(".sheet") || !singleKeys()) return;
   if (k === "m") setMic(!S.mic);
   else if (k === "v") setCam(!S.cam);
   else if (k === "h") toast(toggleHand() ? t("Hand raised") : t("Hand lowered"));
@@ -4001,7 +4379,7 @@ function micConstraints(id) {
   return id ? { ...a, deviceId: { ideal: id } } : a;
 }
 
-async function useCamera(video) {
+async function useCamera(video, opening) {
   try {
     const s = await navigator.mediaDevices.getUserMedia({ video });
     S.camTrack?.stop();
@@ -4018,8 +4396,9 @@ async function useCamera(video) {
     await S.mesh?.setTracks(audioOut(), videoOut());
     if (S.darkWatch) suggestLight();
     return true;
-  } catch (_) {
-    toast(t("Couldn't switch camera"));
+  } catch (e) {
+    // opening one that never started says why (U-J2); switching says the switch failed
+    toast(opening ? t(MEDIA_MSG.cam[mediaWhy(e)]) : t("Couldn't switch camera"));
     return false;
   }
 }
@@ -4032,7 +4411,7 @@ function micCopy() {
   (S.micCopies ||= new Set()).add(c);
   return c;
 }
-async function useMic(id) {
+async function useMic(id, opening) {
   // a browser shares one capture between the tracks of a microphone: while any of them is open, a new one
   // keeps the old settings (the noise switch did nothing), so everything on it stops first
   for (const c of S.micCopies || []) c.stop();
@@ -4044,7 +4423,7 @@ async function useMic(id) {
       s = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(id) });
     } catch (e) {
       s = await navigator.mediaDevices.getUserMedia({ audio: true }); // never left without a microphone
-      toast(t("Couldn't switch microphone"));
+      if (!opening) toast(t("Couldn't switch microphone"));
     }
     S.micTrack = s.getAudioTracks()[0];
     S.micTrack.enabled = micLive();
@@ -4052,8 +4431,8 @@ async function useMic(id) {
     await S.mesh?.setTracks(audioOut(), videoOut());
     capRestart();
     return true;
-  } catch (_) {
-    toast(t("Couldn't switch microphone"));
+  } catch (e) {
+    toast(opening ? t(MEDIA_MSG.mic[mediaWhy(e)]) : t("Couldn't switch microphone"));
     return false;
   }
 }
@@ -4193,6 +4572,15 @@ async function openDevices() {
   light.firstChild.checked = S.lightOn;
   light.firstChild.onchange = () => setLight(light.firstChild.checked);
   inner.append(light);
+  if (!isPhone) {
+    const keys = document.createElement("label");
+    keys.className = "check";
+    keys.innerHTML = `<input type="checkbox" name="singleKeys"><span></span>`;
+    keys.lastChild.textContent = t("Single-key shortcuts (M, V, H, C, Space)");
+    keys.firstChild.checked = singleKeys();
+    keys.firstChild.onchange = () => localStorage.setItem("juntos.singleKeys", keys.firstChild.checked ? "on" : "off");
+    inner.append(keys);
+  }
   inner.append(S.netq.section());
   const tests = document.createElement("div");
   tests.className = "devTests";
@@ -4275,6 +4663,7 @@ async function openDevices() {
   done.onclick = close;
   inner.append(done);
   sheet.append(inner);
+  sheet.onclose = () => clearInterval(meterTimer); // Esc and Back close it too
   sheet.onclick = (e) => {
     if (e.target === sheet) close(); // a block: an onclick that returns false cancels the click (checkboxes stopped working)
   };
@@ -4435,13 +4824,20 @@ $("invite").onclick = () => inviteSheet(S.hasPass ? callUrl(S.code) : `${locatio
 
 // Leave, for a host or co-host with others in the call: Meet's choice between ending the call for everyone and
 // just leaving (help 11989526 / Workspace update 2021-02 "End meeting for all")
-function leaveClick() {
-  if (!S.isHost || !S.mesh || !S.mesh.peers.size) return leave();
+// fromBack: Android's Back with nothing open asks everyone (the Leave button leaves a guest at once, like Meet)
+function leaveClick(fromBack) {
+  if (!S.mesh) return;
+  const host = S.isHost && S.mesh.peers.size;
+  if (!host && fromBack !== true) return leave();
+  if ($("leaveSheet")) return;
   const sheet = document.createElement("div");
   sheet.className = "sheet";
   sheet.id = "leaveSheet";
   const inner = document.createElement("div");
   inner.className = "sheetInner leaveInner";
+  const head = document.createElement("h3");
+  head.textContent = t("Leave the call?");
+  inner.append(head);
   const end = document.createElement("button");
   end.className = "secondary danger big";
   end.id = "endAll";
@@ -4459,7 +4855,14 @@ function leaveClick() {
     sheet.remove();
     leave();
   };
-  inner.append(end, just);
+  if (!host) just.textContent = t("Leave the call");
+  const stay = document.createElement("button");
+  stay.className = "ghost big";
+  stay.id = "stayIn";
+  stay.textContent = t("Stay in the call");
+  stay.onclick = () => sheet.remove();
+  if (host) inner.append(end);
+  inner.append(just, stay);
   sheet.append(inner);
   sheet.onclick = (e) => {
     if (e.target === sheet) sheet.remove();
@@ -4524,8 +4927,13 @@ async function callNotice(show) {
 }
 document.addEventListener("visibilitychange", () => callNotice(document.hidden && !!S.mesh));
 function askNotices() {
-  // asked once, when joining a call from a phone (the moment it makes sense)
-  if (isPhone && typeof Notification !== "undefined" && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+  // on phones, once: a line says why first, and the question comes only from its Allow (UX review U-J16: it was asked
+  // at Join, right after the camera question, with nothing saying what for)
+  if (!isPhone || typeof Notification === "undefined" || Notification.permission !== "default" || localStorage.getItem("juntos.askedNotices")) return;
+  localStorage.setItem("juntos.askedNotices", "1");
+  setTimeout(() => {
+    if (S.mesh) toast(t("Allow notifications so Juntos can show that you're still in a call when you switch apps."), { label: t("Allow"), name: "allowNotices", run: () => Notification.requestPermission().catch(() => {}) });
+  }, 4000);
 }
 function callControls() {
   const ms = navigator.mediaSession;

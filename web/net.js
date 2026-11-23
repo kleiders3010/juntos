@@ -283,6 +283,7 @@ export class Net {
       if (tile.wantSent !== q) {
         if (p && p.dc.readyState === "open") {
           mesh.sendTo(id, { k: "want", q });
+          if (p.via) mesh.fwd?.want(id, q); // a picture passed on by a helper: the helper stops or resumes it
           tile.wantSent = q;
         }
       }

@@ -16,7 +16,7 @@ from playwright.sync_api import sync_playwright
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 # a recognition that can listen to a given track (refuses a stopped one, like Chrome 135+); the page's own
 # microphone tracks are noted, so the test can tell "listening to me" from "listening to someone else"
 SR_TRACK = """

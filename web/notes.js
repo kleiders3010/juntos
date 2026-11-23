@@ -33,7 +33,8 @@ function greater(a, b) {
   const [tb, pb] = parse(b);
   return ta !== tb ? ta > tb : pa > pb;
 }
-const okId = (id) => typeof id === "string" && id.length < 40 && /^\d+\.[a-z0-9]+$/.test(id);
+// a character's clock is at most 12 digits (safety round 3, N8: one huge clock made everyone's next ids unreadable)
+const okId = (id) => typeof id === "string" && id.length < 40 && /^\d{1,12}\.[a-z0-9]+$/.test(id);
 
 export class Notes {
   // o: { t, send(m), sendTo(id, m), hosts() (ids of the hosts among the others), amHost(), myName(), names() (everyone in the call), notify(text), badge() }
@@ -59,6 +60,7 @@ export class Notes {
     this.pending = []; // characters typed after one that hasn't arrived yet
     this.pendingDel = new Set();
     this.clock = 0;
+    this.born = Date.now(); // when I came into this call
     this.me = rid();
     this.edit = { who: "all", ver: 0 };
     this.text = "";
@@ -202,6 +204,9 @@ export class Notes {
       this.wTimer = setTimeout(() => this.paintWriters(), 3100);
     } else if (m.k === "nsync") {
       if (this.o.hosts().has(from) && +m.edit?.ver > this.edit.ver && ["all", "host"].includes(m.edit.who)) this.edit = { who: m.edit.who, ver: +m.edit.ver };
+      // the notes as they are, for someone who just came: while only the host can edit, from a non-host only in my
+      // first seconds here (safety round 3, N8: a full copy was a way around "only the host can edit")
+      if (this.edit.who === "host" && !this.o.hosts().has(from) && Date.now() - this.born > 15000) return true;
       this.applyOps((Array.isArray(m.ops) ? m.ops : []).slice(0, BATCH));
     }
     const had = this.text;

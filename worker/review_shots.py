@@ -10,7 +10,7 @@ OUT = sys.argv[1]
 BASE = sys.argv[2] if len(sys.argv) > 2 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 os.makedirs(OUT, exist_ok=True)
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 STUB = """
 window.__sr = [];
 class FakeSR {

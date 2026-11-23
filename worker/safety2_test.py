@@ -43,7 +43,7 @@ KPORTS = [8815, 8816]  # two copies of the room server (the game host's), for th
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "web")
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 LOCAL = re.compile(r"//(localhost|127\.0\.0\.1|\[::1\])[:/]")
 errors = []
 

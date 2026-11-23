@@ -395,7 +395,9 @@ export function scheduleSheet(o) {
     const { code, key } = o.newHost();
     try {
       localStorage.setItem(`juntos.host.${code}`, key); // whoever plans the call is its host on this device
-    } catch {}
+    } catch {
+      o.toast(o.t("This device couldn't keep the host key for this call: if you reload or leave, you won't be its host."));
+    }
     keepSecurity(code, v);
     // a passcode or asking to join must hold before the host arrives: the room is claimed with them now
     if (v.ask || v.pass) o.claim?.(code, key, { lock: v.ask, pass: v.pass });
@@ -465,6 +467,15 @@ export function paintUpcoming(box, o) {
     del.onclick = () => {
       store(load().filter((x) => x.code !== c.code));
       paintUpcoming(box, o);
+      // (UX review U-J23: it went at once, with no way back)
+      o.toast?.(t("Removed “{title}”", { title: c.title || t("Juntos call") }), {
+        label: t("Undo"),
+        name: "undoRemove",
+        run: () => {
+          if (!load().some((x) => x.code === c.code)) store([...load(), c]);
+          paintUpcoming(box, o);
+        },
+      });
     };
     row.append(info, open, del);
     box.append(row);

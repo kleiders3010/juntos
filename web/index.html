@@ -23,8 +23,10 @@
     <details id="startOpts" class="startOpts"><summary>Who can join</summary></details>
     <button id="schedule" class="secondary">Schedule for later</button>
     <form id="joinForm" class="join">
+      <label for="joinCode" class="fieldLabel">Call code or link</label>
       <input id="joinCode" placeholder="Enter a code or link" autocomplete="off" autocapitalize="off" spellcheck="false">
       <button class="secondary">Join</button>
+      <p id="joinCodeErr" class="fieldErr" role="alert" hidden></p>
     </form>
     <button id="install" class="secondary" hidden>Install app</button>
     <div id="upcoming" class="upcoming" hidden></div>
@@ -39,16 +41,20 @@
       <video id="previewVideo" autoplay playsinline muted></video>
       <div id="previewOff" class="off" hidden>Camera is off</div>
       <div class="previewBar">
-        <button id="pMic" class="round" title="Microphone"></button>
-        <button id="pCam" class="round" title="Camera"></button>
-        <button id="pBg" class="round" title="Background"></button>
-        <button id="pDev" class="round" title="Devices"></button>
+        <button id="pMic" class="round" aria-label="Microphone" title="Microphone"></button>
+        <button id="pCam" class="round" aria-label="Camera" title="Camera"></button>
+        <button id="pBg" class="round" aria-label="Background" title="Background"></button>
+        <button id="pDev" class="round" aria-label="Devices" title="Devices"></button>
       </div>
     </div>
     <div class="lobbySide">
       <h2 id="lobbyCode" class="lobbyCode"></h2>
+      <label for="name" class="fieldLabel">Your name</label>
       <input id="name" placeholder="Your name" maxlength="60" autocomplete="name">
+      <p id="nameErr" class="fieldErr" role="alert" hidden></p>
+      <label for="passcode" class="fieldLabel passLabel">Passcode</label>
       <input id="passcode" placeholder="Passcode" maxlength="10" autocomplete="off" autocapitalize="off" spellcheck="false" hidden>
+      <p id="passcodeErr" class="fieldErr" role="alert" hidden></p>
       <button id="enter" class="primary big">Join now</button>
       <button id="enterComp" class="linkBtn" title="A second device in the same room: no microphone or sound, so no echo">Companion mode (no sound)</button>
       <div id="lobbyDevs" class="lobbyDevs">
@@ -57,7 +63,8 @@
         <div class="ldRow" data-k="cam"><span class="ldIc"></span><select id="ldCam" aria-label="Camera"></select></div>
       </div>
       <p id="lobbyOk" class="devOk" hidden><i></i><span></span></p>
-      <p id="lobbyMsg" class="small"></p>
+      <p id="lobbyMsg" class="small" role="status"></p>
+      <button id="mediaRetry" class="secondary" hidden>Try again</button>
       <button id="pCheck" class="linkBtn">More sound and video checks</button>
     </div>
   </div>
@@ -69,7 +76,7 @@
     <span id="roomCode" class="code"></span>
     <button id="invite" class="chip">Invite people</button>
     <span id="compBox" class="compBox" hidden><span>Companion mode</span><button id="compOff" class="chip">Use my audio</button></span>
-    <span id="netState" class="netState" hidden></span>
+    <span id="netState" class="netState" role="status" hidden></span>
     <span id="recDot" class="rec" hidden>● Recording</span>
   </header>
   <main class="stage">
@@ -112,7 +119,7 @@
   </div>
 </section>
 
-<div id="toasts" class="toasts"></div>
+<div id="toasts" class="toasts" role="status"></div>
 <div id="mutedNote" class="mutedNote" role="status" hidden></div>
 <div id="pttNote" class="pttNote" role="status" hidden></div>
 <input id="bgFile" type="file" accept="image/*" hidden>

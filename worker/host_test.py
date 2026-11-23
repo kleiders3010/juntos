@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 # JUNTOS_SIGNAL: another room server (the Kinetic one: kinetic/server.mjs) with the same protocol
 WS = __import__("os").environ.get("JUNTOS_SIGNAL") or BASE.replace("http", "ws", 1)
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 TILES = "document.querySelectorAll('.tile').length"
 errors = []
 
@@ -19,6 +19,14 @@ def check(ok, what):
     print(("ok   " if ok else "FAIL ") + what, flush=True)
     if not ok:
         errors.append(what)
+
+
+def act(pg, who, sel):
+    """A host's action for someone in People: it waits behind their "⋯" (UX review U-J10)."""
+    row = f".person:has-text('{who}')"
+    if pg.is_hidden(f"{row} .pActs"):
+        pg.click(f"{row} .moreBtn")
+    pg.click(f"{row} {sel}")
 
 
 def people(pg):
@@ -62,24 +70,27 @@ with sync_playwright() as p:
     BETO_AUDIO = f"document.querySelector('.tile[data-id=\"{beto}\"] audio').volume"
     BETO_ROW = "[...document.querySelectorAll('.person')].find(e => e.textContent.includes('Beto'))?.textContent || ''"
     people(a)
-    a.click(".person:has-text('Beto') .talkBtn")
+    check(a.is_hidden(".person:has-text('Beto') .talkBtn") and a.get_attribute(".person:has-text('Beto') .moreBtn", "aria-expanded") == "false",  # pinned: the ARIA value
+          "a person's actions wait behind their ⋯")
+    act(a, "Beto", ".talkBtn")
+    check(a.get_attribute(".person:has-text('Beto') .moreBtn", "aria-expanded") == "true", "⋯ says it is open")  # pinned: the ARIA value
     o.wait_for_function("() => !__S.micTrack.enabled", timeout=5000)
     check(o.evaluate("__S.mic"), "Ana doesn't let Beto speak: his own mic switch stays on")
     check("allowed you to speak" in o.evaluate("document.getElementById('toasts').textContent") and o.evaluate("document.getElementById('bMic').classList.contains('blocked')"),
           "nothing of his goes out, his mic button shows it and he's told")
     a.wait_for_function(f"() => {BETO_AUDIO} === 0", timeout=5000)
     check("Not allowed to speak" in a.evaluate(BETO_ROW), "Ana doesn't hear him either way, and People says so")
-    a.click(".person:has-text('Beto') .talkBtn")
+    act(a, "Beto", ".talkBtn")
     o.wait_for_function("() => __S.micTrack.enabled", timeout=5000)
     check(o.evaluate("__S.mic"), "allowed again: his mic is on, as he had it")
     a.wait_for_function(f"() => {BETO_AUDIO} === 1", timeout=5000)
     o.evaluate("document.getElementById('bMic').click()")  # he mutes himself
-    a.click(".person:has-text('Beto') .talkBtn")
+    act(a, "Beto", ".talkBtn")
     o.wait_for_function("() => document.getElementById('bMic').classList.contains('blocked')", timeout=5000)
     o.evaluate("document.getElementById('bMic').click()")
     check(not o.evaluate("__S.mic") and o.evaluate("__S.hands.has('me')"), "not allowed, tapping his mic raises his hand to ask (his mic stays off)")
     a.wait_for_function(f"() => ({BETO_ROW}).includes('✋')", timeout=5000)
-    a.click(".person:has-text('Beto') .talkBtn")
+    act(a, "Beto", ".talkBtn")
     o.wait_for_function("() => !document.getElementById('bMic').classList.contains('blocked')", timeout=5000)
     check(not o.evaluate("__S.mic") and not o.evaluate("__S.micTrack.enabled"), "allowed: his mic is not turned on for him")
     check(not o.evaluate("__S.hands.has('me')") and "mic is off" in o.evaluate("document.getElementById('toasts').textContent"), "his hand goes down and he's told his mic is off")
@@ -97,7 +108,7 @@ with sync_playwright() as p:
     a.wait_for_selector(".knock")
     check("Caro" in a.evaluate("document.querySelector('.knock').textContent"), "Ana gets 'Caro wants to join'")
     check(not o.query_selector(".knock"), "only the host is asked")
-    a.click(".knock .chip")
+    a.click(".knock .knockNo")  # Deny: a full-size button since the UX review (U-J6)
     c.wait_for_selector("#ended:not([hidden])", timeout=5000)
     check("let you in" in c.evaluate("document.getElementById('endedMsg').textContent"), "denied: Caro is told nobody let her in")
     try:  # (the host hears "gone" from the server a moment after Caro hears "no")
@@ -120,7 +131,7 @@ with sync_playwright() as p:
     c.wait_for_function("() => !__S.micTrack.enabled", timeout=5000)
     check(a.evaluate("__S.mic && __S.micTrack.enabled"), "'Everyone can speak' off: the others aren't heard, Ana is")
     check(o.evaluate("__S.mic") and c.evaluate("__S.mic"), "and their own mic switches are as they left them")
-    a.click(".person:has-text('Caro') .talkBtn")
+    act(a, "Caro", ".talkBtn")
     c.wait_for_function("() => __S.micTrack.enabled", timeout=5000)
     check(not o.evaluate("__S.micTrack.enabled"), "Ana lets Caro speak: only Caro")
     a.check("input[name='perm-talk']")
@@ -130,8 +141,7 @@ with sync_playwright() as p:
     # remove Beto: two taps; he has to ask to come back even after the lock is off
     a.evaluate("__S.mesh.host({ t: 'lock', on: false })")
     a.wait_for_function("() => !__S.locked", timeout=5000)
-    remove = f".person:has-text('Beto') .chip:text('Remove')"
-    a.click(remove)
+    act(a, "Beto", ".chip:text('Remove')")
     check(a.evaluate("__S.mesh.peers.size") == 2, "one tap on Remove only asks")
     a.click(f".person:has-text('Beto') .chip.sure")
     o.wait_for_selector("#ended:not([hidden])", timeout=5000)

@@ -30,6 +30,7 @@ const KEY_EVERY = 3000; // ms between keyframes, so someone who just joined sees
 const V_KBPS = 300;
 const V_FPS = 15;
 const V_W = 640;
+const MEDIA_RATE = 600000; // bytes a second passed on per person (a picture at V_KBPS with keyframes is far below)
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -68,6 +69,8 @@ export class Big {
     this.links = new Set(); // ids of my parent and children
     this.seq = 0;
     this.seen = new Map(); // src -> Set of recent message/media keys (a piece is passed on once)
+    this.hi = new Map(); // src -> the highest message number with a good signature
+    this.rate = new Map(); // src -> { at, bytes }: sound and picture passed on for them this second
     this.keys = new Map(); // src -> imported public key (promise)
     this.pair = new Map(); // id -> key shared with them (promise), for private messages
     this.mk = null; // my room key while the call is split into rooms (my sound and picture are encrypted with it)
@@ -222,9 +225,17 @@ export class Big {
     } catch (_) {}
   }
 
+  // a sender's message numbers: seen ones, and the highest so far (anything far below it is an old one sent again)
+  oldMsg(src, n) {
+    const s = this.seen.get(src);
+    return (s && s.has("m" + n)) || n < (this.hi.get(src) || 0) - 1000;
+  }
+
   onRelay(from, raw, o) {
-    if (typeof o.s !== "string" || typeof o.n !== "number" || o.s === this.mesh.id || this.dup(o.s, "m" + o.n)) return;
-    // checked before it goes on (about a millisecond): a message forged in someone's name stops at the first device
+    if (typeof o.s !== "string" || !Number.isSafeInteger(o.n) || o.n < 0 || o.s === this.mesh.id || this.oldMsg(o.s, o.n)) return;
+    // checked before it goes on (about a millisecond): a message forged in someone's name stops at the first device.
+    // Its number counts as seen only once the signature is good (safety round 3, N3: a forgery marked first would
+    // make the real message vanish)
     const prev = this.chains.get(o.s) || Promise.resolve();
     const next = prev
       .then(async () => {
@@ -232,6 +243,8 @@ export class Big {
         if (!k) return (this.stats.bad++, null);
         const ok = await crypto.subtle.verify(SIGN, await k, unb64u(String(o.sig || "")), enc.encode(this.body(o)));
         if (!ok) return (this.stats.bad++, null);
+        if (this.oldMsg(o.s, o.n) || this.dup(o.s, "m" + o.n)) return null;
+        if (o.n > (this.hi.get(o.s) || 0)) this.hi.set(o.s, o.n);
         if (o.to !== this.mesh.id) this.linkSend(from, raw);
         if (o.to && o.to !== this.mesh.id) return;
         if (o.rc && !this.mesh.route(o.s)) return;
@@ -286,6 +299,8 @@ export class Big {
   }
 
   startAudio(track) {
+    // a device told the call is full stops its tracks; a processor can't be built on an ended track
+    if (!track || track.readyState === "ended") return;
     const run = { stop: false };
     this.aRun = run;
     run.reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
@@ -335,6 +350,8 @@ export class Big {
   }
 
   startVideo(track) {
+    // a device told the call is full stops its tracks; a processor can't be built on an ended track
+    if (!track || track.readyState === "ended") return;
     const run = { stop: false, lastKey: 0, lastFrame: 0, wasOn: false };
     this.vRun = run;
     run.reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
@@ -424,13 +441,24 @@ export class Big {
 
   // ---- everyone else's ----
 
+  overRate(src, n) {
+    const now = performance.now();
+    let r = this.rate.get(src);
+    if (!r || now - r.at > 1000) this.rate.set(src, (r = { at: now, bytes: 0 }));
+    r.bytes += n;
+    return r.bytes > MEDIA_RATE;
+  }
+
   onMedia(from, buf) {
     const u = new Uint8Array(buf);
     if (u.length < 18) return;
     const dv = new DataView(buf);
     const kind = u[0], flags = u[1], i = u[2], count = u[3], seq = dv.getUint32(4), ts = dv.getFloat64(8);
     const src = dec.decode(u.subarray(17, 17 + u[16]));
-    if (src === this.mesh.id || (kind !== 1 && kind !== 2) || this.dup(src, `${kind}:${seq}:${i}`)) return;
+    if (src === this.mesh.id || (kind !== 1 && kind !== 2)) return;
+    // sound and picture only from someone the server listed in the call, and at most MEDIA_RATE a second each
+    // (safety round 3, N3: made-up senders were passed on by every device, each with a decoder of its own)
+    if (!this.mesh.known.has(src) || this.overRate(src, u.length) || this.dup(src, `${kind}:${seq}:${i}`)) return;
     this.linkSend(from, buf, kind);
     this.stats.fwd += this.links.size - 1;
     this.stats.got++;

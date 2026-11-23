@@ -23,7 +23,7 @@ MAIN = (sys.argv[2] if len(sys.argv) > 2 else "https://meet.jurisgames.com") if 
 WS = MAIN.replace("http", "ws", 1)
 RELAY_PORT = 8813
 Q = "" if LIVE else f"signal={WS}&relays=ws://127.0.0.1:{RELAY_PORT}"
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 errors = []
 relay_events = []
 

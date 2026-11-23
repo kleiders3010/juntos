@@ -30,7 +30,7 @@ with wave.open(TONE, "wb") as w:
         v = sum(math.sin(2 * math.pi * f0 * k * tt) / k for k in range(1, 9)) if on else 0.0
         out.append(struct.pack("<h", max(-32000, min(32000, int(9000 * v)))))
     w.writeframes(b"".join(out))
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required",
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required",
         f"--use-file-for-fake-audio-capture={TONE}"]
 errors = []
 relay_events = []

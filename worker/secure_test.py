@@ -13,7 +13,7 @@ BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 # JUNTOS_SIGNAL: another room server (the Kinetic one: kinetic/server.mjs) with the same protocol
 WS = __import__("os").environ.get("JUNTOS_SIGNAL") or BASE.replace("http", "ws", 1)
 SIG = "" if BASE.startswith("https://meet.") else f"?signal={WS}"
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 errors = []
 
 
@@ -42,7 +42,8 @@ def people(pg):
 
 
 def msg(pg):
-    return pg.evaluate("document.getElementById('lobbyMsg').textContent")
+    # the lobby line and the passcode field's own error (UX review U-J8: errors sit under their field)
+    return pg.evaluate("document.getElementById('lobbyMsg').textContent + ' ' + (document.getElementById('passcodeErr')?.textContent || '')")
 
 
 with sync_playwright() as p:
@@ -68,9 +69,9 @@ with sync_playwright() as p:
 
     def try_pass(pg, code):
         pg.fill("#passcode", code)
-        pg.evaluate("document.getElementById('lobbyMsg').textContent = ''")
+        pg.evaluate("document.getElementById('lobbyMsg').textContent = ''; document.getElementById('passcodeErr').textContent = ''")
         pg.click("#enter")
-        pg.wait_for_function("() => !document.getElementById('lobby').hidden && document.getElementById('lobbyMsg').textContent || __S.waiting || __S.joined", timeout=15000)
+        pg.wait_for_function("() => !document.getElementById('lobby').hidden && (document.getElementById('lobbyMsg').textContent || document.getElementById('passcodeErr').textContent) || __S.waiting || __S.joined", timeout=15000)
 
     # --- the start page: who can join ---
     a = page("Ana")

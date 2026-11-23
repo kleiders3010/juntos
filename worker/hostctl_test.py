@@ -20,7 +20,7 @@ BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 RELAY_PORT = 8812
 RELAY = f"ws://127.0.0.1:{RELAY_PORT}"
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 errors = []
 
 
@@ -210,7 +210,12 @@ with sync_playwright() as p:
     a2.evaluate("__S.mesh.host({ t: 'lock', on: false })")
     wait(d, "__S.locked === false", "her next choice (unlock) reaches everyone")
 
-    check(not hits, f"none of it made a request to our server: {hits[:4]}")
+    # The call itself never uses our server. Only the host's lock is also written to the room servers, on a short link
+    # of its own, so a call moved there later finds it locked (APP-RULES safety 98; Juntos audit round 3, N2)
+    others = [h for h in hits if not h[0].startswith("Ana")]
+    host_other = [h for h in hits if h[0].startswith("Ana") and "/ws/" not in h[1]]
+    check(not others and not host_other, f"nobody but the host's lock made a request to our server: {(others + host_other)[:4]}")
+    check(all(not pg.evaluate("__S.mesh.srv") for pg in (a2, d)), "and the call stayed on the relays")
     b.close()
 
 print("errors:", errors)

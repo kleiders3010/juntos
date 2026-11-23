@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 # JUNTOS_SIGNAL: another room server (the Kinetic one: kinetic/server.mjs) with the same protocol
 WS = __import__("os").environ.get("JUNTOS_SIGNAL") or BASE.replace("http", "ws", 1)
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 TOASTS = "document.getElementById('toasts').textContent"
 errors = []
 
@@ -27,6 +27,14 @@ def check(ok, what):
 def pane(pg, btn, sel):
     pg.evaluate(f"(() => {{ if (!document.getElementById('{btn}')) document.getElementById('bMore')?.click(); document.getElementById('{btn}').click() }})()")
     pg.wait_for_selector(sel)
+
+
+def act(pg, who, sel):
+    """A host's action for someone in People: it waits behind their "⋯" (UX review U-J10)."""
+    row = f".person:has-text('{who}')"
+    if pg.is_hidden(f"{row} .pActs"):
+        pg.click(f"{row} .moreBtn")
+    pg.click(f"{row} {sel}")
 
 
 def people(pg):
@@ -68,7 +76,7 @@ with sync_playwright() as p:
 
     # the host makes Beto a co-host
     people(a)
-    a.click(".person:has-text('Beto') .coBtn")
+    act(a, "Beto", ".coBtn")
     o.wait_for_function("() => __S.isHost", timeout=5000)
     check("made you a co-host" in o.evaluate(TOASTS), "Beto becomes a co-host and is told")
     c.wait_for_function(f"() => ({row('Beto')})?.textContent.includes('Co-host')", timeout=5000)
@@ -80,10 +88,10 @@ with sync_playwright() as p:
     o.evaluate(f"__S.mesh.host({{ t: 'cohost', id: '{caro}', on: true }})")
     a.wait_for_timeout(800)
     check(not c.evaluate("__S.isHost"), "and his made-up co-host command does nothing")
-    o.click(".person:has-text('Caro') .talkBtn")
+    act(o, "Caro", ".talkBtn")
     c.wait_for_function("() => !__S.micTrack.enabled", timeout=5000)
     check(c.evaluate("__S.mic"), "the co-host can stop Caro speaking (her own mic switch stays on)")
-    o.click(".person:has-text('Caro') .talkBtn")
+    act(o, "Caro", ".talkBtn")
     c.wait_for_function("() => __S.micTrack.enabled", timeout=5000)
 
     # what everyone may do: chat, screen sharing, captions (hosts and co-hosts still may)
@@ -133,7 +141,7 @@ with sync_playwright() as p:
 
     # the host takes the co-host controls back
     people(a)
-    a.click(".person:has-text('Beto') .coBtn")
+    act(a, "Beto", ".coBtn")
     o.wait_for_function("() => !__S.isHost", timeout=5000)
     check("took back" in o.evaluate(TOASTS), "the host takes back Beto's co-host controls")
 

@@ -20,6 +20,34 @@ const MESH_MAX = 16; // same as the server's: big_test.py
 // Cloudflare's only (safety round 2, J17): the privacy page names it; no other company learns who is in a call.
 const ICE = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
 
+/**
+ * A sender's settings, one change at a time and always the latest. The browser refuses a setParameters call while
+ * the one before it on that sender is still under way, and the refusal was dropped unseen, so in a busy call the
+ * "off" of the video cap was sometimes the one lost and pictures kept flowing (2026-11-23: 16 people, up to 15
+ * videos with a cap of 9). `edit` changes the parameters in place; returning false skips the change.
+ */
+export function setParams(sender, edit) {
+  sender.__nextEdit = edit;
+  if (sender.__setting) return sender.__setting;
+  const step = async () => {
+    while (sender.__nextEdit) {
+      const e = sender.__nextEdit;
+      sender.__nextEdit = null;
+      let params;
+      try {
+        params = sender.getParameters();
+      } catch {
+        break;
+      }
+      if (e(params) === false) continue;
+      await sender.setParameters(params).catch((err) => console.warn("juntos: video settings", err && err.name));
+    }
+    sender.__setting = null;
+  };
+  sender.__setting = step();
+  return sender.__setting;
+}
+
 export function randomId() {
   const a = new Uint8Array(12);
   crypto.getRandomValues(a);
@@ -124,6 +152,7 @@ export class Mesh extends EventTarget {
       this.emit("signal-open", { relays: up });
       // (a host coming back may already have the call's document, through the relays: that one stays)
       if (this.selfHost && !this.hd.doc) await this.takeHs(await this.hd.next((d) => ((d.locked = !!(this.opts && this.opts.lock)), (d.host = this.id)), { hostSk: this.key, name: this.name }).catch(() => null));
+      if (this.selfHost) this.freshTimer = setInterval(() => !this.closed && !this.srv && this.hd.doc && this.signedHost({ t: "_fresh" }), 6 * 3600 * 1000);
       if (this.key && !this.hd.doc) this.emit("host", { t: "room", locked: false, host: true, owner: true, pass: false, serverless: true });
       this.hello();
       this.emit("joined", { count: this.peers.size });
@@ -169,7 +198,9 @@ export class Mesh extends EventTarget {
   async mayCome(m) {
     const st = this.hd.doc;
     if (!st || !(st.locked || m.knock) || st.admit.includes(m.from) || m.from === st.host || st.cos[m.from]) return true;
-    if (m.t === "here" && !this.peers.size && !this.meHost) return true; // I'm the newcomer: they're in already
+    // I'm the newcomer: they're in already. Not in a locked call: there only those let in and the hosts answer for
+    // it (safety round 3, N9: someone outside could answer first and get my camera)
+    if (m.t === "here" && !this.peers.size && !this.meHost && !st.locked) return true;
     if (!this.hostHere()) return true; // nobody here could let them in
     return !!(m.hp && (await helloOk(m.hp, m.hsig, this.room, m.from)));
   }
@@ -186,6 +217,14 @@ export class Mesh extends EventTarget {
     if (typeof pub !== "string" || m.from !== idOf(pub) || (m.ck !== undefined && m.ck !== pub)) return;
     const name = typeof m.name === "string" ? cleanName(m.name, 60) : "";
     if (m.t === "hello") {
+      // new people: past the first 16, a few a minute (safety round 3, N7: hellos under thousands of made-up keys
+      // made every device answer each on every relay)
+      const ever = (this.everKeys ||= new Set());
+      if (!ever.has(m.from)) {
+        const r = (this.newKeys = this.newKeys && Date.now() - this.newKeys.at < 60000 ? this.newKeys : { at: Date.now(), n: 0 });
+        if (ever.size >= 16 && ++r.n > 6) return;
+        if (ever.size < 2000) ever.add(m.from);
+      }
       this.helloSeen.add(m.from);
       await this.hproofP;
       if (this.srv) return void this.ns.send({ t: "srv", from: this.id, to: m.from, url: this.srvUrl || this.servers[this.si] });
@@ -196,9 +235,11 @@ export class Mesh extends EventTarget {
       if (!(await this.mayCome(m))) {
         // the call is locked: they wait until a host or co-host lets them in (the hosts tell them so)
         const knew = this.knocking.has(m.from);
+        if (!knew && this.knocking.size >= 50) return; // at most 50 waiting at once
         this.knocking.set(m.from, name);
         if (!this.meHost) return;
-        this.ns.send({ t: "locked", from: this.id, to: m.from, hs: this.hd.wire });
+        // (only "locked": someone not let in gets no document of the call, safety round 3, N1)
+        this.ns.send({ t: "locked", from: this.id, to: m.from });
         if (!knew) this.emit("host", { t: "knock", id: m.from, name });
         return;
       }
@@ -239,14 +280,16 @@ export class Mesh extends EventTarget {
     } else if (m.t === "srv") {
       // this call uses a room server now (a passcode, a big call, the relays failing): the same one as the others
       const i = typeof m.url === "string" ? this.servers.indexOf(m.url) : -1;
+      // only someone I'm connected to or the host moves the call (safety round 2, J4); the first move too, unless
+      // I'm alone here (safety round 3, N2: someone waiting outside could move a locked call to an empty server)
+      const said = this.peers.get(m.from);
+      const trusted = (said && said.pc && said.pc.connectionState === "connected") || !!(m.hp && (await helloOk(m.hp, m.hsig, this.room, m.from)));
       if (!this.srv) {
+        if (this.peers.size && !trusted) return;
         if (i >= 0) this.si = i;
         return this.goServer();
       }
-      // they moved to the other server (theirs failed): follow if mine isn't working either, and only when it's
-      // someone I'm connected to or the host who says so (safety round 2, J4)
-      const said = this.peers.get(m.from);
-      const trusted = (said && said.pc && said.pc.connectionState === "connected") || !!(m.hp && (await helloOk(m.hp, m.hsig, this.room, m.from)));
+      // they moved to the other server (theirs failed): follow if mine isn't working either
       if (i >= 0 && i !== this.si && trusted && !(this.ws && this.ws.readyState === 1)) {
         this.si = i;
         this.fails = 0;
@@ -309,11 +352,16 @@ export class Mesh extends EventTarget {
       }
       this.srvUrl = url;
       await this.keysP;
-      await this.idpP;
-      await this.hproofP;
+      // both proofs made now, with the time (a server takes them for a few minutes only, safety round 3, N13)
+      const at = Date.now();
+      let idp = "", hsig = "";
+      try {
+        idp = await idProof(this.signer.sk, this.room, this.id, at);
+        if (this.selfHost) hsig = await helloProof(this.key, this.room, this.id, at);
+      } catch (_) {}
       if (this.ws !== ws || ws.readyState !== 1) return;
       this.emit("signal-open");
-      this.sendSignal({ t: "hello", id: this.id, ck: this.signer.pub, idp: this.idp, name: this.name, cap: this.kidCap, ...(this.keys ? { pub: this.keys.pub } : {}), ...(this.key ? { ...(this.selfHost ? { hp: this.hpub, hsig: this.hproof } : { key: this.key }), claim: true, ...(this.opts ? { opts: this.opts } : {}) } : {}), ...(this.knock ? { knock: true } : {}), ...(this.pass ? { pass: this.pass } : {}) });
+      this.sendSignal({ t: "hello", id: this.id, ck: this.signer.pub, at, idp, name: this.name, cap: this.kidCap, ...(this.keys ? { pub: this.keys.pub } : {}), ...(this.key ? { ...(this.selfHost ? { hp: this.hpub, hsig } : { key: this.key }), claim: true, ...(this.opts ? { opts: this.opts } : {}) } : {}), ...(this.knock ? { knock: true } : {}), ...(this.pass ? { pass: this.pass } : {}) });
     };
     ws.onmessage = (e) => {
       const m = JSON.parse(e.data);
@@ -416,6 +464,10 @@ export class Mesh extends EventTarget {
       this.emit("someone-joining", { id: m.id, name: m.name, at: Date.now() });
     } else if (["room", "lock", "knock", "knock-gone", "waiting", "denied", "removed", "ended", "passcode", "pass", "perms", "role"].includes(m.t)) {
       // host controls: who may come in, mute, remove, the passcode (the server checks who is the host)
+      // A call that moved here from the relays: whoever the signed document let in (or I'm still linked to) comes
+      // straight in, the server already holding the lock (safety round 3, N2)
+      // (only a knock whose id the server saw proven by its key: an id alone is no proof, J2)
+      if (m.t === "knock" && m.proven === true && this.meHost && typeof m.id === "string" && ((this.hd.doc && this.hd.doc.admit.includes(m.id)) || this.peers.get(m.id)?.pc?.connectionState === "connected")) return void this.sendSignal({ t: "admit", id: m.id });
       if (m.t === "denied" || m.t === "removed" || m.t === "ended" || m.t === "passcode") this.closed = true;
       if (m.t === "pass") this.pass = m.pass || "";
       // what the call had on its server, for moving it to the other one
@@ -521,8 +573,12 @@ export class Mesh extends EventTarget {
       if (!p.offerer && !p.reneg) return;
       if (pc.signalingState !== "stable") return;
       await pc.setLocalDescription();
+      // each offer has its number, and the answer names it: an answer to an earlier offer is never applied to a
+      // later one (2026-11-23 big_test: "order of m-lines in answer doesn't match order in offer" when both sides
+      // offered at once)
+      p.round = (p.round || 0) + 1;
       // the first offer of a connection says so: the other side drops any old, broken one it still holds
-      this.sendSignal({ t: "signal", to: id, data: { sdp: pc.localDescription, name: this.name, fresh: p.offerer && !p.offered, cid: p.cid, for: p.rcid } });
+      this.sendSignal({ t: "signal", to: id, data: { sdp: pc.localDescription, name: this.name, fresh: p.offerer && !p.offered, cid: p.cid, for: p.rcid, round: p.round } });
       p.offered = true;
     };
     dc.onopen = () => this.emit("channel-open", { id });
@@ -543,7 +599,8 @@ export class Mesh extends EventTarget {
     if (this.big && msg && msg._r) return this.big.onRelay(id, data, msg);
     if (direct && msg && typeof msg.k === "string" && this.fwd.onMsg(id, msg)) return;
     if (msg && msg.k === "_hs") return void (!this.srv && this.takeHs(msg.hs));
-    if (msg && msg.k === "_pass") return void (typeof msg.pass === "string" && !this.srv && (this.pass = msg.pass.slice(0, 10)));
+    // a passcode only from a host (safety round 3, N10: anyone else could plant a wrong one)
+    if (msg && msg.k === "_pass") return void (typeof msg.pass === "string" && !this.srv && this.hosts.has(id) && (this.pass = msg.pass.slice(0, 10)));
     this.emit("message", { from: id, msg });
   }
 
@@ -581,6 +638,7 @@ export class Mesh extends EventTarget {
       (d) => {
         const hostish = (id) => id === d.host || !!d.cos[id];
         if (cmd.t === "_here") d.host = this.id;
+        else if (cmd.t === "_fresh"); // the same choices, signed again now (a document is good for a day)
         else if (cmd.t === "lock") {
           d.locked = !!cmd.on;
           // whoever is in now comes straight back after a dropped connection
@@ -649,7 +707,8 @@ export class Mesh extends EventTarget {
     }
     // a host ended the call for everyone (the host too). Not an old end the relays replay to a newcomer: a change
     // that reaches me in the call, or one made after I came
-    if (prev && d.end !== prev.end && (Date.now() - this.hsAt > 3000 || d.end > this.since)) {
+    // (and only an end from the last two minutes: an old one sent again ends nothing, safety round 3, N1)
+    if (prev && d.end !== prev.end && Math.abs(Date.now() - d.end) < 120000 && (Date.now() - this.hsAt > 3000 || d.end > this.since)) {
       this.closed = true;
       clearInterval(this.aloneTimer);
       return this.emit("host", { t: "ended", by });
@@ -819,6 +878,9 @@ export class Mesh extends EventTarget {
 
   // We offer: the newcomer calls everyone already in the room.
   call(id, name) {
+    // someone the call's signed document sent out stays out, also after a move to a room server (safety round 3, N2)
+    const st = this.hd.doc;
+    if (st && (st.out.includes(id) || st.deny.includes(id))) return;
     const p = this.peer(id, name);
     p.offerer = true;
     if (this.big) return;
@@ -835,6 +897,8 @@ export class Mesh extends EventTarget {
     // reached through a helper: their retries of a direct connection stop here (the helper's going ends it)
     if (p && p.via) return;
     if (data && data.ice && this.noDirect(p)) return;
+    // someone reached through the tree has no connection with me yet: only an offer starts one
+    if (p && !p.pc && !(data.sdp && data.sdp.type === "offer")) return;
     // an offer from another connection of theirs than the one we hold is a new connection too
     const other = !!(p && data.cid && p.rcid && data.cid !== p.rcid);
     if (data.sdp && data.sdp.type === "offer" && (data.fresh || other) && p) {
@@ -848,7 +912,11 @@ export class Mesh extends EventTarget {
     if (data.sdp && data.sdp.type === "answer") {
       // an answer only belongs to the offer this connection is waiting on
       if (!p || (data.for && data.for !== p.cid) || p.pc.signalingState !== "have-local-offer") return;
+      if (data.round !== undefined && data.round !== p.round) return;
     }
+    // both of us offered on the same connection at once: the lower id's offer goes ahead, the other side
+    // answers it and offers again after (the browser sets its own offer aside when an offer comes in)
+    if (data.sdp && data.sdp.type === "offer" && p && p.pc && p.pc.signalingState === "have-local-offer" && this.id < from) return;
     if (data.sdp) {
       if (!p) p = this.peer(from, cleanName(data.name, 60));
       if (data.cid) p.rcid = data.cid;
@@ -862,7 +930,7 @@ export class Mesh extends EventTarget {
         if (p.audio && this.audioTrack && this.route(from)) await p.audio.sender.replaceTrack(this.audioTrack);
         if (p.video && this.videoTrack && this.route(from)) await p.video.sender.replaceTrack(this.videoTrack);
         await p.pc.setLocalDescription();
-        this.sendSignal({ t: "signal", to: from, data: { sdp: p.pc.localDescription, name: this.name, cid: p.cid, for: p.rcid } });
+        this.sendSignal({ t: "signal", to: from, data: { sdp: p.pc.localDescription, name: this.name, cid: p.cid, for: p.rcid, round: data.round } });
         this.tune(p);
       }
       for (const c of p.pending || []) if (!c.cid || c.cid === p.rcid) await p.pc.addIceCandidate(c.ice).catch(() => {});
@@ -907,27 +975,28 @@ export class Mesh extends EventTarget {
     }
     const a = p.audio && p.audio.sender;
     if (a && a.getParameters) {
-      const ap = a.getParameters();
-      if (ap.encodings && ap.encodings.length) {
+      setParams(a, (ap) => {
+        if (!ap.encodings || !ap.encodings.length) return false;
         ap.encodings[0].priority = "high";
         ap.encodings[0].networkPriority = "high";
-        a.setParameters(ap).catch(() => {});
-      }
+      });
     }
     const s = p.video && p.video.sender;
     if (!s || !s.getParameters) return;
-    const params = s.getParameters();
-    if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-    const e = params.encodings[0];
     const src = (this.videoTrack && this.videoTrack.getSettings && this.videoTrack.getSettings().height) || 720;
-    e.active = want !== "off";
-    e.maxBitrate = kbps * 1000;
-    e.scaleResolutionDownBy = Math.max(1, src / h);
-    e.maxFramerate = fps;
-    e.priority = "low";
-    e.networkPriority = "low";
-    p.sent = { want, kbps, h: Math.round(src / e.scaleResolutionDownBy), fps };
-    s.setParameters(params).catch(() => {});
+    const scale = Math.max(1, src / h);
+    p.sent = { want, kbps, h: Math.round(src / scale), fps };
+    setParams(s, (params) => {
+      // (none yet before the first handshake ends: adding one is refused; tune() runs again once connected)
+      if (!params.encodings || !params.encodings.length) return false;
+      const e = params.encodings[0];
+      e.active = want !== "off";
+      e.maxBitrate = kbps * 1000;
+      e.scaleResolutionDownBy = scale;
+      e.maxFramerate = fps;
+      e.priority = "low";
+      e.networkPriority = "low";
+    });
   }
 
   /** A viewer told me what they need from my picture: "high" | "mid" | "low" | "off". */
@@ -1024,8 +1093,9 @@ export class Mesh extends EventTarget {
   }
 
   host(cmd) {
-    // (a call on the relays only keeps its lock in the signed document and never touches a server for it)
-    if (cmd.t === "lock" && this.srv) this.mirror([{ t: "lock", on: !!cmd.on }]);
+    // the lock goes to the room servers too, also from a call on the relays: a call moved there finds it locked
+    // (safety round 3, N2)
+    if (cmd.t === "lock") this.mirror([{ t: "lock", on: !!cmd.on }]);
     if (cmd.t === "pass") this.mirror([{ t: "pass", pass: cmd.pass || "" }]);
     // a call without the server whose code proves its host: the devices keep the signed choices
     if (!this.srv && this.canSign && this.hd.doc && cmd.t !== "pass") return void this.signedHost(cmd);
@@ -1042,6 +1112,7 @@ export class Mesh extends EventTarget {
     if (this.ns && !this.srv) this.ns.send({ t: "bye", from: this.id }).finally(() => this.ns.close());
     else this.ns?.close();
     clearInterval(this.aloneTimer);
+    clearInterval(this.freshTimer);
     this.closed = true;
     for (const id of [...this.peers.keys()]) this.drop(id);
     this.big?.close();

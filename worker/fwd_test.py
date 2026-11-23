@@ -14,7 +14,7 @@ BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 RELAY_PORT = 8815
 Q = f"signal={WS}&relays=ws://127.0.0.1:{RELAY_PORT}"
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 errors = []
 relay_events = []
 
@@ -124,6 +124,17 @@ with sync_playwright() as p:
     # the picture really moves: frames arrive on the forwarded video
     fr = "async (id) => { const t = __S.mesh.peers.get(id).stream.getVideoTracks()[0]; const v = document.createElement('video'); v.muted = true; v.srcObject = new MediaStream([t]); await v.play().catch(() => {}); await new Promise(r => setTimeout(r, 1500)); return v.videoWidth; }"
     check(a.evaluate(fr, ids["Beto"]) > 0, "Beto's forwarded picture has frames at Ana's")
+
+    # Ana's tile wants Beto's picture off (video cap, audio only): the helper stops passing it on, and resumes it
+    # (2026-11-23: forwarded pictures ignored "off", big calls got up to 14 videos with a cap of 9)
+    fwd_v = f"() => {{ const h = [...__S.mesh.fwd.helping.values()][0]; return h ? (h.senders['{ids['Ana']}'] || []).filter(s => s.fwdTrack && s.fwdTrack.kind === 'video').map(s => !!s.track) : null; }}"
+    a.evaluate(f"__S.mesh.fwd.want('{ids['Beto']}', 'off')")
+    hp0 = c if hname == "Carla" else d
+    hp0.wait_for_function(f"() => {{ const v = ({fwd_v})(); return v && v.length && v.every(x => !x); }}", timeout=10000)
+    check(True, "Ana wants Beto's picture off: the helper stops passing it on")
+    a.evaluate(f"__S.mesh.fwd.want('{ids['Beto']}', 'low')")
+    hp0.wait_for_function(f"() => {{ const v = ({fwd_v})(); return v && v.length && v.every(x => x); }}", timeout=10000)
+    check(a.evaluate(fr, ids["Beto"]) > 0, "and wants it again: the picture comes back")
 
     a.evaluate(f"__S.mesh.sendTo('{ids['Beto']}', {{ k: 'fwdtest', text: 'pineapple-42' }})")
     o.wait_for_function(f"() => __got.some(g => g.from === '{ids['Ana']}' && g.msg.k === 'fwdtest' && g.msg.text === 'pineapple-42')", timeout=15000)

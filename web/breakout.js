@@ -83,7 +83,11 @@ export class Breakout {
       // only the main call, the room the host gave them, or (a host) any room: nobody sits in on another room by
       // saying so (safety round 2, J18)
       const r = clampRoom(m.room);
-      if (r && !mesh?.hosts.has(from) && !(this.plan && this.plan.assign[from] === r)) return true;
+      if (r && !mesh?.hosts.has(from) && !(this.plan && this.plan.assign[from] === r)) {
+        // (a newcomer may hear where someone is before the host's plan reaches it: kept, and checked when it comes)
+        if (!this.plan) (this.early ||= new Map()).set(from, r);
+        return true;
+      }
       this.where.set(from, r);
       if (!m.room) this.help.delete(from);
       this.o.onMove();
@@ -121,6 +125,11 @@ export class Breakout {
     if (this.here > n) this.move(0);
     // turned down and my room didn't change (the host edited other rooms): don't ask again
     if (old && this.declined === old.v && old.assign[this.myId()] === assign[this.myId()]) this.declined = this.plan.v;
+    // where people said they were before the plan came: taken now if the plan gives them that room
+    let took = false;
+    for (const [id, r] of this.early || []) if (assign[id] === r) took = !!this.where.set(id, r);
+    this.early = null;
+    if (took) this.o.onMove();
     this.paint();
   }
 

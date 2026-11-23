@@ -18,6 +18,11 @@ const unhex = (s) => Uint8Array.from(s.match(/../g) || [], (h) => parseInt(h, 16
 const HEX64 = /^[0-9a-f]{64}$/;
 const ID = /^[A-Za-z0-9_-]{6,40}$/;
 const te = new TextEncoder();
+// A host document is numbered by the host's clock (ms) and is good for a day (safety round 3, N1): one kept from an
+// earlier session of the same link can't replace today's. A co-host's counter is capped so it can't run out.
+export const DOC_AGE = 24 * 3600 * 1000;
+const SKEW = 24 * 3600 * 1000;
+const CV_MAX = 1e6;
 const digest = async (s) => new Uint8Array(await crypto.subtle.digest("SHA-256", te.encode(s)));
 
 // codes look like "kfa-rmzq-tde": easy to read out loud, nothing to mix up (no l/1/o/0)
@@ -74,7 +79,7 @@ const ids = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === "string" && 
 
 // the shape every document must have (anything else is dropped)
 function clean(d, code) {
-  if (!d || typeof d !== "object" || d.code !== code || !Number.isInteger(d.hv) || !Number.isInteger(d.cv) || d.hv < 1 || d.cv < 0) return null;
+  if (!d || typeof d !== "object" || d.code !== code || !Number.isInteger(d.hv) || !Number.isInteger(d.cv) || d.hv < 1 || d.cv < 0 || d.cv > CV_MAX) return null;
   const p = d.perms && typeof d.perms === "object" ? d.perms : {};
   const talk = {};
   if (d.talk && typeof d.talk === "object") for (const [k, v] of Object.entries(d.talk).slice(0, MAX_TALK)) if (ID.test(k)) talk[k] = !!v;
@@ -101,6 +106,19 @@ function clean(d, code) {
 
 const newer = (a, b) => !b || a.hv > b.hv || (a.hv === b.hv && a.cv > b.cv);
 
+function lastHv(code) {
+  try {
+    return Number(globalThis.localStorage?.getItem("juntos-hv:" + code)) || 0;
+  } catch (_) {
+    return 0;
+  }
+}
+function saveHv(code, hv) {
+  try {
+    globalThis.localStorage?.setItem("juntos-hv:" + code, String(hv));
+  } catch (_) {}
+}
+
 export class HostDocs {
   constructor(code) {
     this.code = code;
@@ -120,7 +138,7 @@ export class HostDocs {
     }
     if (!d) return null;
     if (ownsCode(d.by, this.code)) {
-      if (d.cv !== 0 || !(await sigOk(w, d.by))) return null;
+      if (d.cv !== 0 || d.hv < Date.now() - DOC_AGE || d.hv > Date.now() + SKEW || !(await sigOk(w, d.by))) return null;
       this.maxHv = Math.max(this.maxHv || 0, d.hv); // the host's next one is numbered above every one seen
       return d;
     }
@@ -155,7 +173,9 @@ export class HostDocs {
     for (const k of ["out", "deny", "admit"]) d[k] = [...new Set(d[k])].slice(-LIST);
     d.name = name;
     if (hostSk) {
-      d.hv = Math.max(cur ? cur.hv : 0, this.maxHv || 0) + 1;
+      // the host's clock, above every number seen and every one this device signed for this code before
+      d.hv = Math.max(Date.now(), (cur ? cur.hv : 0) + 1, (this.maxHv || 0) + 1, lastHv(this.code) + 1);
+      saveHv(this.code, d.hv);
       d.cv = 0;
       d.by = pubOf(typeof hostSk === "string" ? hostSk : hex(hostSk));
       return signDoc(d, hostSk);
@@ -171,15 +191,18 @@ export class HostDocs {
 // A visit's id is the start of its signing key (safety round 2, J1/J2): only whoever holds that key can be that
 // person, on the relays (their events are signed with it) and on the room server (the hello carries this proof).
 export const idOf = (pub) => String(pub || "").slice(0, 16);
-const idBody = (room, id) => `juntos-id|${room}|${id}`;
-export async function idProof(sk, room, id) {
-  return hex(await schnorr.signAsync(await digest(idBody(room, id)), typeof sk === "string" ? unhex(sk) : sk));
+// To a room server both proofs carry the time they were made (t, ms), checked there to a few minutes (safety round 3,
+// N13: a proof over fixed text worked for ever for whoever saw one). On the relays the event's own signature already
+// ties a message to its sender, so the proof there stays without a time.
+const idBody = (room, id, t) => `juntos-id|${room}|${id}` + (t ? `|${t}` : "");
+export async function idProof(sk, room, id, t) {
+  return hex(await schnorr.signAsync(await digest(idBody(room, id, t)), typeof sk === "string" ? unhex(sk) : sk));
 }
 
 // the host saying hello (coming back to a locked call): proof that this visit's id is the host's
-const helloBody = (room, id) => `juntos-hello|${room}|${id}`;
-export async function helloProof(key, room, id) {
-  return hex(await schnorr.signAsync(await digest(helloBody(room, id)), unhex(key)));
+const helloBody = (room, id, t) => `juntos-hello|${room}|${id}` + (t ? `|${t}` : "");
+export async function helloProof(key, room, id, t) {
+  return hex(await schnorr.signAsync(await digest(helloBody(room, id, t)), unhex(key)));
 }
 // A hello from the host on a link of its own (a planned call's claim, the lock and passcode sent to the other room
 // server): a fresh visit key, its id proof and the host's proof. The host's secret key is never sent (J13).
@@ -187,8 +210,9 @@ export async function hostHello(key, room, extra = {}) {
   const s = newSigner();
   const id = idOf(s.pub);
   const hp = pubOf(key);
-  const host = ownsCode(hp, room) ? { hp, hsig: await helloProof(key, room, id) } : { key };
-  return { t: "hello", id, ck: s.pub, idp: await idProof(s.sk, room, id), name: "", ...host, ...extra };
+  const at = Date.now();
+  const host = ownsCode(hp, room) ? { hp, hsig: await helloProof(key, room, id, at) } : { key };
+  return { t: "hello", id, ck: s.pub, at, idp: await idProof(s.sk, room, id, at), name: "", ...host, ...extra };
 }
 export async function helloOk(pub, sig, room, id) {
   return typeof sig === "string" && ownsCode(pub, room) && sigOk({ body: helloBody(room, id), sig }, pub);

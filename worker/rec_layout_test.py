@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 OUT = os.environ.get("REC_OUT") or tempfile.mkdtemp()
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 OTHER = '.tile:not([data-id="me"])'
 # Beto's camera becomes a portrait picture (360x640, green with a white frame at its very edge), like a phone held upright
 PORTRAIT = """() => { const c = document.createElement('canvas'); c.width = 360; c.height = 640; const x = c.getContext('2d');

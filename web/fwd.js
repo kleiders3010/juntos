@@ -210,6 +210,9 @@ export class Fwd {
     const q = this.m.peers.get(id);
     const z = this.m.peers.get(from);
     if (!q || !z || q.via || q.far || q.state !== "connected" || q.dc.readyState !== "open") return;
+    // only for two people in my breakout room (or both in the main call with me)
+    if (!this.m.route(from) || !this.m.route(id)) return;
+    (this.offered ||= new Set()).add(`${from}|${id}`);
     z.dc.send(JSON.stringify({ k: "_can", id }));
   }
 
@@ -220,6 +223,9 @@ export class Fwd {
     const pb = m.peers.get(b);
     const key = [a, b].sort().join("|");
     if (!pa || !pb || pa.via || pb.via || this.helping.has(key)) return;
+    // I help only a pair I offered to, both in my room (safety round 3, N4: anyone could make me pass a breakout
+    // room's sound and picture out of it)
+    if (!this.offered?.delete(`${a}|${b}`) || !m.route(a) || !m.route(b)) return;
     if (pa.dc.readyState !== "open" || pb.dc.readyState !== "open") return;
     const h = { a, b, senders: {} };
     this.helping.set(key, h);
@@ -231,9 +237,33 @@ export class Fwd {
       const ms = new MediaStream();
       dst.dc.send(JSON.stringify({ k: "_fwdon", of: src.id, sid: ms.id, name: src.name }));
       const tracks = [src.audio && src.audio.receiver.track, src.video && src.video.receiver.track].filter(Boolean);
-      h.senders[dst.id] = tracks.map((t) => dst.pc.addTransceiver(t, { direction: "sendonly", streams: [ms] }).sender);
+      h.senders[dst.id] = tracks.map((t) => {
+        const s = dst.pc.addTransceiver(t, { direction: "sendonly", streams: [ms] }).sender;
+        s.fwdTrack = t; // what it passes on, put back when the viewer wants the picture again (_fwq)
+        return s;
+      });
       if (!dst.offerer) dst.reneg = true; // the other side made this connection: I offer the new tracks myself
     }
+  }
+
+  // a viewer's tile wants `of`'s picture off (video cap, audio only, hidden tile) or on again. The "want" itself goes
+  // sealed to `of`, who has no link to the viewer; the video that reaches them is mine, so I stop or resume it
+  // (2026-11-23: forwarded pictures broke the big-call cap of 9, up to 14 arrived).
+  quality(from, of, q) {
+    const h = this.helping.get([from, of].sort().join("|"));
+    if (!h) return;
+    for (const s of h.senders[from] || []) {
+      if (!s.fwdTrack || s.fwdTrack.kind !== "video") continue;
+      const want = q === "off" ? null : s.fwdTrack;
+      if (s.track !== want) s.replaceTrack(want).catch(() => {});
+    }
+  }
+
+  // the viewer side: tell the helper that passes `of` on to me
+  want(of, q) {
+    const p = this.m.peers.get(of);
+    const z = p && p.via ? this.m.peers.get(p.via) : null;
+    if (z && z.dc.readyState === "open") z.dc.send(JSON.stringify({ k: "_fwq", of, q }));
   }
 
   pass(from, to, c) {
@@ -270,6 +300,8 @@ export class Fwd {
         return typeof msg.id === "string" && this.start(from, msg.id), true;
       case "_fwdon":
         return typeof msg.of === "string" && this.on(from, msg.of, msg.sid, msg.name), true;
+      case "_fwq":
+        return typeof msg.of === "string" && ["off", "low", "mid", "high"].includes(msg.q) && this.quality(from, msg.of, msg.q), true;
       case "_fwdoff":
         return typeof msg.of === "string" && this.off(from, msg.of), true;
       case "_fw":

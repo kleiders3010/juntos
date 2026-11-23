@@ -11,7 +11,7 @@ import { schnorr } from "../../web/vendor/noble-secp256k1/index.js";
 
 // A name as others see it, cleaned here too (safety round 2, J16): the same rule as web/names.js, copied so the
 // game host's copy (kinetic/pack.mjs) needs no other file; safety2_test.py checks the two stay the same.
-const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u115f\u1160\u180e\u200b\u200c\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\u3164\ufeff\uffa0\ufff9-\ufffb]/g;
+const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u180e\u200b\u200c\u200e\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u206f\u2800\u3164\ufeff\uffa0\ufff9-\ufffb]|\udb40[\udc00-\udc7f]/g;
 const LONE_JOINER = /(?<![\p{Extended_Pictographic}\p{Emoji_Modifier}\ufe0f])\u200d|\u200d(?!\p{Extended_Pictographic})/gu;
 const cleanName = (v, n) => String(v ?? "").replace(/\s+/g, " ").replace(INVISIBLE, "").replace(LONE_JOINER, "").replace(/ {2,}/g, " ").trim().slice(0, n);
 
@@ -31,7 +31,8 @@ async function hostOk(msg, room, id) {
   try {
     const pub = Uint8Array.from(msg.hp.match(/../g), (h) => parseInt(h, 16));
     if (!codesOfPub(pub).includes(room)) return false;
-    const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`juntos-hello|${room}|${id}`)));
+    if (!freshAt(msg.at)) return false;
+    const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`juntos-hello|${room}|${id}|${msg.at}`)));
     return await schnorr.verifyAsync(Uint8Array.from(msg.hsig.match(/../g), (h) => parseInt(h, 16)), d, pub);
   } catch (_) {
     return false;
@@ -50,6 +51,10 @@ export function keyMakesCode(key, code) {
 // limits (APP-RULES safety 5), far above a real call: setting up links to 15 others is a few hundred messages
 const BUDGET_MS = 10000;
 const BUDGET = { in: 1500, none: 10 }; // messages per socket per 10 s (in: has said hello), then it is closed
+// and over a longer time (safety round 3, N6: one socket inside the burst allowance all day cost more than the
+// free plan's day): a real call needs a few hundred messages to set up and a few a minute after that
+const LONG_MS = 10 * 60 * 1000;
+const LONG_BUDGET = 3000;
 const MAX_SOCKETS = 250; // per room (MAX_PEOPLE in the call + people waiting to be let in)
 const HELLO_MS = 10000; // a socket that has not said hello by then is closed
 
@@ -64,8 +69,10 @@ export function overBudget(room, ws) {
   const b = (room.budget ||= new Map());
   const now = Date.now();
   let x = b.get(ws);
-  if (!x || now - x.t > BUDGET_MS) b.set(ws, (x = { t: now, n: 0 }));
-  if (++x.n <= ((ws.deserializeAttachment() || {}).id ? BUDGET.in : BUDGET.none)) return false;
+  if (!x || now - x.t > BUDGET_MS) b.set(ws, (x = { t: now, n: 0, lt: x ? x.lt : now, ln: x ? x.ln : 0 }));
+  if (now - x.lt > LONG_MS) Object.assign(x, { lt: now, ln: 0 });
+  x.ln++;
+  if (++x.n <= ((ws.deserializeAttachment() || {}).id ? BUDGET.in : BUDGET.none) && x.ln <= LONG_BUDGET) return false;
   try { ws.close(1008, "too many messages"); } catch (_) {}
   return true;
 }
@@ -99,11 +106,15 @@ async function passHash(room, pass) {
 // the hello is signed with it. Only a proven id can take over its own earlier link, come back into a locked call,
 // or be a co-host; an unproven one (an old page) is a plain guest and can't push anyone out.
 const unhex = (s) => Uint8Array.from(s.match(/../g) || [], (h) => parseInt(h, 16));
+// Both proofs carry when they were made (ms) and are taken within PROOF_MS of it (safety round 3, N13: over fixed
+// text, a proof seen once, in a log or on the way, worked for ever)
+const PROOF_MS = 5 * 60 * 1000;
+const freshAt = (at) => Number.isSafeInteger(at) && Math.abs(Date.now() - at) < PROOF_MS;
 async function idProven(msg, room, id) {
   if (typeof msg.ck !== "string" || !/^[0-9a-f]{64}$/.test(msg.ck) || msg.ck.slice(0, 16) !== id) return false;
-  if (typeof msg.idp !== "string" || !/^[0-9a-f]{128}$/.test(msg.idp)) return false;
+  if (typeof msg.idp !== "string" || !/^[0-9a-f]{128}$/.test(msg.idp) || !freshAt(msg.at)) return false;
   try {
-    const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`juntos-id|${room}|${id}`)));
+    const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`juntos-id|${room}|${id}|${msg.at}`)));
     return await schnorr.verifyAsync(unhex(msg.idp), d, unhex(msg.ck));
   } catch (_) {
     return false;
@@ -119,6 +130,14 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const m = url.pathname.match(/^\/(ws|info)\/([a-z0-9-]{4,64})$/);
+    // /turn counts against the same per-address limit (safety round 3, N6: it woke the budget object with no limit)
+    if (url.pathname === "/turn") {
+      let ok = false;
+      try {
+        ok = !!env.JOINS && (await env.JOINS.limit({ key: await ipKey(req, env) })).success;
+      } catch (_) {}
+      if (!ok) return new Response("slow down", { status: 429 });
+    }
     if (m) {
       // new links and lobby questions: a few hundred a minute per address (wrangler.toml JOINS; safety round 2, J7), so
       // nobody can wake rooms by the thousand; a school's whole class behind one address still gets in
@@ -295,7 +314,8 @@ export class Room {
       this.sendTree(all, changed);
     }
     // a co-host coming back hears who is waiting
-    if (a.co) for (const p of this.peers(true)) if (p.a.wait) this.send(ws, { t: "knock", id: p.a.id, name: p.a.name });
+    // (the host too: someone who found the passcode by guessing waits for one, safety round 3, N5)
+    if (a.co || a.host) for (const p of this.peers(true)) if (p.a.wait) this.send(ws, { t: "knock", id: p.a.id, name: p.a.name });
   }
 
   setA(p, patch) {
@@ -465,11 +485,17 @@ export class Room {
             if (tr.n >= PASS_TRIES) Object.assign(tr, { n: 0, until: Date.now() + PASS_WAIT });
             this.tries.set(net, tr);
             // from all networks together: past ROOM_TRIES in 10 minutes the call locks (newcomers ask to join) and
-            // the people in it are told, until a host unlocks it (safety round 2, J9)
-            const rt = (this.roomTries = this.roomTries && Date.now() - this.roomTries.since < ROOM_TRIES_MS ? this.roomTries : { n: 0, since: Date.now() });
-            if (++rt.n >= ROOM_TRIES && !this.locked) {
+            // the people in it are told, until a host unlocks it (safety round 2, J9). The count is kept in storage
+            // (one small row, written only on a wrong guess), so a room put to sleep or dropped doesn't forget it,
+            // and from then on even the right passcode only lets someone ask to join (safety round 3, N5)
+            const old = this.roomTries || (await st.get("roomTries"));
+            const rt = (this.roomTries = old && Date.now() - old.since < ROOM_TRIES_MS ? old : { n: 0, since: Date.now() });
+            rt.n++;
+            await st.put("roomTries", rt);
+            if (rt.n >= ROOM_TRIES && !(await st.get("guessed"))) {
               this.locked = true;
               await st.put("locked", true);
+              await st.put("guessed", true);
               await this.touch();
               for (const p of this.peers()) this.send(p.ws, { t: "lock", on: true, by: "", guesses: true });
             }
@@ -495,10 +521,13 @@ export class Room {
       // locked (or sent out earlier): ask to join, a host decides. With no host here nobody could answer, so come in.
       // someone already let in whose link to the server dropped comes straight back (ids are random per visit)
       const back = proven && !!this.in[id] && !msg.knock;
-      if (!host && !co && !back && (this.locked || msg.knock) && hosts.length) {
+      // after passcode guessing (above), whoever gets the passcode right waits for a host, even with no host here yet
+      const guessed = !!passH && !!(await st.get("guessed"));
+      if (!host && !co && !back && (((this.locked || msg.knock) && hosts.length) || guessed)) {
         ws.serializeAttachment({ id, name, wait: true, cap, pub });
         this.send(ws, { t: "waiting" });
-        for (const p of hosts) this.send(p.ws, { t: "knock", id, name });
+        // (proven: this visit's key signed the id, so a host's app may let back in someone it already knows by it)
+        for (const p of hosts) this.send(p.ws, { t: "knock", id, name, ...(proven ? { proven: true } : {}) });
         return;
       }
       for (const p of keyless) {
@@ -540,6 +569,8 @@ export class Room {
     if (msg.t === "lock") {
       this.locked = !!msg.on;
       await this.state.storage.put("locked", this.locked);
+      // a host unlocking decides: a right passcode lets people in again without asking
+      if (!this.locked) await this.state.storage.delete("guessed");
       if (this.locked && this.in) {
         for (const p of this.peers()) this.in[p.a.id] = 1;
         const ids = Object.keys(this.in);
@@ -561,6 +592,9 @@ export class Room {
       const [room] = this.state.getTags(ws);
       if (pass) await this.state.storage.put("pass", await passHash(room, pass));
       else await this.state.storage.delete("pass");
+      // a new passcode: the guesses at the old one no longer count
+      await this.state.storage.delete(["guessed", "roomTries"]);
+      this.roomTries = null;
       this.hasPass = !!pass;
       for (const p of this.peers()) this.send(p.ws, { t: "pass", on: !!pass, pass, by: me.name });
     } else if (msg.t === "admit" && target?.a.wait) {
@@ -657,6 +691,10 @@ export class Room {
       this.sendTree(all, changed);
     }
     // the last host left: nobody can answer anyone asking to join, so they come in
-    if ((me.host || me.co) && !this.hosts().length) for (const p of this.peers(true)) if (p.a.wait) this.admit(p.ws, p.a);
+    // (not after passcode guessing: then they wait for a host, safety round 3, N5)
+    if ((me.host || me.co) && !this.hosts().length)
+      return this.state.storage.get("guessed").then((g) => {
+        if (!g && !this.hosts().length) for (const p of this.peers(true)) if (p.a.wait) this.admit(p.ws, p.a);
+      });
   }
 }

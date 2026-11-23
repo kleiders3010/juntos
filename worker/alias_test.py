@@ -19,7 +19,7 @@ def check(ok, what):
 
 
 with sync_playwright() as p:
-    b = p.chromium.launch(headless=True, channel="msedge", args=["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"])
+    b = p.chromium.launch(headless=True, channel="msedge", args=["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--disable-gpu"])
     pg = b.new_context(locale="en-US", permissions=["camera", "microphone"]).new_page()
     pg.goto(f"{ALIAS}/")
     check(pg.url.startswith(HOME + "/"), f"the alias opens Juntos at {HOME} ({pg.url})")

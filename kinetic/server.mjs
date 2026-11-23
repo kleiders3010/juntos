@@ -202,7 +202,7 @@ async function ipKey(req) {
 // ---- http and websockets ----
 
 const ROOM_PATH = /^\/(ws|info)\/([a-z0-9-]{4,64})$/;
-const JOIN_LIMIT = Number(process.env.JOIN_LIMIT) || 300; // links per address per minute (the Worker's JOINS)
+const JOIN_LIMIT = Number(process.env.JOIN_LIMIT) || 120; // links and lobby questions per address per minute (the Worker's JOINS)
 const NEW_PER_MINUTE = Number(process.env.NEW_PER_MINUTE) || 30; // rooms one address may open in a minute
 const MAX_FILES = 50000; // stored rooms; past this no new ones (rooms already kept still work)
 const joins = new Map();
@@ -221,8 +221,19 @@ const server = http.createServer(async (req, res) => {
   }
   const m = path.match(ROOM_PATH);
   if (m && m[1] === "info") {
+    // the same per-address count as new links, and a room nobody is in is asked without being kept: /info for
+    // made-up names can't push rooms out (safety round 3, N5)
+    const ip = await ipKey(req);
+    const j = (joins.get(ip) || 0) + 1;
+    joins.set(ip, j);
+    if (j > JOIN_LIMIT) {
+      res.writeHead(429, cors);
+      return res.end();
+    }
     try {
-      const r = await roomOf(m[2]).room.fetch(new Request("https://room/info"));
+      const held = rooms.get(m[2]);
+      const room = held ? held.room : new Room(new State(m[2]), process.env);
+      const r = await room.fetch(new Request("https://room/info"));
       res.writeHead(200, { "content-type": "application/json", ...cors });
       return res.end(await r.text());
     } catch (_) {

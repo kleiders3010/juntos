@@ -18,7 +18,8 @@ BASE = sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1:8798"
 # JUNTOS_SIGNAL: another room server (the Kinetic one: kinetic/server.mjs) with the same protocol
 WS = __import__("os").environ.get("JUNTOS_SIGNAL") or BASE.replace("http", "ws", 1)
 PER_BROWSER = 4
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+# no GPU: ~30 headless browsers held ~21 GB of video memory and kept other projects' jobs out of the machine queue
+ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required", "--disable-gpu"]
 errors = []
 
 # my links: all real connections with both channels open, and exactly the ones the tree gave me
@@ -207,6 +208,7 @@ with sync_playwright() as p:
 
     def joiner(url, name, notree=False):
         pg = page(len(pages) + 100)
+        pg.set_default_timeout(60000)  # ~30 browsers share one CPU by now: every step can be slow
         if notree:
             pg.context.add_init_script(NOTREE)
         pg.add_init_script("""window.__toasts = []; new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) =>
@@ -215,7 +217,8 @@ with sync_playwright() as p:
         pg.wait_for_selector("#lobby:not([hidden])")
         pg.click("#pCam")
         pg.fill("#name", name)
-        pg.click("#enter")
+        # #enter is disabled while the camera opens; with ~20 browsers on one PC that can take long
+        pg.click("#enter", timeout=60000)
         pg.wait_for_selector("#call:not([hidden])")
         return pg
 
@@ -225,11 +228,17 @@ with sync_playwright() as p:
           "a device that can't take part in the tree is told the big call is full")
     check(all(pg.evaluate(f"__S.mesh.peers.size === {N - 2}") for pg in rest), "and nobody in the call is disturbed")
     x.close()
+    # the big call is done: its ~20 pages would starve the small call's joiners of CPU (S11 timed out on #pCam)
+    for pg in rest:
+        pg.close()
 
-    # a small call (the test server's mesh limit) with such a device in it: one more person is refused instead
-    # of the call becoming a tree that would push that device out
+    # a small call (the test server's mesh limit) with such a device in it: when it grows past a mesh, that device is
+    # the one told the call is full, and everyone else goes on (safety round 2, J8: one such device can't stop a call
+    # growing; this step said the opposite before J8)
     h = page(500)
     h.context.add_init_script(NOTREE)
+    h.add_init_script("""window.__toasts = []; new MutationObserver((ms) => ms.forEach((m) => m.addedNodes.forEach((n) =>
+      n.classList && n.classList.contains('toast') && __toasts.push(n.textContent)))).observe(document, { childList: true, subtree: true })""")
     h.goto(f"{BASE}/?signal={WS}")
     h.click("#start")
     h.wait_for_selector("#lobby:not([hidden])")
@@ -238,24 +247,19 @@ with sync_playwright() as p:
     h.click("#enter")
     h.wait_for_selector("#call:not([hidden])")
     room = f"{h.url}{'&' if '?' in h.url else '?'}signal={WS}"
-    small = [h]
-    while True:
-        y = joiner(room, f"S{len(small)}")
-        y.wait_for_function("() => __toasts.some(t => t.includes('full')) || __S.mesh.peers.size > 0", timeout=20000)
-        if y.evaluate("__toasts.some(t => t.includes('full'))"):
-            break
+    small = []
+    # (the device already in is told the call grew past what it can take part in)
+    told = lambda: h.evaluate("(window.__toasts || []).some(t => t.includes('full') || t.includes('grew past')) || !!__S.mesh.closed")
+    while not told() and len(small) < 20:
+        y = joiner(room, f"S{len(small) + 1}")
+        y.wait_for_function("() => __toasts.some(t => t.includes('full')) || __S.mesh.peers.size > 0 || !!__S.mesh.big", timeout=20000)
+        check(not y.evaluate("__toasts.some(t => t.includes('full'))"), f"S{len(small) + 1} gets in")
         small.append(y)
-        if len(small) > 20:
-            break
-    n = len(small)
-    # the last ones in may still be connecting to everyone (16 browsers on one machine next to the big call)
-    try:
-        h.wait_for_function(f"() => __S.mesh.peers.size === {n - 1}", timeout=30000)
-    except Exception:
-        pass
+        h.wait_for_timeout(300)
+    n = len(small) + 1
     print("   ", h.evaluate("({ big: !!__S.mesh.big, peers: __S.mesh.peers.size, closed: !!__S.mesh.closed })"), flush=True)
-    check(2 <= n <= 20 and h.evaluate(f"!__S.mesh.big && __S.mesh.peers.size === {n - 1} && !__S.mesh.closed"),
-          f"a small call with a device that can't do a tree stays small: {n} in, the next one is told it's full, nobody pushed out")
+    check(told() and 2 <= n <= 20, f"past a mesh the device that can't do a tree is the one told the call is full ({n} had come)")
+    check(not any(pg.evaluate("__toasts.some(t => t.includes('full'))") for pg in small), "and nobody else is pushed out")
     for b in browsers:
         b.close()
 

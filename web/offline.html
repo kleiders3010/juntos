@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; script-src 'self'; img-src 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f2937">
+<title>Juntos · free video calls</title>
+<link rel="icon" href="/img/icon-192.png">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<!-- Shown by the service worker when the app opens with no connection (UX review U-J14): never the browser's error page -->
+<section class="page">
+  <div class="home">
+    <h1>Juntos</h1>
+    <p class="lead">No connection. Juntos needs the internet for calls.</p>
+    <button id="retry" class="primary big">Try again</button>
+    <div id="upcoming" class="upcoming" hidden></div>
+  </div>
+</section>
+<script type="module" src="/offline.js"></script>
+</body>
+</html>

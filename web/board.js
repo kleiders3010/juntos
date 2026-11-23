@@ -288,21 +288,34 @@ export class Board {
   }
 
   // ---------- shared ----------
-  receive(msg) {
+  // Everything received is cleaned to the shapes the board draws, the board holds at most MAX_ITEMS, an item is
+  // changed only by whoever made it, and a host can bring back what someone else cleared (safety round 3, N8)
+  receive(msg, from = "") {
     if (msg.k === "bitem") {
-      const it = msg.it;
-      if (!it || !it.id || !TYPES.has(it.t)) return;
+      const it = cleanItem(msg.it);
+      if (!it) return;
+      it.by = from;
       const i = this.items.findIndex((s) => s.id === it.id);
-      if (i >= 0) this.items[i] = it;
-      else this.items.push(it);
+      if (i >= 0) {
+        if (this.items[i].by !== from) return;
+        this.items[i] = it;
+      } else if (this.items.length < MAX_ITEMS) this.items.push(it);
     } else if (msg.k === "bdel") {
       this.items = this.items.filter((s) => s.id !== msg.id);
     } else if (msg.k === "bclear") {
+      if (this.items.length && !(this.isHost && this.isHost(from))) this.wiped = this.items;
       this.items = [];
     } else if (msg.k === "bstate") {
       // a newcomer's copy from someone already here: keep items from both
       const have = new Set(this.items.map((s) => s.id));
-      for (const s of msg.items || []) if (s && TYPES.has(s.t) && !have.has(s.id)) this.items.push(s);
+      for (const s of (Array.isArray(msg.items) ? msg.items : []).slice(0, MAX_ITEMS)) {
+        const it = cleanItem(s);
+        if (it && !have.has(it.id) && this.items.length < MAX_ITEMS) {
+          it.by = from;
+          this.items.push(it);
+          have.add(it.id);
+        }
+      }
     }
     this.draw();
   }
@@ -316,6 +329,15 @@ export class Board {
 
   /** Take back my last item (not someone else's). */
   undo() {
+    // a host first brings back a board someone else cleared, for everyone
+    if (this.wiped && this.amHost && this.amHost()) {
+      const back = this.wiped;
+      this.wiped = null;
+      const have = new Set(this.items.map((s) => s.id));
+      this.items.push(...back.filter((s) => !have.has(s.id)));
+      this.send({ k: "bstate", items: back });
+      return this.draw();
+    }
     while (this.mine.length) {
       const id = this.mine.pop();
       if (!this.items.some((s) => s.id === id)) continue;
@@ -357,6 +379,22 @@ export class Board {
 }
 
 const TYPES = new Set(["pen", "rect", "ellipse", "arrow", "text"]);
+const MAX_ITEMS = 3000;
+const num = (v) => (Number.isFinite(+v) ? Math.max(-1e6, Math.min(1e6, +v)) : 0);
+
+// an item as received: only the fields its kind draws with, numbers in range, short text
+function cleanItem(i) {
+  if (!i || typeof i !== "object" || typeof i.id !== "string" || !i.id || i.id.length > 40 || !TYPES.has(i.t)) return null;
+  const it = { id: i.id, t: i.t, color: COLORS.includes(i.color) ? i.color : COLORS[0], size: Math.max(1, Math.min(SIZES[SIZES.length - 1] * 9, num(i.size) || 1)) };
+  if (i.t === "pen") {
+    const pts = Array.isArray(i.pts) ? i.pts.slice(0, 5000).filter((p) => Array.isArray(p)).map((p) => [num(p[0]), num(p[1])]) : [];
+    if (!pts.length) return null;
+    it.pts = pts;
+  } else if (i.t === "text") {
+    Object.assign(it, { x: num(i.x), y: num(i.y), text: String(i.text ?? "").slice(0, 500) });
+  } else Object.assign(it, { x1: num(i.x1), y1: num(i.y1), x2: num(i.x2), y2: num(i.y2) });
+  return it;
+}
 
 function paint(ctx, it) {
   ctx.strokeStyle = ctx.fillStyle = it.color;

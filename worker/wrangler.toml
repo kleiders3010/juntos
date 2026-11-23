@@ -6,7 +6,6 @@ compatibility_date = "2026-09-01"
 workers_dev = false
 routes = [
   { pattern = "meet.jurisgames.com", custom_domain = true },
-  { pattern = "signal.jurisgames.com", custom_domain = true },
 ]
 
 [assets]
@@ -22,8 +21,9 @@ class_name = "Room"
 tag = "v1"
 new_sqlite_classes = ["Room"]
 
-# new links and lobby questions: 300 per address per minute in each Cloudflare location (index.js; safety round 2, J7)
+# new links, lobby questions and /turn: 120 per address per minute in each Cloudflare location (index.js;
+# safety round 2, J7; was 300 until safety round 3, N6: a class of 30 behind one address joins with room to spare)
 [[ratelimits]]
 name = "JOINS"
 namespace_id = "2102"
-simple = { limit = 300, period = 60 }
+simple = { limit = 120, period = 60 }

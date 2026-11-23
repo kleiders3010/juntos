@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 OUT = os.environ.get("BOARD_OUT") or tempfile.mkdtemp()
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 PHONE = dict(viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
 ITEMS = "JSON.stringify(__S.board.items.map(i => [i.t, i.x1 ?? i.x ?? i.pts?.[0]?.[0], i.y1 ?? i.y ?? i.pts?.[0]?.[1]]).sort())"
 errors = []

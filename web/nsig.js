@@ -132,24 +132,30 @@ export class NostrSignal {
     }
     if (d[0] !== "EVENT" || !d[2] || typeof d[2].content !== "string") return;
     const ev = d[2];
-    if (this.seen.has(ev.id) || ev.kind !== this.kind) return;
-    this.seen.add(ev.id);
-    if (this.seen.size > 5000) this.seen = new Set([...this.seen].slice(-2500));
+    if (typeof ev.id !== "string" || this.seen.has(ev.id) || ev.kind !== this.kind) return;
     if (Math.abs(Date.now() / 1000 - ev.created_at) > MAX_AGE) return;
-    // the event's signature, checked: a relay or a listener can't make a message look like someone else's
     if (typeof ev.pubkey !== "string" || !/^[0-9a-f]{64}$/.test(ev.pubkey) || typeof ev.sig !== "string" || !/^[0-9a-f]{128}$/.test(ev.sig)) return;
+    // opened first (cheap, and junk from someone without the call's key stops here), the signature checked next: a
+    // relay or a listener can't make a message look like someone else's. The event's id counts as seen only once
+    // both hold (safety round 3, N7: a fake with a real id made the real one vanish)
+    let obj;
+    try {
+      const all = unb64(ev.content);
+      const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: all.subarray(0, 12) }, this.key, all.subarray(12));
+      obj = JSON.parse(td.decode(plain));
+    } catch (_) {
+      return;
+    }
     try {
       const id = await sha(JSON.stringify([0, ev.pubkey, ev.created_at, ev.kind, ev.tags, ev.content]));
       if (hex(id) !== ev.id || !(await schnorr.verifyAsync(unhexb(ev.sig), id, unhexb(ev.pubkey)))) return;
     } catch (_) {
       return;
     }
-    try {
-      const all = unb64(ev.content);
-      const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: all.subarray(0, 12) }, this.key, all.subarray(12));
-      const obj = JSON.parse(td.decode(plain));
-      if (obj && typeof obj === "object" && Math.abs(Date.now() - (obj.at || 0)) < MAX_AGE * 1000) this.onMsg(obj, ev.pubkey);
-    } catch (_) {}
+    if (this.seen.has(ev.id)) return;
+    this.seen.add(ev.id);
+    if (this.seen.size > 5000) this.seen = new Set([...this.seen].slice(-2500));
+    if (obj && typeof obj === "object" && Math.abs(Date.now() - (obj.at || 0)) < MAX_AGE * 1000) this.onMsg(obj, ev.pubkey);
   }
 
   async send(obj) {

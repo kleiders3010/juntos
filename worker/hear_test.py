@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 # no --autoplay-policy flag: the page plays sound the way it does for people, after their clicks
-ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
+ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"]
 VOICE = """() => { const t = document.querySelector('#grid .tile:not([data-id="me"])'); const a = t && t.querySelector('audio');
   return a ? { started: a.readyState > 0, paused: a.paused, muted: a.muted, time: a.currentTime,
                videoMuted: t.querySelector('video').muted } : null }"""
