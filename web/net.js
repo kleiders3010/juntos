@@ -278,7 +278,11 @@ export class Net {
     const top = (x) => x.classList.contains("spot") || x.classList.contains("main") || x.classList.contains("screen");
     const items = video.map((x) => ({ x, top: top(x.tile), spokeAt: x.tile.spokeAt || 0, on: !!x.tile.vidOn }));
     this.capPick ||= capPicker(VIDEO_CAP); // one per viewer: remembers its last swap
-    const chosen = new Set([...this.capPick(items)].map((i) => i.x));
+    const got = this.capPick(items);
+    const chosen = new Set([...got].map((i) => i.x));
+    // what each pass decided, for big_test (the last 60): [ms, items, shown before, newly shown, swaps counted]
+    (this.capLog ||= []).push([Date.now(), items.length, items.filter((i) => i.on).length, items.filter((i) => !i.on && got.has(i)).length, got.swaps || 0]);
+    if (this.capLog.length > 60) this.capLog.shift();
     for (const x of plan) x.tile.vidOn = chosen.has(x);
     for (const x of video.filter((v) => !chosen.has(v))) {
       x.q = "off";

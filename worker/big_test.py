@@ -159,14 +159,19 @@ with sync_playwright() as p:
     each("recorder", REC)
     time.sleep(8)  # the video cap settles (wants every 0.7 s)
     s1 = [{x["id"]: x for x in r} for r in each("stats 1", STATS)]
-    each("recorder mark", "window.__recFrom = window.__rec.length")
+    each("recorder mark", "window.__recFrom = window.__rec.length; window.__recT0 = Date.now()")
     t2 = time.time()
     time.sleep(5)
     s2 = [{x["id"]: x for x in r} for r in each("stats 2", STATS)]
-    # pictures that took a place from another in those 5 s: the cap allows one every CAP_SWAP_MS (3 s, cappick.js),
-    # and both the leaving and the new one send frames in the window
-    swaps = each("swaps", "window.__rec.slice(window.__recFrom).filter(r => r.cap && r.from === 'off').length")
-    SWAPS_5S = 2  # pinned: ceil(5000 / CAP_SWAP_MS)
+    each("recorder end", "window.__recTo = window.__rec.length; window.__recT1 = Date.now()")
+    # pictures that took a place from another in each page's window: the cap allows one every CAP_SWAP_MS (3 s,
+    # cappick.js), and both the leaving and the new one send frames in the window.
+    # 2026-11-24 suite21: the pages are read one after another, so a page's window ran 5 s plus the reading of all 16
+    # (8-12 s on a busy PC) while the count ran to the moment "swaps" reached it: 3-4 swaps were counted while capLog
+    # showed the page swapping once every 3.5 s. Each page now counts between its own two marks, against its own length.
+    swaps = each("swaps", "window.__rec.slice(window.__recFrom, window.__recTo).filter(r => r.cap && r.from === 'off').length")
+    win_ms = each("swap window", "window.__recT1 - window.__recT0")
+    allowed = [int(w // 3000) + 1 for w in win_ms]  # pinned: CAP_SWAP_MS = 3000 (cappick.js); 5 s -> 2
     dt = time.time() - t2
     outs, ins, vids = [], [], []
     deaf = 0
@@ -184,8 +189,11 @@ with sync_playwright() as p:
             deaf += 1
             miss = [v["name"] for k, v in b2.items() if not (k in b1 and v["aIn"] > b1[k]["aIn"])]
             check(False, f"P{i} hears {hears} of {want} (not: {miss})")
-        if sees > CAP + swaps[i] or swaps[i] > SWAPS_5S:
-            check(False, f"P{i} gets {sees} videos with {swaps[i]} swaps in 5 s (cap {CAP}, at most {SWAPS_5S} swaps)")
+        if sees > CAP + swaps[i] or swaps[i] > allowed[i]:
+            check(False, f"P{i} gets {sees} videos with {swaps[i]} swaps in {win_ms[i] / 1000:.1f} s (cap {CAP}, at most {allowed[i]} swaps)")
+            if i < 2:  # 2026-11-24 suite20: 3-4 swaps in 5 s while capPicker alone allows 2: what each pass decided
+                print(f"  P{i} cap passes [s ago, items, shown before, newly shown, swaps]:", pages[i].evaluate(
+                    "(__S.netq.capLog || []).filter(r => Date.now() - r[0] < 9000).map(r => [Math.round((Date.now() - r[0]) / 100) / 10, r[1], r[2], r[3], r[4]])"), flush=True)
     if deaf:
         for i, pg in enumerate(pages):
             print(f"  P{i} mic:", pg.evaluate("""({ mic: __S.mic, track: __S.micTrack ? __S.micTrack.readyState + '/' + __S.micTrack.enabled + '/' + __S.micTrack.muted : null,
@@ -235,7 +243,7 @@ with sync_playwright() as p:
     check(not unapplied, "every picture wanted off is off at its sender")
     check(deaf == 0, f"everyone hears all {want} others")
     check(all(v <= CAP + sw for v, sw in zip(vids, swaps)), f"nobody gets more than {CAP} videos plus the ones swapped in those 5 s (got {min(vids)}-{max(vids)}, swaps {swaps})")
-    check(max(swaps) <= SWAPS_5S, f"who is shown changes at most {SWAPS_5S} times in 5 s per viewer (got {max(swaps)})")
+    check(all(sw <= al for sw, al in zip(swaps, allowed)), f"who is shown changes at most once per 3 s per viewer (got {swaps} in windows of {[round(w / 1000, 1) for w in win_ms]} s)")
     expect = min(CAP, CAMS - 1)
     check(min(vids) >= expect - 1, f"and the cap is used: at least {expect - 1} videos each")
     print(f"RESULT people={N} cams={CAMS} connect_s={took:.0f} up_kbps avg={sum(outs) / N:.0f} max={max(outs):.0f} down_kbps avg={sum(ins) / N:.0f} max={max(ins):.0f} videos={min(vids)}-{max(vids)}", flush=True)
