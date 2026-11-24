@@ -38,10 +38,24 @@ export function oldCodeOf(pub) {
   return `${s.slice(0, 3)}-${s.slice(3, 7)}-${s.slice(7)}`;
 }
 
-/** A new call: the host's secret key and the code made from its public key. */
+// Which of the two room servers (0 Cloudflare, 1 the game host) a call starts on, from its code; the lobby asks the
+// same one. Every version of the app works this out the same way, so the rule itself never changes.
+export function serverIndex(room, n) {
+  let h = 0;
+  for (const c of room) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return n > 1 ? h % n : 0;
+}
+export const GAME_HOST = 1;
+
+/** A new call: the host's secret key and the code made from its public key. New codes are picked to start on the
+ *  game host (item 46: Cloudflare's daily allowance is touched only when the host doesn't answer; older apps read the
+ *  code the same way). About two tries; the code keeps 15 letters, one bit fewer to guess. */
 export function newHost() {
-  const k = schnorr.keygen();
-  return { key: hex(k.secretKey), code: codeOf(k.publicKey) };
+  for (;;) {
+    const k = schnorr.keygen();
+    const code = codeOf(k.publicKey);
+    if (serverIndex(code, 2) === GAME_HOST) return { key: hex(k.secretKey), code };
+  }
 }
 
 /** The public key of a host key made by newHost ("" for an old-style key). */

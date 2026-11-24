@@ -253,8 +253,20 @@ export class Room {
   }
 
   // people in the call (and, with waiting = true, also those asking to join)
+  // a socket's stored state, read once: deserializeAttachment makes a copy on every call, and every message read every
+  // socket's (APP-RULES Scale 21, item 46 load test 2026-11-23). Nothing changes the returned object (setA makes a new one).
+  att(ws) {
+    const m = (this.atts ||= new WeakMap());
+    if (!m.has(ws)) m.set(ws, ws.deserializeAttachment() || {});
+    return m.get(ws);
+  }
+  setAtt(ws, v) {
+    ws.serializeAttachment(v);
+    (this.atts ||= new WeakMap()).set(ws, v);
+  }
+
   peers(waiting) {
-    return this.state.getWebSockets().map((ws) => ({ ws, a: ws.deserializeAttachment() || {} })).filter((p) => p.a.id && (waiting || !p.a.wait));
+    return this.state.getWebSockets().map((ws) => ({ ws, a: this.att(ws) })).filter((p) => p.a.id && (waiting || !p.a.wait));
   }
 
   // the host (who started the call) and the co-hosts the host chose
@@ -289,8 +301,8 @@ export class Room {
       if (ids.length > MAX_IN) delete this.in[ids[0]];
       this.state.storage.put("in", this.in);
     }
-    ws.serializeAttachment({ id: a.id, name: a.name, host: !!a.host, co: !!a.co, cap: a.cap || 2, pub: a.pub || "", at: a.at || Date.now() });
-    const me = { ws, a: ws.deserializeAttachment() };
+    this.setAtt(ws, { id: a.id, name: a.name, host: !!a.host, co: !!a.co, cap: a.cap || 2, pub: a.pub || "", at: a.at || Date.now() });
+    const me = { ws, a: this.att(ws) };
     const big = others.some((p) => p.a.tree) || others.length + 1 > this.meshMax;
     this.send(ws, { t: "peers", big, peers: others.map((p) => ({ id: p.a.id, name: p.a.name, host: !!(p.a.host || p.a.co), role: this.role(p.a), pub: p.a.pub || "" })) });
     this.send(ws, { t: "room", locked: !!this.locked, host: !!(a.host || a.co), owner: !!a.host, pass: !!this.hasPass });
@@ -320,7 +332,7 @@ export class Room {
 
   setA(p, patch) {
     p.a = { ...p.a, ...patch };
-    p.ws.serializeAttachment(p.a);
+    this.setAtt(p.ws, p.a);
   }
 
   // hang p under the person nearest the top who still has room for a child (p's own branch hangs from p and
@@ -399,7 +411,7 @@ export class Room {
     } catch (_) {
       return;
     }
-    const me = ws.deserializeAttachment() || {};
+    const me = this.att(ws);
     if (msg.t === "hello") {
       if (me.id) return;
       const id = String(msg.id || "").slice(0, 40);
@@ -509,7 +521,7 @@ export class Room {
       // past the passcode: a proven id now replaces its own earlier link (a reload, a dropped connection)
       for (const p of this.peers(true))
         if (p.a.id === id && p.ws !== ws) {
-          p.ws.serializeAttachment({});
+          this.setAtt(p.ws, {});
           try {
             p.ws.close(4004, "replaced");
           } catch (_) {}
@@ -524,7 +536,7 @@ export class Room {
       // after passcode guessing (above), whoever gets the passcode right waits for a host, even with no host here yet
       const guessed = !!passH && !!(await st.get("guessed"));
       if (!host && !co && !back && (((this.locked || msg.knock) && hosts.length) || guessed)) {
-        ws.serializeAttachment({ id, name, wait: true, cap, pub });
+        this.setAtt(ws, { id, name, wait: true, cap, pub });
         this.send(ws, { t: "waiting" });
         // (proven: this visit's key signed the id, so a host's app may let back in someone it already knows by it)
         for (const p of hosts) this.send(p.ws, { t: "knock", id, name, ...(proven ? { proven: true } : {}) });
@@ -547,7 +559,7 @@ export class Room {
     if ((me.host || me.co) && HOST_CMDS.has(msg.t)) return this.hostCmd(me, msg, ws);
     if (msg.t === "name") {
       const name = cleanName(msg.name, 60);
-      ws.serializeAttachment({ ...me, name });
+      this.setAtt(ws, { ...me, name });
       for (const p of this.peers()) if (p.ws !== ws) this.send(p.ws, { t: "name", id: me.id, name });
     }
   }
@@ -602,12 +614,12 @@ export class Room {
       for (const p of this.hosts()) this.send(p.ws, { t: "knock-gone", id: target.a.id });
     } else if (msg.t === "deny" && target?.a.wait) {
       this.send(target.ws, { t: "denied" });
-      target.ws.serializeAttachment({});
+      this.setAtt(target.ws, {});
       target.ws.close(4001, "denied");
       for (const p of this.hosts()) this.send(p.ws, { t: "knock-gone", id: target.a.id });
     } else if (msg.t === "remove" && target && !target.a.wait && !target.a.host && (!target.a.co || me.host)) {
       this.send(target.ws, { t: "removed", by: me.name });
-      target.ws.serializeAttachment({});
+      this.setAtt(target.ws, {});
       target.ws.close(4002, "removed");
       if (this.in) {
         delete this.in[target.a.id];
@@ -619,7 +631,7 @@ export class Room {
       // (breakout rooms are inside the same call, so they end with it)
       for (const p of all) {
         this.send(p.ws, { t: "ended", by: me.name });
-        p.ws.serializeAttachment({});
+        this.setAtt(p.ws, {});
         try {
           p.ws.close(4005, "ended");
         } catch (_) {}
@@ -650,7 +662,7 @@ export class Room {
         // only the host makes or unmakes co-hosts (Meet: "Grant host controls")
         if (!me.host || !target || target.a.wait || target.a.host) return;
         const on = !!msg.on;
-        target.ws.serializeAttachment({ ...target.a, co: on });
+        this.setAtt(target.ws, { ...target.a, co: on });
         if (on) this.cos[target.a.id] = 1;
         else delete this.cos[target.a.id];
         await st.put("cos", this.cos);
@@ -672,9 +684,9 @@ export class Room {
   }
 
   left(ws) {
-    const me = ws.deserializeAttachment() || {};
+    const me = this.att(ws);
     if (!me.id) return;
-    ws.serializeAttachment({});
+    this.setAtt(ws, {});
     if (me.wait) {
       for (const p of this.hosts()) this.send(p.ws, { t: "knock-gone", id: me.id });
       return;

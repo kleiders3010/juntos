@@ -3,7 +3,7 @@ import { VIDEO_CAP } from "./net.js";
 import { NostrSignal, NOSTR_OK } from "./nsig.js";
 import { Big, BIG_OK, makeKeys } from "./big.js";
 import { Fwd } from "./fwd.js";
-import { HostDocs, pubOf, ownsCode, newSigner, helloProof, helloOk, LIST_MAX, idOf, idProof, hostHello } from "./hostauth.js";
+import { HostDocs, pubOf, ownsCode, newSigner, helloProof, helloOk, LIST_MAX, idOf, idProof, hostHello, serverIndex } from "./hostauth.js";
 // Direct (mesh) WebRTC between everyone in a room. The signaling server only passes handshakes;
 // audio, video, chat and the board go device to device.
 //
@@ -54,12 +54,8 @@ export function randomId() {
   return Array.from(a, (b) => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
 }
 
-// Which of the room servers a call starts on: spread by its code, so both carry calls. The lobby asks the same one.
-export function serverIndex(room, n) {
-  let h = 0;
-  for (const c of room) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return n > 1 ? h % n : 0;
-}
+// Which of the room servers a call starts on (hostauth.js: new codes pick the game host)
+export { serverIndex };
 
 export class Mesh extends EventTarget {
   constructor({ room, name, signalUrl, backupUrl, key, knock, pass, opts, relays }) {

@@ -43,7 +43,7 @@ Audio, video, chat and the board go directly between the people in the call (Web
 
 No piece has to be up for a call to work; each job has a second way:
 - Finding each other: public Nostr relays (`web/nsig.js`, encrypted with a key made from the call code through a slow hash; new calls have 15-letter codes); if none answers, the room server.
-- The room server (passcodes, calls over 16 people, older calls): the Cloudflare Worker, or the same code on Node (`kinetic/`, runs on our game host at `wss://games.jurisgames.com/juntos`); each call picks one by its code and moves to the other after 6 s without an answer.
+- The room server (passcodes, calls over 16 people, older calls): the Cloudflare Worker, or the same code on Node (`kinetic/`, runs on our game host at `wss://games.jurisgames.com/juntos`); each call picks one by its code (new calls get a code that starts on the game host, so Cloudflare's daily allowance is used only when the host doesn't answer; `node worker/split_test.mjs`) and moves to the other after 6 s without an answer.
 - Host controls (lock, mute, co-hosts, remove): a document signed by the host's key (`web/hostauth.js`) that every device checks, so no server has to.
 - Two people who can't connect (strict routers on both sides): the Cloudflare TURN relay, or else someone in the call connected to both passes their sound and video on, with their messages sealed by a key only those two have (`web/fwd.js`); if that helper leaves, another takes over.
 - The site: meet.jurisgames.com, and the same pages on GitHub Pages at https://kleiders3010.github.io/juntos/ (`tools/mirror.mjs`, built by `.github/workflows/pages.yml` on every push). Calls work across both.
