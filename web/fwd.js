@@ -21,6 +21,7 @@ export class Fwd {
     this.ecdh = null; // my ECDH key pair for sealed messages (made on first need)
     this.keys = new Map(); // id -> { p: Promise<CryptoKey>, ok: resolve, sent: bool }
     this.asked = new Map(); // id -> time I asked my connections for a helper to them
+    this.REASK_MS = 20000; // no helper reached after this: ask again (need)
     this.via = new Map(); // stream id (from a helper) -> whose sound and video it carries
     this.early = new Map(); // stream id -> tracks that came before the helper's _fwdon
     this.earlyOn = new Map(); // id -> a helper's _fwdon that came before my own link to them gave up (J5)
@@ -43,6 +44,16 @@ export class Fwd {
     this.sendKey(p.id);
     const s = JSON.stringify({ k: "_need", id: p.id });
     for (const q of m.peers.values()) if (q !== p && !q.via && !q.far && q.dc.readyState === "open") q.dc.send(s);
+    // 2026-11-24 big_test: asked once just after joining, when few links were open, nobody answered and the pair stayed
+    // apart all call. Ask again while nobody passes this pair on (5 rounds, then the person's Try again remains).
+    clearTimeout(p.needTimer);
+    p.needRounds = (p.needRounds || 0) + 1;
+    if (p.needRounds >= 5) return;
+    p.needTimer = setTimeout(() => {
+      if (m.closed || m.peers.get(p.id) !== p || p.via || p.state === "connected") return;
+      this.asked.delete(p.id);
+      this.need(p);
+    }, this.REASK_MS);
   }
 
   // a helper offers: the first one gets the job

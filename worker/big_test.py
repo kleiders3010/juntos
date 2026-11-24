@@ -101,6 +101,16 @@ with sync_playwright() as p:
         print(f"  P{i} in ({time.time() - t0:.0f} s)", flush=True)
     # everyone connected to everyone
     want = N - 1
+    # 2026-11-24 15:10 (PC loaded): a page stopped answering in the connect report below and held the run 30 min with
+    # no reading; the connect wait + report get their own limit (the wait itself is 60 + 4N s)
+    at = ["connect wait"]
+    def hung_connect():
+        print(f"FAIL connecting + its report took over {60 + 4 * N + 300} s: a page stopped answering at {at[0]}", flush=True)
+        print("FAILED", flush=True)
+        os._exit(1)
+    connect_dog = threading.Timer(60 + 4 * N + 300, hung_connect)
+    connect_dog.daemon = True
+    connect_dog.start()
     t1 = time.time()
     done = False
     while time.time() - t1 < 60 + 4 * N:
@@ -112,6 +122,7 @@ with sync_playwright() as p:
     took = time.time() - t1
     if not done:
         for i, pg in enumerate(pages):
+            at[0] = f"connect report, P{i} ({time.strftime('%H:%M:%S')})"
             # a peer with no pc is a place held while a helper passes them on or a direct link is retried (fwd.js)
             bad = pg.evaluate("""[...__S.mesh.peers.values()].filter(p => !(p.pc ? p.pc.connectionState === 'connected' : !!p.via && p.state === 'connected') || !p.dc || p.dc.readyState !== 'open')
               .map(p => p.name + ':' + (p.pc ? p.pc.connectionState + '/' + p.pc.iceConnectionState + '/' + p.pc.signalingState : 'no-link' + (p.via ? ' via ' + p.via : '')) + '/' + (p.dc ? p.dc.readyState : '-'))""")
@@ -149,6 +160,7 @@ with sync_playwright() as p:
         print("FAILED", flush=True)
         os._exit(1)
 
+    connect_dog.cancel()
     watchdog = threading.Timer(READ_LIMIT_S, hung)
     watchdog.daemon = True
     watchdog.start()
