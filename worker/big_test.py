@@ -167,13 +167,19 @@ with sync_playwright() as p:
             seen: r.width > 0 && r.bottom > 0 && r.top < innerHeight, paused: t.classList.contains('paused') }); }
         last[id] = { q, on: !!t.vidOn }; } }, 200); }"""
     each("recorder", REC)
+    # 2026-11-24 13:04: a viewer asked "low" 5 s before, the sender still had "off", both ends connected: each page
+    # logs the wants it sends and gets (to/from, q, ms), printed for a lost one
+    each("want log", """() => { const m = __S.mesh; window.__wOut = []; window.__wIn = [];
+      const st = m.sendTo.bind(m); m.sendTo = (id, msg) => { if (msg && msg.k === 'want') __wOut.push([id, msg.q, Date.now(), m.peers.get(id)?.dc?.readyState]); return st(id, msg); };
+      const sw = m.setWant.bind(m); m.setWant = (id, q) => { __wIn.push([id, q, Date.now(), m.peers.get(id)?.want]); return sw(id, q); }; }""")
     time.sleep(8)  # the video cap settles (wants every 0.7 s)
-    s1 = [{x["id"]: x for x in r} for r in each("stats 1", STATS)]
-    each("recorder mark", "window.__recFrom = window.__rec.length; window.__recT0 = Date.now()")
+    # 2026-11-24 13:00: the marks are taken in the same call as each page's stats (start before its first read, end
+    # after its second), so the swap window holds the frames window. With the marks taken after all 16 stats reads,
+    # P1 got 12 videos with 2 swaps (cap 9): swaps in the gap sent frames but were not counted.
+    s1 = [{x["id"]: x for x in r} for r in each("stats 1", "async () => { window.__recFrom = window.__rec.length; window.__recT0 = Date.now(); return await (" + STATS + ")(); }")]
     t2 = time.time()
     time.sleep(5)
-    s2 = [{x["id"]: x for x in r} for r in each("stats 2", STATS)]
-    each("recorder end", "window.__recTo = window.__rec.length; window.__recT1 = Date.now()")
+    s2 = [{x["id"]: x for x in r} for r in each("stats 2", "async () => { const r = await (" + STATS + ")(); window.__recTo = window.__rec.length; window.__recT1 = Date.now(); return r; }")]
     # pictures that took a place from another in each page's window: the cap allows one every CAP_SWAP_MS (3 s,
     # cappick.js), and both the leaving and the new one send frames in the window.
     # 2026-11-24 suite21: the pages are read one after another, so a page's window ran 5 s plus the reading of all 16
@@ -211,14 +217,14 @@ with sync_playwright() as p:
     # the cap end to end: what each viewer's tile asked for, what the sender got, and whether its encoder is on
     # (2026-11-23: pictures wanted off kept arriving; this tells a lost message from a sender that didn't apply it)
     WANTS = """async () => {
-      const asked = {}; for (const t of document.querySelectorAll('#grid .tile:not([data-id=me])')) { asked[t.dataset.id] = t.wantSent || null; const vp = __S.mesh.peers.get(t.dataset.id); (window.__wd ||= {})[t.dataset.id] = vp ? [vp.via ? 'via' : 'direct', vp.dc?.readyState, vp.state, Math.round((Date.now() - (t.wantAt || 0)) / 1000) + 's'] : ['none']; }
+      const asked = {}, at = {}; for (const t of document.querySelectorAll('#grid .tile:not([data-id=me])')) { asked[t.dataset.id] = t.wantSent || null; at[t.dataset.id] = t.wantAt || 0; const vp = __S.mesh.peers.get(t.dataset.id); (window.__wd ||= {})[t.dataset.id] = vp ? [vp.via ? 'via' : 'direct', vp.dc?.readyState, vp.state, Math.round((Date.now() - (t.wantAt || 0)) / 1000) + 's'] : ['none']; }
       const sending = {};
       for (const p of __S.mesh.peers.values()) {
         const s = p.video && p.video.sender; let active = null;
         try { const e = s && s.getParameters().encodings; active = e && e.length ? e[0].active !== false : null; } catch (_) {}
         sending[p.id] = { want: p.want || null, active, hasTrack: !!(s && s.track), how: [p.via ? 'via' : 'direct', p.dc?.readyState, p.state] };
       }
-      return { me: __S.mesh.id, asked, sending, wd: window.__wd || {} };
+      return { me: __S.mesh.id, asked, at, now: Date.now(), sending, wd: window.__wd || {} };
     }"""
     # the pages are read one after another (seconds apart), so a want sent just before a viewer was read may not have
     # reached a sender read before it (2026-11-24: 43 "lost" with both ends connected, sent 2 s before). Read the
@@ -241,6 +247,10 @@ with sync_playwright() as p:
             snd = by.get(sid, {}).get("sending", {}).get(viewer["me"])
             if q is None or snd is None or before.get(viewer["me"], {}).get(sid) != q:
                 continue
+            # 2026-11-24 13:02: the same want at both reads can still be new (off, low, off again 1 s before the read):
+            # a want sent less than 1 s before the sender's page was read may still be on its way
+            if viewer["at"].get(sid, 0) > by[sid]["now"] - 1000:
+                continue
             offs += q == "off"
             if snd["want"] != q:
                 lost.append(f"{sid[:4]}->{viewer['me'][:4]} asked {q}, sender has {snd['want']} (viewer end {viewer['wd'].get(sid)}, sender end {snd['how']})")
@@ -249,6 +259,14 @@ with sync_playwright() as p:
     churn = sum(1 for x in w for sid, q in x["asked"].items() if before.get(x["me"], {}).get(sid, q) != q)
     print(f"  wants that changed in 3 s (who is shown moving): {churn} over {len(w)} viewers", flush=True)
     print(f"  wanted off: {offs}; not received by the sender: {len(lost)} {lost[:12]}; received but still sending: {len(unapplied)} {unapplied[:6]}", flush=True)
+    if lost:
+        logs = {x["me"]: x for x in each("want logs", "() => ({ me: __S.mesh.id, now: Date.now(), out: window.__wOut || [], inn: window.__wIn || [] })")}
+        for v in w:
+            for sid, q in v["asked"].items():
+                if any(l.startswith(f"{sid[:4]}->{v['me'][:4]} ") for l in lost):
+                    t0 = logs[v["me"]]["now"]
+                    print(f"  lost {sid[:4]}->{v['me'][:4]}: viewer sent [q, s ago, dc]", [(x[1], round((t0 - x[2]) / 1000, 1), x[3]) for x in logs[v["me"]]["out"] if x[0] == sid][-6:],
+                          "| sender got [q, s ago, had]", [(x[1], round((t0 - x[2]) / 1000, 1), x[3]) for x in logs[sid]["inn"] if x[0] == v["me"]][-6:], flush=True)
     check(not lost, "every viewer's want reached its sender")
     check(not unapplied, "every picture wanted off is off at its sender")
     check(deaf == 0, f"everyone hears all {want} others")

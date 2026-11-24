@@ -850,7 +850,15 @@ export class Mesh extends EventTarget {
     this.emit("peer", { id: p.id });
     if (!this.relay) {
       const http = this.signalUrl.replace(/^ws/, "http");
-      this.relay = fetch(`${http}/turn`).then((r) => r.json()).then((j) => j.iceServers || []).catch(() => []);
+      // 2026-11-24: 8 s at most (a busy server that never answered held every later link's give-up, so the pair never
+      // reached a helper), and a failed fetch is asked again by the next link instead of meaning "no relay" all call
+      this.relay = fetch(`${http}/turn`, { signal: AbortSignal.timeout(8000) })
+        .then((r) => r.json())
+        .then((j) => j.iceServers || [])
+        .catch(() => {
+          this.relay = null;
+          return [];
+        });
     }
     const got = await this.relay;
     const servers = (Array.isArray(got) ? got : [got]).filter(Boolean);

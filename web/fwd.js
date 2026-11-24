@@ -121,7 +121,23 @@ export class Fwd {
   gaveUp(p) {
     const w = this.earlyOn.get(p.id);
     this.earlyOn.delete(p.id);
-    if (w && Date.now() - w.at < 30000) this.on(w.from, p.id, w.sid, w.name);
+    if (w && Date.now() - w.at < 30000) return this.on(w.from, p.id, w.sid, w.name);
+    // 2026-11-24 big_test under load: the helper's offer came while my link still tried, and expired (30 s) before it
+    // gave up; the lower id was on the helper for good and I never was. The higher id asks its connections now: only
+    // a helper that already passes this pair on answers, with the same offer, taken now that my link gave up (J5).
+    const m = this.m;
+    if (m.big || m.closed || p.via || m.id < p.id) return;
+    const s = JSON.stringify({ k: "_fwdask", of: p.id });
+    for (const q of m.peers.values()) if (q !== p && !q.via && !q.far && q.dc && q.dc.readyState === "open") q.dc.send(s);
+  }
+
+  // the helper: one of a pair I pass on asks for my offer again (their own link gave up after it had expired)
+  reoffer(from, of) {
+    const h = this.helping.get([from, of].sort().join("|"));
+    const a = h && h.ann && h.ann[from];
+    const z = this.m.peers.get(from);
+    if (!a || a.of !== of || !z || z.dc.readyState !== "open") return;
+    z.dc.send(JSON.stringify({ k: "_fwdon", of, sid: a.sid, name: a.name }));
   }
 
   // the helper stopped (it left, or lost one of us): try the direct way again
@@ -240,7 +256,7 @@ export class Fwd {
     // room's sound and picture out of it)
     if (!this.offered?.delete(`${a}|${b}`) || !m.route(a) || !m.route(b)) return;
     if (pa.dc.readyState !== "open" || pb.dc.readyState !== "open") return;
-    const h = { a, b, senders: {} };
+    const h = { a, b, senders: {}, ann: {} }; // ann: what each one was told (_fwdon), told again on _fwdask
     this.helping.set(key, h);
     this.stats.helped++;
     for (const [src, dst] of [
@@ -248,6 +264,7 @@ export class Fwd {
       [pb, pa],
     ]) {
       const ms = new MediaStream();
+      h.ann[dst.id] = { of: src.id, sid: ms.id, name: src.name };
       dst.dc.send(JSON.stringify({ k: "_fwdon", of: src.id, sid: ms.id, name: src.name }));
       const tracks = [src.audio && src.audio.receiver.track, src.video && src.video.receiver.track].filter(Boolean);
       h.senders[dst.id] = tracks.map((t) => {
@@ -313,6 +330,8 @@ export class Fwd {
         return typeof msg.id === "string" && this.start(from, msg.id), true;
       case "_fwdon":
         return typeof msg.of === "string" && this.on(from, msg.of, msg.sid, msg.name), true;
+      case "_fwdask":
+        return typeof msg.of === "string" && this.reoffer(from, msg.of), true;
       case "_fwq":
         return typeof msg.of === "string" && ["off", "low", "mid", "high"].includes(msg.q) && this.quality(from, msg.of, msg.q), true;
       case "_fwdoff":
