@@ -4,8 +4,10 @@
 # a measurement (Kleider, 2026-11-18: "why is there a 12 people limit? ... could be made unlimited if you tried").
 # Heavy (N browsers' worth of WebRTC on one machine): run through the machine queue.
 # Run: python big_test.py [people] [cameras-on (default: everyone)] [base-url]
+import os
 import re
 import sys
+import threading
 import time
 sys.stdout.reconfigure(encoding='utf-8')
 from pathlib import Path
@@ -118,9 +120,31 @@ with sync_playwright() as p:
                 print(f"     signal lost {pg.evaluate('__S.mesh.lost || 0')}x; from them:", pg.evaluate("""[...__S.mesh.peers.values()].filter(p => p.pc?.connectionState !== 'connected')
                   .map(p => p.name + ' ' + JSON.stringify(__S.mesh.sigIn[p.id] || null) + (p.offerer ? ' (I called)' : '') + (p.autoRetries ? ' retries ' + p.autoRetries : '') + (p.gaveUp ? ' gave up' : ''))"""), flush=True)
     check(done, f"{N} people: everyone connected to everyone ({took:.0f} s after the last joined)")
+    # page.evaluate has no timeout: a page that stops answering held the run until the suite's 30 min limit with no
+    # reading (2026-11-24 j_suite18, PC at 97% CPU). The readings below take ~1 min; past READ_LIMIT_S it ends with a FAIL.
+    READ_LIMIT_S = 600
+
+    where = ["after connecting"]
+
+    def each(label, js):
+        """pg.evaluate(js) on every page, noting which one is being read (the watchdog names it)."""
+        out = []
+        for k, pg in enumerate(pages):
+            where[0] = f"{label}, P{k} ({time.strftime('%H:%M:%S')})"
+            out.append(pg.evaluate(js))
+        return out
+
+    def hung():
+        print(f"FAIL the readings after connecting took over {READ_LIMIT_S} s: a page stopped answering at {where[0]}", flush=True)
+        print("FAILED", flush=True)
+        os._exit(1)
+
+    watchdog = threading.Timer(READ_LIMIT_S, hung)
+    watchdog.daemon = True
+    watchdog.start()
     # a pair that can't connect directly is passed on by a third person (fwd.js): fine, but counted, since on one
     # computer it means the direct links struggled under load
-    relayed = sum(pg.evaluate("[...__S.mesh.peers.values()].filter(p => p.via).length") for pg in pages) // 2
+    relayed = sum(each("helper pairs", "[...__S.mesh.peers.values()].filter(p => p.via).length")) // 2
     print(f"  pairs passed on by a helper: {relayed}", flush=True)
     # what makes wants change (2026-11-24: 92 changes in 3 s over 16 viewers): every 200 ms each page notes a tile
     # whose want moved, whether the cap took/gave its place (vidOn), how long ago that person spoke, and whether the
@@ -132,18 +156,16 @@ with sync_playwright() as p:
           window.__rec.push({ from: last[id].q, to: q, cap: last[id].on !== !!t.vidOn, spoke: Math.round((Date.now() - (t.spokeAt || 0)) / 100) / 10,
             seen: r.width > 0 && r.bottom > 0 && r.top < innerHeight, paused: t.classList.contains('paused') }); }
         last[id] = { q, on: !!t.vidOn }; } }, 200); }"""
-    for pg in pages:
-        pg.evaluate(REC)
+    each("recorder", REC)
     time.sleep(8)  # the video cap settles (wants every 0.7 s)
-    s1 = [{x["id"]: x for x in pg.evaluate(STATS)} for pg in pages]
-    for pg in pages:
-        pg.evaluate("window.__recFrom = window.__rec.length")
+    s1 = [{x["id"]: x for x in r} for r in each("stats 1", STATS)]
+    each("recorder mark", "window.__recFrom = window.__rec.length")
     t2 = time.time()
     time.sleep(5)
-    s2 = [{x["id"]: x for x in pg.evaluate(STATS)} for pg in pages]
+    s2 = [{x["id"]: x for x in r} for r in each("stats 2", STATS)]
     # pictures that took a place from another in those 5 s: the cap allows one every CAP_SWAP_MS (3 s, cappick.js),
     # and both the leaving and the new one send frames in the window
-    swaps = [pg.evaluate("window.__rec.slice(window.__recFrom).filter(r => r.cap && r.from === 'off').length") for pg in pages]
+    swaps = each("swaps", "window.__rec.slice(window.__recFrom).filter(r => r.cap && r.from === 'off').length")
     SWAPS_5S = 2  # pinned: ceil(5000 / CAP_SWAP_MS)
     dt = time.time() - t2
     outs, ins, vids = [], [], []
@@ -183,10 +205,10 @@ with sync_playwright() as p:
     # the pages are read one after another (seconds apart), so a want sent just before a viewer was read may not have
     # reached a sender read before it (2026-11-24: 43 "lost" with both ends connected, sent 2 s before). Read the
     # viewers, wait, read everyone again: lost = asked the same both times, and the sender (read 3+ s later) differs.
-    w0 =[pg.evaluate(WANTS) for pg in pages]
+    w0 = each("wants 1", WANTS)
     time.sleep(3)
-    w = [pg.evaluate(WANTS) for pg in pages]
-    recs = [r for pg in pages for r in pg.evaluate("window.__rec || []")]
+    w = each("wants 2", WANTS)
+    recs = [r for x in each("recorder read", "window.__rec || []") for r in x]
     kinds = {}
     for r in recs:
         k = f"{r['from']}->{r['to']}" + (" cap" if r["cap"] else "") + ("" if r["seen"] else " offscreen")
@@ -217,6 +239,7 @@ with sync_playwright() as p:
     expect = min(CAP, CAMS - 1)
     check(min(vids) >= expect - 1, f"and the cap is used: at least {expect - 1} videos each")
     print(f"RESULT people={N} cams={CAMS} connect_s={took:.0f} up_kbps avg={sum(outs) / N:.0f} max={max(outs):.0f} down_kbps avg={sum(ins) / N:.0f} max={max(ins):.0f} videos={min(vids)}-{max(vids)}", flush=True)
+    watchdog.cancel()
     for b in browsers:
         b.close()
 
