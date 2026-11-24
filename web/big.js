@@ -86,7 +86,7 @@ export class Big {
     this.mseq = { 1: 0, 2: 0 };
     this.spoke = 0;
     this.lastLoud = 0;
-    this.stats = { sent: 0, fwd: 0, got: 0, decA: 0, decV: 0, bad: 0, keyAsk: 0, dropped: 0, sealed: 0, unreadable: 0 };
+    this.stats = { sent: 0, fwd: 0, got: 0, decA: 0, decV: 0, bad: 0, noKey: 0, keyAsk: 0, dropped: 0, sealed: 0, unreadable: 0 };
     this.watch = setInterval(() => this.idleCheck(), 1000);
   }
 
@@ -240,7 +240,7 @@ export class Big {
     const next = prev
       .then(async () => {
         const k = this.pubKey(o.s);
-        if (!k) return (this.stats.bad++, null);
+        if (!k) return (this.stats.noKey++, null); // a sender not known here yet: not a forgery
         const ok = await crypto.subtle.verify(SIGN, await k, unb64u(String(o.sig || "")), enc.encode(this.body(o)));
         if (!ok) return (this.stats.bad++, null);
         if (this.oldMsg(o.s, o.n) || this.dup(o.s, "m" + o.n)) return null;

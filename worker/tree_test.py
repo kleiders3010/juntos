@@ -122,18 +122,19 @@ with sync_playwright() as p:
     for i, pg in enumerate(pages):
         st = pg.evaluate("__S.mesh.big.stats")
         if i < 4 or i == N - 1:
-            print(f"  P{i}: links {links[i]}, sent {st['sent']}, passed on {st['fwd']}, got {st['got']}, dropped {st['dropped']}, bad {st['bad']}", flush=True)
+            print(f"  P{i}: links {links[i]}, sent {st['sent']}, passed on {st['fwd']}, got {st['got']}, dropped {st['dropped']}, bad {st['bad']}, sender unknown {st.get('noKey')}", flush=True)
 
     # a chat message from someone near the bottom reaches everyone
     pages[N - 1].evaluate("__S.mesh.broadcast({ k: 'chat', text: 'hello along the tree' })")
     wait_all("__S.chat.some(c => c.text === 'hello along the tree')", pages[:N - 1], 15, "a chat message reaches everyone")
     # a message in the host's name with a wrong signature is passed on by nobody and shown by nobody
+    bad0 = sum(pg.evaluate("__S.mesh.big.stats.bad") for pg in pages)  # before: only what the forgery adds counts
     forger = pages[N - 2]
     forger.evaluate("""(h) => { const l = [...__S.mesh.big.links].find(x => x !== h); // not the host: it drops its own name unread
       __S.mesh.peers.get(l).dc.send(JSON.stringify({ _r: 1, s: h, n: 987654, to: '', rc: 0, m: { k: 'chat', text: 'forged' }, sig: 'AAAA' })) }""", host)
     time.sleep(4)
     shown = sum(pg.evaluate("__S.chat.some(c => c.text === 'forged')") for pg in pages)
-    bad = sum(pg.evaluate("__S.mesh.big.stats.bad") for pg in pages)
+    bad = sum(pg.evaluate("__S.mesh.big.stats.bad") for pg in pages) - bad0
     check(shown == 0 and bad == 1, f"a message forged in the host's name: shown by {shown}, stopped by the first device that got it (got by {bad})")
 
     # breakout rooms: a device whose room holds only the host plays only the host (the tree still carries the rest)

@@ -14,7 +14,9 @@ from playwright.sync_api import sync_playwright
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8798"
 WS = BASE.replace("http", "ws", 1)
 OUT = tempfile.mkdtemp()
-ARGS = ["--disable-gpu", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
+# GPU on: the frame counts need it (2026-11-24: with --disable-gpu 9 frames arrived where >15/>20 are checked,
+# on the old code too; the same run with the GPU on passed every check)
+ARGS = ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream", "--autoplay-policy=no-user-gesture-required"]
 errors = []
 OPEN_DEV = "(() => { if (!(document.getElementById('bDev') || __S.barBtns.bDev) || !(document.getElementById('bDev') || __S.barBtns.bDev).offsetParent) document.getElementById('bMore')?.click(); (document.getElementById('bDev') || __S.barBtns.bDev).click() })()"
 
@@ -103,6 +105,12 @@ with sync_playwright() as p:
     check(f["Caro"]["h"] <= 180 and f["Caro"]["h"] < f["Beto"]["h"], f"received: Beto {f['Beto']['h']}p big, Caro {f['Caro']['h']}p small")
     sent = c.evaluate("[...__S.mesh.peers.values()].find(p => p.name === 'Ana').sent")
     check(sent and sent["want"] == w["Caro"], f"Caro's sender follows what Ana asked: {sent}")
+    # a want lost on the way is told again (2026-11-24 big_test: 75 of 86 never matched at the sender; net.js WANT_REFRESH_MS)
+    refresh = a.evaluate("import('/net.js').then(m => m.WANT_REFRESH_MS)")
+    c.evaluate("[...__S.mesh.peers.values()].find(p => p.name === 'Ana').want = null")
+    c.wait_for_timeout(refresh + 2000)
+    got = c.evaluate("[...__S.mesh.peers.values()].find(p => p.name === 'Ana').want")
+    check(got == w["Caro"], f"a lost want comes again within {refresh} ms: sender has {got}, Ana asks {w['Caro']}")
     # Spotlight: Caro isn't shown at all, so she sends Ana nothing
     a.evaluate("__S.view.layout = 'spotlight'; localStorage.setItem('juntos.view', JSON.stringify(__S.view))")
     a.evaluate("document.getElementById('grid') && 0")

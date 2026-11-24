@@ -28,6 +28,12 @@ const ICE = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
  */
 /** pauses before trying a refused change again; after the last one the change is dropped (tune() runs again later) */
 export const SETPARAMS_RETRY_MS = [300, 1000, 3000];
+// A tree link (big calls) has no helper to fall back on: the link to my parent is tried again this often, for as
+// long as the server keeps them my parent (2026-11-24 tree_test: one failed link cut a device off for good).
+export const TREE_RETRY_MS = 10000;
+// the link to my tree parent failed this many times in a row (two quick retries, then the tree retry): ask the
+// server to hang me on someone else (worker index.js tree-move)
+export const TREE_MOVE_AFTER = 3;
 export function setParams(sender, edit) {
   sender.__nextEdit = edit;
   if (sender.__setting) return sender.__setting;
@@ -804,6 +810,7 @@ export class Mesh extends EventTarget {
     const parent = typeof m.parent === "string" ? m.parent : null;
     const links = new Set(parent ? [parent, ...kids] : kids);
     this.big.links = links;
+    this.big.parent = parent;
     for (const [id, name] of this.known) if (!this.peers.has(id)) this.farStub(id, name);
     for (const [id, p] of [...this.peers]) {
       if (p.far || links.has(id)) continue;
@@ -812,6 +819,17 @@ export class Mesh extends EventTarget {
         continue;
       }
       // no longer a link: close it; their own tracks on it go, what comes along the tree stays
+      this.forget(p);
+      for (const t of p.stream.getTracks()) if (!(t instanceof MediaStreamTrackGenerator)) p.stream.removeTrack(t);
+      this.farStub(id, p.name, p.stream);
+    }
+    // A link with no connection of its own (a helper pair from before the call became a tree, or its "they will call"
+    // placeholder) carries no tree sound or pictures, and a helper pair ignores the other side's offer: start it over
+    // as a real link (the child calls). 2026-11-24 tree_test: a device and everyone under it heard nobody.
+    for (const id of links) {
+      const p = this.peers.get(id);
+      if (!p || p.far || p.pc) continue;
+      this.fwd.drop(id);
       this.forget(p);
       for (const t of p.stream.getTracks()) if (!(t instanceof MediaStreamTrackGenerator)) p.stream.removeTrack(t);
       this.farStub(id, p.name, p.stream);
@@ -852,8 +870,10 @@ export class Mesh extends EventTarget {
     // A connection can also stick half-way (one side's checks done, the other's not; seen in big calls
     // with many joining at once): before showing "Try again", the side that called starts a brand-new
     // connection by itself, twice at most. The other side drops its stuck one when the fresh offer arrives.
+    // Not when a helper already waits for us: the other side moved to it and drops our fresh offers, and retrying
+    // (~21 s each with a relay) outlasted the helper's offer, leaving the pair stuck for good (2026-11-24 big_test).
     const tries = p.autoRetries || 0;
-    if (p.offerer && tries < 2 && !this.closed) {
+    if (p.offerer && tries < 2 && !this.closed && !this.fwd.waiting(p.id)) {
       this.retry(p.id);
       const q = this.peers.get(p.id);
       if (q) q.autoRetries = tries + 1;
@@ -862,6 +882,18 @@ export class Mesh extends EventTarget {
     p.gaveUp = true;
     p.relaying = false;
     this.emit("peer", { id: p.id });
+    if (this.big && p.offerer && this.big.links.has(p.id) && !this.closed) {
+      const id = p.id;
+      if (id === this.big.parent && tries >= TREE_MOVE_AFTER) this.sendSignal({ t: "tree-move", parent: id });
+      p.treeRetry = setTimeout(() => {
+        const q = this.peers.get(id);
+        if (q !== p || this.closed || !this.big || !this.big.links.has(id) || q.state === "connected") return;
+        this.retry(id);
+        const n = this.peers.get(id);
+        if (n) n.autoRetries = tries + 1;
+      }, TREE_RETRY_MS);
+      return;
+    }
     // no direct way and no relay: someone connected to both of us can pass things on
     this.fwd.need(p);
     this.fwd.gaveUp(p);
@@ -880,6 +912,7 @@ export class Mesh extends EventTarget {
     clearTimeout(p.leaveTimer);
     clearTimeout(p.timer);
     clearTimeout(p.giveUpTimer);
+    clearTimeout(p.treeRetry);
     clearTimeout(p.blip);
     try {
       p.pc.close();

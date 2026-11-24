@@ -2051,20 +2051,30 @@ function openMore(items) {
 // went on, with the microphone and camera live and nothing on screen saying so.
 const layers = [];
 let popSkip = 0;
+// history.back() lands later: a sheet opened before it lands (one opened from More, which shuts as it opens it) waits
+// for it to push its entry, else the Back takes the new entry, the history slips one step a round, and in the end
+// Back leaves the call for the page before it (2026-11-24 net_test; ux_test "Settings opened from More")
+let pushLater = 0;
 function layerOpen(el) {
   if (!S.mesh || layers.includes(el)) return;
   layers.push(el);
-  history.pushState({ juntos: "layer" }, "");
+  if (popSkip) pushLater++;
+  else history.pushState({ juntos: "layer" }, "");
 }
 function layerShut(el) {
   const i = layers.indexOf(el);
   if (i < 0) return;
   layers.splice(i, 1);
+  if (pushLater) return void pushLater--; // its entry was never pushed
   popSkip++;
   history.back();
 }
 window.addEventListener("popstate", () => {
-  if (popSkip) return void popSkip--;
+  if (popSkip) {
+    popSkip--;
+    if (!popSkip) for (; pushLater; pushLater--) history.pushState({ juntos: "layer" }, "");
+    return;
+  }
   if (S.mesh) {
     const top = layers.pop();
     if (top) return top === $("panel") ? closePanel() : top.remove();

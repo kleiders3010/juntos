@@ -101,6 +101,25 @@ with sync_playwright() as p:
     a.wait_for_selector("#leaveSheet", timeout=5000)
     check(a.evaluate("__S.mesh === __m"), "Back still works after a sheet closed with Esc")
     a.click("#stayIn")
+    # a sheet opened from inside More (More closes, the next opens at once), twice: Back still asks, the call stays.
+    # 2026-11-24 net_test: More's Back landed after the next sheet's entry, the history slipped one step a round,
+    # and Back left the call for the page before it
+    a.evaluate("window.__h = history.length")
+    # More and Settings in ONE script, as net_test's OPEN_DEV does: More's history entry and its Back are still on
+    # their way when Settings opens (two separate evaluates let them land in between, and the old code passed)
+    via_more = 0
+    for _ in range(3):
+        via_more += a.evaluate("(() => { document.getElementById('bMore').click(); const d = document.getElementById('bDev'); const inMore = !!d && !!d.closest('.moreSheet'); (d || __S.barBtns.bDev).click(); return inMore ? 1 : 0 })()")
+        a.wait_for_selector(".sheetInner.devices > .primary")
+        a.wait_for_timeout(300)
+        a.click(".sheetInner.devices > .primary")
+        a.wait_for_timeout(300)
+    check(a.evaluate("__S.mesh === __m && !!location.pathname.match(/\\/r\\//)"), "Settings opened from More three times: still in the call")
+    check(via_more == 3, f"... each time from inside More ({via_more} of 3)")
+    a.go_back()
+    a.wait_for_selector("#leaveSheet", timeout=5000)
+    check(a.evaluate("__S.mesh === __m"), "and Back still asks before leaving")
+    a.click("#stayIn")
 
     # U-J9: Space presses a focused bar button (it started push-to-talk)
     cam = a.evaluate("__S.cam")

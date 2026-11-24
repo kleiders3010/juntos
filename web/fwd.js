@@ -111,6 +111,12 @@ export class Fwd {
     this.m.emit("peer", { id: of });
   }
 
+  // a helper's offer for p came before my own link gave up and can still be taken (30 s at most, J5)
+  waiting(id) {
+    const w = this.earlyOn.get(id);
+    return !!w && Date.now() - w.at < 30000;
+  }
+
   // my direct link to p gave up (rtc.js giveUp): a helper's offer that came before it is taken now
   gaveUp(p) {
     const w = this.earlyOn.get(p.id);
@@ -119,6 +125,13 @@ export class Fwd {
   }
 
   // the helper stopped (it left, or lost one of us): try the direct way again
+  // the call became a tree and they are a link of mine now: forget the helper's stream for them (rtc.js onTree)
+  drop(of) {
+    for (const [sid, id] of this.via) if (id === of) this.via.delete(sid);
+    this.asked.delete(of);
+    this.earlyOn.delete(of);
+  }
+
   off(from, of) {
     const m = this.m;
     const p = m.peers.get(of);

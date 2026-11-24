@@ -80,6 +80,8 @@ export function overBudget(room, ws) {
 const MESH_MAX = 16;
 const MAX_PEOPLE = 200;
 const MAX_KIDS = 6; // the most children a device may say it can feed
+// a device that can't reach its parent in a tree call may ask to hang on someone else, this often at most
+const TREE_MOVE_MS = 20000;
 const MAX_MSG = 64 * 1024;
 const ROOM_KEEP = 31 * 24 * 3600 * 1000; // a room's host and lock are forgotten a month after its last use
 const HOST_CMDS = new Set(["lock", "admit", "admit-all", "deny", "remove", "pass", "talk", "perm", "cohost", "end"]);
@@ -233,6 +235,7 @@ async function turn(req, env) {
 }
 
 export class Room {
+  static TREE_MOVE_MS = TREE_MOVE_MS; // for tests: a Worker module may export only functions and classes (workerd refuses a number)
   constructor(state, env) {
     // tests only (wrangler dev --var MESH_MAX:4): the tree from a few people on, so one PC can run it
     this.meshMax = Number(env && env.MESH_MAX) || MESH_MAX;
@@ -336,8 +339,9 @@ export class Room {
   }
 
   // hang p under the person nearest the top who still has room for a child (p's own branch hangs from p and
-  // isn't reachable from the top, so it's never chosen); returns the new parent, or null if p is the top
-  attach(all, p) {
+  // isn't reachable from the top, so it's never chosen; nor `avoid`, a parent p couldn't reach); returns the new
+  // parent, or null if p is the top
+  attach(all, p, avoid) {
     const kids = (id) => all.filter((q) => q !== p && q.a.tree && q.a.parent === id);
     const root = all.find((q) => q !== p && q.a.tree && !q.a.parent);
     if (!root) {
@@ -348,7 +352,7 @@ export class Room {
     for (let i = 0; i < queue.length; i++) {
       const q = queue[i];
       const k = kids(q.a.id);
-      if (k.length < (q.a.cap || 2)) {
+      if (q.a.id !== avoid && k.length < (q.a.cap || 2)) {
         this.setA(p, { tree: true, parent: q.a.id });
         return q;
       }
@@ -555,6 +559,18 @@ export class Room {
       const target = this.peers().find((p) => p.a.id === msg.to);
       if (target) this.send(target.ws, { t: "signal", from: me.id, data: msg.data });
       return;
+    }
+    // tree calls: my link to my parent never came up (strict networks at both ends), hang me on someone else.
+    // Only the asker moves, only off its current parent, at most once every TREE_MOVE_MS (tree_move_test.mjs)
+    if (msg.t === "tree-move") {
+      if (!me.tree || !me.parent || msg.parent !== me.parent || Date.now() - (me.movedAt || 0) < TREE_MOVE_MS) return;
+      const all = this.peers().filter((p) => p.a.tree);
+      const p = all.find((q) => q.ws === ws);
+      if (!p) return;
+      const old = all.find((q) => q.a.id === me.parent);
+      this.setA(p, { movedAt: Date.now() });
+      const parent = this.attach(all, p, me.parent);
+      return this.sendTree(all, new Set([p, old, parent]));
     }
     if ((me.host || me.co) && HOST_CMDS.has(msg.t)) return this.hostCmd(me, msg, ws);
     if (msg.t === "name") {

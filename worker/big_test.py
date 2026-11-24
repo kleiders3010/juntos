@@ -122,11 +122,29 @@ with sync_playwright() as p:
     # computer it means the direct links struggled under load
     relayed = sum(pg.evaluate("[...__S.mesh.peers.values()].filter(p => p.via).length") for pg in pages) // 2
     print(f"  pairs passed on by a helper: {relayed}", flush=True)
+    # what makes wants change (2026-11-24: 92 changes in 3 s over 16 viewers): every 200 ms each page notes a tile
+    # whose want moved, whether the cap took/gave its place (vidOn), how long ago that person spoke, and whether the
+    # tile is on screen
+    REC = """() => { if (window.__rec) return; window.__rec = []; const last = {};
+      setInterval(() => { for (const t of document.querySelectorAll('#grid .tile:not([data-id=me])')) {
+        const q = t.wantSent || null, id = t.dataset.id;
+        if (id in last && last[id].q !== q) { const r = t.getBoundingClientRect();
+          window.__rec.push({ from: last[id].q, to: q, cap: last[id].on !== !!t.vidOn, spoke: Math.round((Date.now() - (t.spokeAt || 0)) / 100) / 10,
+            seen: r.width > 0 && r.bottom > 0 && r.top < innerHeight, paused: t.classList.contains('paused') }); }
+        last[id] = { q, on: !!t.vidOn }; } }, 200); }"""
+    for pg in pages:
+        pg.evaluate(REC)
     time.sleep(8)  # the video cap settles (wants every 0.7 s)
     s1 = [{x["id"]: x for x in pg.evaluate(STATS)} for pg in pages]
+    for pg in pages:
+        pg.evaluate("window.__recFrom = window.__rec.length")
     t2 = time.time()
     time.sleep(5)
     s2 = [{x["id"]: x for x in pg.evaluate(STATS)} for pg in pages]
+    # pictures that took a place from another in those 5 s: the cap allows one every CAP_SWAP_MS (3 s, cappick.js),
+    # and both the leaving and the new one send frames in the window
+    swaps = [pg.evaluate("window.__rec.slice(window.__recFrom).filter(r => r.cap && r.from === 'off').length") for pg in pages]
+    SWAPS_5S = 2  # pinned: ceil(5000 / CAP_SWAP_MS)
     dt = time.time() - t2
     outs, ins, vids = [], [], []
     deaf = 0
@@ -144,8 +162,8 @@ with sync_playwright() as p:
             deaf += 1
             miss = [v["name"] for k, v in b2.items() if not (k in b1 and v["aIn"] > b1[k]["aIn"])]
             check(False, f"P{i} hears {hears} of {want} (not: {miss})")
-        if sees > CAP:
-            check(False, f"P{i} gets {sees} videos, more than the cap {CAP}")
+        if sees > CAP + swaps[i] or swaps[i] > SWAPS_5S:
+            check(False, f"P{i} gets {sees} videos with {swaps[i]} swaps in 5 s (cap {CAP}, at most {SWAPS_5S} swaps)")
     if deaf:
         for i, pg in enumerate(pages):
             print(f"  P{i} mic:", pg.evaluate("""({ mic: __S.mic, track: __S.micTrack ? __S.micTrack.readyState + '/' + __S.micTrack.enabled + '/' + __S.micTrack.muted : null,
@@ -153,33 +171,49 @@ with sync_playwright() as p:
     # the cap end to end: what each viewer's tile asked for, what the sender got, and whether its encoder is on
     # (2026-11-23: pictures wanted off kept arriving; this tells a lost message from a sender that didn't apply it)
     WANTS = """async () => {
-      const asked = {}; for (const t of document.querySelectorAll('#grid .tile:not([data-id=me])')) asked[t.dataset.id] = t.wantSent || null;
+      const asked = {}; for (const t of document.querySelectorAll('#grid .tile:not([data-id=me])')) { asked[t.dataset.id] = t.wantSent || null; const vp = __S.mesh.peers.get(t.dataset.id); (window.__wd ||= {})[t.dataset.id] = vp ? [vp.via ? 'via' : 'direct', vp.dc?.readyState, vp.state, Math.round((Date.now() - (t.wantAt || 0)) / 1000) + 's'] : ['none']; }
       const sending = {};
       for (const p of __S.mesh.peers.values()) {
         const s = p.video && p.video.sender; let active = null;
         try { const e = s && s.getParameters().encodings; active = e && e.length ? e[0].active !== false : null; } catch (_) {}
-        sending[p.id] = { want: p.want || null, active, hasTrack: !!(s && s.track) };
+        sending[p.id] = { want: p.want || null, active, hasTrack: !!(s && s.track), how: [p.via ? 'via' : 'direct', p.dc?.readyState, p.state] };
       }
-      return { me: __S.mesh.id, asked, sending };
+      return { me: __S.mesh.id, asked, sending, wd: window.__wd || {} };
     }"""
+    # the pages are read one after another (seconds apart), so a want sent just before a viewer was read may not have
+    # reached a sender read before it (2026-11-24: 43 "lost" with both ends connected, sent 2 s before). Read the
+    # viewers, wait, read everyone again: lost = asked the same both times, and the sender (read 3+ s later) differs.
+    w0 =[pg.evaluate(WANTS) for pg in pages]
+    time.sleep(3)
     w = [pg.evaluate(WANTS) for pg in pages]
+    recs = [r for pg in pages for r in pg.evaluate("window.__rec || []")]
+    kinds = {}
+    for r in recs:
+        k = f"{r['from']}->{r['to']}" + (" cap" if r["cap"] else "") + ("" if r["seen"] else " offscreen")
+        kinds[k] = kinds.get(k, 0) + 1
+    spoke = sorted(r["spoke"] for r in recs if r["cap"])
+    print(f"  want changes seen by the recorder: {len(recs)} {kinds}; spoke s ago at cap changes: {spoke[:8]}..{spoke[-8:]}", flush=True)
+    before = {x["me"]: x["asked"] for x in w0}
     by = {x["me"]: x for x in w}
     lost, unapplied, offs = [], [], 0
     for viewer in w:
         for sid, q in viewer["asked"].items():
             snd = by.get(sid, {}).get("sending", {}).get(viewer["me"])
-            if q is None or snd is None:
+            if q is None or snd is None or before.get(viewer["me"], {}).get(sid) != q:
                 continue
             offs += q == "off"
             if snd["want"] != q:
-                lost.append(f"{sid[:4]}->{viewer['me'][:4]} asked {q}, sender has {snd['want']}")
+                lost.append(f"{sid[:4]}->{viewer['me'][:4]} asked {q}, sender has {snd['want']} (viewer end {viewer['wd'].get(sid)}, sender end {snd['how']})")
             elif q == "off" and snd["active"] and snd["hasTrack"]:
                 unapplied.append(f"{sid[:4]}->{viewer['me'][:4]}")
-    print(f"  wanted off: {offs}; not received by the sender: {len(lost)} {lost[:6]}; received but still sending: {len(unapplied)} {unapplied[:6]}", flush=True)
+    churn = sum(1 for x in w for sid, q in x["asked"].items() if before.get(x["me"], {}).get(sid, q) != q)
+    print(f"  wants that changed in 3 s (who is shown moving): {churn} over {len(w)} viewers", flush=True)
+    print(f"  wanted off: {offs}; not received by the sender: {len(lost)} {lost[:12]}; received but still sending: {len(unapplied)} {unapplied[:6]}", flush=True)
     check(not lost, "every viewer's want reached its sender")
     check(not unapplied, "every picture wanted off is off at its sender")
     check(deaf == 0, f"everyone hears all {want} others")
-    check(max(vids) <= CAP, f"nobody gets more than {CAP} videos (got {min(vids)}-{max(vids)})")
+    check(all(v <= CAP + sw for v, sw in zip(vids, swaps)), f"nobody gets more than {CAP} videos plus the ones swapped in those 5 s (got {min(vids)}-{max(vids)}, swaps {swaps})")
+    check(max(swaps) <= SWAPS_5S, f"who is shown changes at most {SWAPS_5S} times in 5 s per viewer (got {max(swaps)})")
     expect = min(CAP, CAMS - 1)
     check(min(vids) >= expect - 1, f"and the cap is used: at least {expect - 1} videos each")
     print(f"RESULT people={N} cams={CAMS} connect_s={took:.0f} up_kbps avg={sum(outs) / N:.0f} max={max(outs):.0f} down_kbps avg={sum(ins) / N:.0f} max={max(ins):.0f} videos={min(vids)}-{max(vids)}", flush=True)
