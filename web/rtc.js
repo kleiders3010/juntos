@@ -26,10 +26,13 @@ const ICE = [{ urls: ["stun:stun.cloudflare.com:3478"] }];
  * "off" of the video cap was sometimes the one lost and pictures kept flowing (2026-11-23: 16 people, up to 15
  * videos with a cap of 9). `edit` changes the parameters in place; returning false skips the change.
  */
+/** pauses before trying a refused change again; after the last one the change is dropped (tune() runs again later) */
+export const SETPARAMS_RETRY_MS = [300, 1000, 3000];
 export function setParams(sender, edit) {
   sender.__nextEdit = edit;
   if (sender.__setting) return sender.__setting;
   const step = async () => {
+    let retried = null, tries = 0;
     while (sender.__nextEdit) {
       const e = sender.__nextEdit;
       sender.__nextEdit = null;
@@ -40,7 +43,19 @@ export function setParams(sender, edit) {
         break;
       }
       if (e(params) === false) continue;
-      await sender.setParameters(params).catch((err) => console.warn("juntos: video settings", err && err.name));
+      let refused = false;
+      await sender.setParameters(params).catch((err) => {
+        console.warn("juntos: video settings", err && err.name, err && err.message);
+        // 2026-11-24 big_test: Chrome refuses with InvalidModificationError "modified RTCP parameters" while a
+        // renegotiation is under way, and a change tried again at once was refused too (8 in j_big7). Try the same
+        // change again on fresh parameters after a pause (SETPARAMS_RETRY_MS), unless a newer one is waiting.
+        refused = err && err.name === "InvalidModificationError";
+      });
+      if (!refused) { retried = null; tries = 0; continue; }
+      if (retried !== e) { retried = e; tries = 0; }
+      if (tries >= SETPARAMS_RETRY_MS.length) continue;
+      await new Promise((r) => setTimeout(r, SETPARAMS_RETRY_MS[tries++]));
+      if (!sender.__nextEdit) sender.__nextEdit = e;
     }
     sender.__setting = null;
   };
