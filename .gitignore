@@ -10,3 +10,4 @@ dist/
 kinetic/room.mjs
 kinetic/data/
 kinetic/noble.js
+__pycache__/

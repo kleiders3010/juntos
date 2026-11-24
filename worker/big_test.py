@@ -118,7 +118,17 @@ with sync_playwright() as p:
             print(f"  P{i} peers {pg.evaluate('__S.mesh.peers.size')}, not connected: {bad}", flush=True)
             if bad:
                 print(f"     signal lost {pg.evaluate('__S.mesh.lost || 0')}x; from them:", pg.evaluate("""[...__S.mesh.peers.values()].filter(p => p.pc?.connectionState !== 'connected')
-                  .map(p => p.name + ' ' + JSON.stringify(__S.mesh.sigIn[p.id] || null) + (p.offerer ? ' (I called)' : '') + (p.autoRetries ? ' retries ' + p.autoRetries : '') + (p.gaveUp ? ' gave up' : ''))"""), flush=True)
+                  .map(p => p.name + ' ' + JSON.stringify(__S.mesh.sigIn[p.id] || null) + (p.offerer ? ' (I called)' : '') + (p.autoRetries ? ' retries ' + p.autoRetries : '') + (p.gaveUp ? ' gave up' : '')
+                    // 2026-11-24 suite23: P14 gave up on P15 while P15 listed P14 as connected; only the lower id asks
+                    // for a helper (fwd.need): who is lower, did anyone ask, is a helper's offer waiting
+                    + (__S.mesh.id < p.id ? ' [I am lower]' : ' [they are lower]') + (__S.mesh.fwd?.asked?.has(p.id) ? ' asked' : '')
+                    + (__S.mesh.fwd?.earlyOn?.has(p.id) ? ' helper-offer-waiting' : '') + (p.helper ? ' helper ' + p.helper.slice(0, 4) : ''))"""), flush=True)
+                # and the other end of each such pair: what it thinks of me (names are "P<n>" = pages[n])
+                me = pg.evaluate("__S.mesh.id")
+                for name in pg.evaluate("[...__S.mesh.peers.values()].filter(p => p.pc?.connectionState !== 'connected').map(p => p.name)"):
+                    if name.startswith("P") and name[1:].isdigit() and int(name[1:]) < len(pages):
+                        print(f"     {name}'s side of P{i}:", pages[int(name[1:])].evaluate("""(id) => { const p = __S.mesh.peers.get(id); return !p ? 'none' :
+                          (p.pc ? p.pc.connectionState + '/' + (p.dc ? p.dc.readyState : '-') : 'via ' + p.via) + (p.offerer ? ' (I called)' : '') + (p.gaveUp ? ' gave up' : '') + ' retries ' + (p.autoRetries || 0) }""", me), flush=True)
     check(done, f"{N} people: everyone connected to everyone ({took:.0f} s after the last joined)")
     # page.evaluate has no timeout: a page that stops answering held the run until the suite's 30 min limit with no
     # reading (2026-11-24 j_suite18, PC at 97% CPU). The readings below take ~1 min; past READ_LIMIT_S it ends with a FAIL.
